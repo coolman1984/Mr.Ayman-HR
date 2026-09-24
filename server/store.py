@@ -200,14 +200,18 @@ class Store:
         return row.get('areaId')
 
     # ------------------------------------------------------------ read
-    def state(self):
+    def state(self, areas=None, surveys=True):
+        """Everything the page needs. areas: only these break area ids (None = all); surveys=False leaves out the survey results."""
         with self.lock:
             rows = {}
             for e, (table, _, _) in ENTITIES.items():
                 rows[e] = [self._row_js(e, r) for r in self.conn.execute(f'SELECT * FROM {table} WHERE deleted=0 ORDER BY rowid')]
             settings = {r['id']: r.get('value') for r in rows['settings']}
             settings_ver = {r['id']: r['ver'] for r in rows['settings']}
-            areas = sorted(rows['areas'], key=lambda a: (a.get('name') or '').lower())
+            allowed = None if areas is None else set(areas)
+            if not surveys:
+                rows['surveys'] = []
+            areas = sorted((a for a in rows['areas'] if allowed is None or a['id'] in allowed), key=lambda a: (a.get('name') or '').lower())
             by_id = {}
             for a in areas:
                 for c in AREA_CHILDREN:
@@ -231,7 +235,8 @@ class Store:
                     'version': int(self.conn.execute("SELECT value FROM meta WHERE key='data_version'").fetchone()[0])}
 
     # ------------------------------------------------------------ write
-    def commit(self, user, ip, label, ops, force=False):
+    def commit(self, user, ip, label, ops, force=False, guard=None):
+        """guard(changes, force) is called with the changes before they are saved; raising an exception cancels all of them."""
         if not isinstance(ops, list) or not ops:
             raise BadRequest('Nothing to save')
         txn, ts = uuid.uuid4().hex[:12], now()
@@ -243,6 +248,8 @@ class Store:
                 for op in ops:
                     audit.append(self._apply(c, op, txn, ts, user, force))
                 audit = [a for a in audit if a]
+                if guard:
+                    guard(audit, force)
                 c.execute('INSERT INTO transactions VALUES (?,?,?,?,?,?)', (txn, ts, user, ip, label, len(audit)))
                 for a in audit:
                     c.execute('INSERT INTO audit_log (ts,txn,user,ip,label,entity,entity_id,area_id,op,changes,before,after) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
@@ -366,9 +373,11 @@ class Store:
                                     str(e.get('action') or '')[:120], str(e.get('target') or '')[:200], str(e.get('page') or '')[:120],
                                     str(e.get('detail') or '')[:2000]) for e in events[:500]])
 
-    def query_log(self, kind, q='', user='', typ='', area='', frm='', to='', limit=200, offset=0):
+    def query_log(self, kind, q='', user='', typ='', area='', frm='', to='', limit=200, offset=0, areas=None):
         table = 'audit_log' if kind == 'audit' else 'activity_log'
         where, args = [], []
+        if areas is not None and kind == 'audit':  # a user limited to some break areas only sees their changes
+            where.append(f'area_id IN ({",".join("?" * len(areas)) or "NULL"})'); args += list(areas)
         if q:
             cols = ['label', 'entity', 'entity_id', 'changes', 'before', 'after'] if kind == 'audit' else ['action', 'target', 'page', 'detail']
             where.append('(' + ' OR '.join(f'{c} LIKE ?' for c in cols) + ')')

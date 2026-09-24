@@ -12,12 +12,26 @@ const DEFAULT_SETTINGS = {
   inspectionDays: 30, satisfactionTarget: 80, locations: ['Production', 'Admin', 'Utility', 'Logistics', 'Other']
 };
 
-/* ============================== Server API ============================== */
-const USER_KEY = 'bams-user';
-const me = () => { try { return localStorage.getItem(USER_KEY) || USER_MEM; } catch (e) { return USER_MEM; } };
+/* ============================== Login & permissions ============================== */
+let ME = null;          // the logged-in user from the server: { username, full_name, perms, areas, ... }
+const me = () => ME ? ME.full_name : '';
+/* true when the user has at least one of the permissions. The server checks every request again -
+   hiding buttons here is only so people are not offered things they cannot do. */
+const can = (...perms) => !!ME && perms.some(p => ME.perms.includes(p));
+const allAreas = () => !!ME && ME.areas == null;
+const LOG_TABS = [['audit', 'Data Changes', 'logs.view'], ['activity', 'User Activity & Errors', 'logs.activity'], ['security', 'Logins & Security', 'logs.security']];
+const canSettingsPage = () => can('settings.view', 'backups.manage', 'backups.restore', 'trash.restore', 'data.import');
+/* route -> permission(s) needed to open it */
+const PAGE_PERMS = {
+  dashboard: ['dashboard.view'], areas: ['areas.view'], area: ['areas.view'], equipment: ['equipment.view'], transactions: ['transactions.view'],
+  maintenance: ['maintenance.view'], reports: ['reports.view'], logs: ['logs.view', 'logs.activity', 'logs.security'], users: ['users.manage']
+};
+const canPage = top => top === 'settings' ? canSettingsPage() : top === 'account' ? true : can(...(PAGE_PERMS[top] || ['dashboard.view']));
+const firstPage = () => ['dashboard', 'areas', 'maintenance', 'equipment', 'transactions', 'reports', 'logs', 'users', 'settings'].find(canPage) || 'account';
 
+/* ============================== Server API ============================== */
 async function api(method, url, body, { raw = false, blob = false } = {}) {
-  const headers = { 'X-User': encodeURIComponent(me() || 'Unknown') };
+  const headers = {};
   if (body !== undefined && !raw) headers['Content-Type'] = 'application/json';
   let res;
   try {
@@ -28,6 +42,7 @@ async function api(method, url, body, { raw = false, blob = false } = {}) {
   if (!res.ok) {
     let msg = res.status + ' ' + res.statusText;
     try { msg = (await res.json()).error || msg; } catch (e) { /* not JSON */ }
+    if (res.status === 401 && !url.startsWith('/api/auth/')) showLogin('Your session has ended. Please log in again.');
     throw new Error(msg);
   }
   return blob ? res.blob() : res.json();
@@ -84,11 +99,12 @@ async function load() {
 /* Send every change made to DB since the last load. Returns true when saved. */
 async function save(label = 'Change', { force = false } = {}) {
   const cur = flatten(DB), ops = [];
+  if (!can('settings.edit')) for (const k in cur) if (k.startsWith('settings|')) delete cur[k];
   for (const k in cur) {
     const s = stable(cur[k].row), old = SNAP[k];
     if (!old || old.s !== s) ops.push({ e: cur[k].e, id: cur[k].id, op: 'put', row: cur[k].row, ver: old ? old.ver : undefined });
   }
-  for (const k in SNAP) if (!cur[k]) { const [e, ...id] = k.split('|'); ops.push({ e, id: id.join('|'), op: 'del', ver: SNAP[k].ver }); }
+  for (const k in SNAP) if (!cur[k] && !(k.startsWith('settings|') && !can('settings.edit'))) { const [e, ...id] = k.split('|'); ops.push({ e, id: id.join('|'), op: 'del', ver: SNAP[k].ver }); }
   if (!ops.length) return true;
   try {
     await api('POST', '/api/commit', { label, ops, force });
@@ -434,17 +450,19 @@ function renderShell(route) {
   $('#factoryName').textContent = s.factory;
   const open = DB.areas.reduce((n, a) => n + openIssues(a).length, 0);
   $('#bell').innerHTML = ic('bell') + (open ? `<span class="cnt">${open}</span>` : '');
-  $('#user').innerHTML = `<div class="avatar">${esc(initials(me()))}</div><div class="who"><b>${esc(me())}</b><small>Change user</small></div>`;
-  $('#user').dataset.act = 'userModal';
+  $('#user').innerHTML = `<div class="avatar">${esc(initials(me()))}</div><div class="who"><b>${esc(me())}</b><small>${esc(ME.title || ME.role || ME.username)} ▾</small></div>`;
+  $('#user').dataset.act = 'accountMenu';
+  $('#user').title = 'My account, change password, log out';
   $('.menu-btn').innerHTML = ic('menu');
 
   const top = route[0];
   const areasOpen = top === 'areas' || top === 'area';
-  const link = (href, icon, label, active, extra = '') => `<a href="${href}" class="${active ? 'active' : ''}">${ic(icon)}<span>${label}</span>${extra}</a>`;
+  $('#bell').classList.toggle('hidden', !can('maintenance.view'));
+  const link = (href, icon, label, active, extra = '') => canPage(href.slice(2)) ? `<a href="${href}" class="${active ? 'active' : ''}">${ic(icon)}<span>${label}</span>${extra}</a>` : '';
   $('#sidebar').innerHTML = `<div class="nav">
       ${link('#/dashboard', 'dashboard', 'Dashboard', top === 'dashboard')}
-      ${link('#/areas', 'building', 'Break Areas', areasOpen, ic(areasOpen ? 'chevD' : 'chevR', 'chev'))}
-      ${areasOpen ? `<div class="sub">
+      ${link('#/areas', 'building', 'Break Areas', areasOpen, can('areas.create') ? ic(areasOpen ? 'chevD' : 'chevR', 'chev') : '')}
+      ${areasOpen && can('areas.create') ? `<div class="sub">
         <a href="#/areas" class="${top === 'areas' && route[1] !== 'new' || top === 'area' ? 'active' : ''}">All Break Areas</a>
         <a href="#/areas/new" class="${route[1] === 'new' ? 'active' : ''}">Add New Break Area</a></div>` : ''}
       ${link('#/equipment', 'sofa', 'Furniture &amp; Equipment', top === 'equipment')}
@@ -452,20 +470,25 @@ function renderShell(route) {
       ${link('#/maintenance', 'wrench', 'Maintenance', top === 'maintenance')}
       ${link('#/reports', 'report', 'Reports', top === 'reports')}
       ${link('#/logs', 'activity', 'Activity Log', top === 'logs')}
+      ${link('#/users', 'users', 'Users &amp; Permissions', top === 'users')}
       ${link('#/settings', 'settings', 'Settings', top === 'settings')}
     </div>
     <div class="side-foot"><b>Better Break Areas</b>for a better workplace.</div>`;
 }
 
-const parseRoute = () => (location.hash.replace(/^#\/?/, '') || 'dashboard').split('/');
+const parseRoute = () => (location.hash.replace(/^#\/?/, '') || firstPage()).split('/');
 
 function render() {
+  if (!DB || !ME) return; // login screen is showing
   const route = parseRoute();
   document.body.classList.remove('nav-open');
   renderShell(route);
   const v = $('#view');
   const [top, id] = route;
-  if (top === 'area' && area(id)) v.innerHTML = viewArea(area(id));
+  if (!canPage(top) || (top === 'areas' && id === 'new' && !can('areas.create'))) v.innerHTML = viewNoAccess();
+  else if (top === 'area' && area(id)) v.innerHTML = viewArea(area(id));
+  else if (top === 'area') v.innerHTML = `<div class="card welcome"><div class="kic">${ic('alert')}</div><h2>Break area not found</h2>
+    <p>It was deleted${allAreas() ? '' : ', or it is not one of the break areas assigned to you'}.</p><a class="btn" href="#/areas">Back to Break Areas</a></div>`;
   else if (top === 'areas' && id === 'new') v.innerHTML = viewAreaForm();
   else if (top === 'areas') v.innerHTML = viewAreas();
   else if (top === 'equipment') v.innerHTML = viewEquipment();
@@ -474,13 +497,21 @@ function render() {
   else if (top === 'reports') v.innerHTML = viewReports();
   else if (top === 'settings') v.innerHTML = viewSettings();
   else if (top === 'logs') v.innerHTML = viewLogs();
-  else v.innerHTML = viewDashboard();
+  else if (top === 'users') v.innerHTML = viewUsers();
+  else if (top === 'account') v.innerHTML = viewAccount();
+  else if (top === 'dashboard') v.innerHTML = viewDashboard();
+  else v.innerHTML = viewNoAccess();
   $$('[data-results]', v).forEach(el => RESULTS[el.dataset.results](el));
   $$('[data-async]', v).forEach(el => ASYNC[el.dataset.async](el).catch(err => {
     el.innerHTML = `<p class="empty">Could not load: ${esc(err.message)}</p>`;
   }));
 }
 function rerender() { const y = scrollY; render(); scrollTo(0, y); }
+function viewNoAccess() {
+  return `<div class="card welcome"><div class="kic orange">${ic('alert')}</div><h2>No access</h2>
+    <p>Your account does not have permission to open this page. If you need it for your work, ask the system administrator.</p>
+    <a class="btn primary" href="#/${firstPage()}">Go to my start page</a></div>`;
+}
 
 /* ============================== Charts ============================== */
 function donut(data, centerLabel) {
@@ -547,13 +578,14 @@ function viewWelcome() {
   return `<div class="card welcome">
     <div class="kic">${ic('database')}</div>
     <h2>Welcome to the ${esc(setting('systemName'))}</h2>
-    <p>The database is empty. Start by adding your first break area, bring over the data from the old browser version, or load demo data to try the system.</p>
+    <p>${allAreas() ? 'The database is empty. Start by adding your first break area, bring over the data from the old browser version, or load demo data to try the system.'
+      : 'No break areas are assigned to your account yet. Ask the system administrator to give you access to your break areas.'}</p>
     <div class="filters" style="justify-content:center">
-      <a class="btn primary" href="#/areas/new">${ic('plus')}Add First Break Area</a>
-      <label class="btn">${ic('upload')}Import Old Version Backup (JSON)<input type="file" accept=".json,application/json" data-act-change="importBackup" hidden></label>
-      <button class="btn" data-act="loadDemo">${ic('database')}Load Sample Data</button>
+      ${can('areas.create') && allAreas() ? `<a class="btn primary" href="#/areas/new">${ic('plus')}Add First Break Area</a>` : ''}
+      ${can('data.import') ? `<label class="btn">${ic('upload')}Import Old Version Backup (JSON)<input type="file" accept=".json,application/json" data-act-change="importBackup" hidden></label>
+      <button class="btn" data-act="loadDemo">${ic('database')}Load Sample Data</button>` : ''}
     </div>
-    <p class="hint">To move data from the old version: open the old index.html, go to Settings &rarr; Download Backup (JSON), then import that file here.</p>
+    ${can('data.import') ? '<p class="hint">To move data from the old version: open the old index.html, go to Settings &rarr; Download Backup (JSON), then import that file here.</p>' : ''}
   </div>`;
 }
 
@@ -561,7 +593,7 @@ function viewSatisfactionCard() {
   return `<div class="card mb">
     <div class="card-h">${ic('smile')}<h3>Break Area Satisfaction</h3><span class="hint">Monthly survey results from the departments using each area</span><span class="sp"></span>
       <div class="filters"><select data-f="sat.loc" data-res="sat"><option value="">All locations</option>${options(setting('locations'), F.sat.loc)}</select>
-      <button class="btn sm" data-act="exportSurveys">${ic('download')}Export</button></div>
+      ${can('export.excel') ? `<button class="btn sm" data-act="exportSurveys">${ic('download')}Export</button>` : ''}</div>
     </div>
     <div data-results="sat"></div>
   </div>`;
@@ -584,12 +616,12 @@ function viewDashboard() {
 
   <div class="row3">
     <div class="card"><div class="card-h"><h3>Break Areas by Status</h3></div>${donut(statusData, 'Break Areas')}</div>
-    <div class="card"><div class="card-h"><h3>Furniture &amp; Equipment Overview</h3><span class="sp"></span><a class="link" href="#/equipment">Details</a></div>${vbars(equip)}</div>
+    <div class="card"><div class="card-h"><h3>Furniture &amp; Equipment Overview</h3><span class="sp"></span>${can('equipment.view') ? '<a class="link" href="#/equipment">Details</a>' : ''}</div>${vbars(equip)}</div>
     <div class="card"><div class="card-h"><h3>Break Areas by Location</h3></div>${hbars(locs)}</div>
   </div>
 
   <div class="card mb">
-    <div class="card-h"><h3>Recent Updates</h3><span class="sp"></span><a class="link" href="#/transactions">View All</a></div>
+    <div class="card-h"><h3>Recent Updates</h3><span class="sp"></span>${can('transactions.view') ? '<a class="link" href="#/transactions">View All</a>' : ''}</div>
     <div class="carousel">
       <button class="car-btn l" data-act="scrollTrack" data-dir="-1" aria-label="Previous">${ic('chevL')}</button>
       <div class="track" id="track">${recent.map(a => `
@@ -613,12 +645,12 @@ function viewDashboard() {
       <tbody data-results="dash"></tbody></table></div>
     </div>
     <div class="card">
-      <div class="card-h"><h3>Recent Transactions</h3><span class="sp"></span><a class="link" href="#/transactions">View All</a></div>
+      <div class="card-h"><h3>Recent Transactions</h3><span class="sp"></span>${can('transactions.view') ? '<a class="link" href="#/transactions">View All</a>' : ''}</div>
       <ul class="tx-list">${tx.map(txRow).join('') || '<li class="muted">No transactions yet</li>'}</ul>
     </div>
   </div>
 
-  <div style="margin-top:14px">${viewSatisfactionCard()}</div>`;
+  ${can('surveys.view') ? `<div style="margin-top:14px">${viewSatisfactionCard()}</div>` : ''}`;
 }
 function txRow(h) {
   const [i, bg, fg] = TX_STYLE[h.action] || TX_STYLE['Condition Update'];
@@ -718,9 +750,9 @@ function viewAreas() {
   const opt = (list, v) => list.map(x => `<option ${v === x ? 'selected' : ''}>${esc(x)}</option>`).join('');
   return `<div class="page-head"><h2>Break Areas</h2><span class="muted" id="areaCount"></span>
     <div class="actions">
-      <button class="btn" data-act="exportAreas">${ic('download')}Export Excel</button>
-      <button class="btn" data-act="printLabelsFiltered">${ic('qr')}Print QR Labels</button>
-      <a class="btn primary" href="#/areas/new">${ic('plus')}Add New Break Area</a>
+      ${can('export.excel') ? `<button class="btn" data-act="exportAreas">${ic('download')}Export Excel</button>` : ''}
+      ${can('report.labels') ? `<button class="btn" data-act="printLabelsFiltered">${ic('qr')}Print QR Labels</button>` : ''}
+      ${can('areas.create') && allAreas() ? `<a class="btn primary" href="#/areas/new">${ic('plus')}Add New Break Area</a>` : ''}
     </div></div>
   <div class="card">
     <div class="card-h filters">
@@ -812,9 +844,9 @@ function viewArea(a) {
   const f = F.hist;
   const histItems = [...new Set(areaHistory(a.id).map(histItem))];
   const qa = [
-    ['plus', '#16a34a', 'Add New Item', 'invModal'], ['alert', '#dc2626', 'Report Issue', 'issueModal'],
-    ['calendar', '#f59e0b', 'Schedule Maintenance', 'maintModal'], ['upload', '#1d4ed8', 'Upload Photo / Document', 'uploadModal']
-  ];
+    ['plus', '#16a34a', 'Add New Item', 'invModal', 'inventory.edit'], ['alert', '#dc2626', 'Report Issue', 'issueModal', 'issues.create'],
+    ['calendar', '#f59e0b', 'Schedule Maintenance', 'maintModal', 'maintenance.create'], ['upload', '#1d4ed8', 'Upload Photo / Document', 'uploadModal', 'files.upload']
+  ].filter(q => can(q[4]));
   const tasks = [...a.issues.map(i => ({ ...i, kind: 'Issue' })), ...a.maintenance.map(m => ({ ...m, kind: 'Maintenance', title: m.details }))].sort(byDateDesc);
 
   return `
@@ -823,9 +855,9 @@ function viewArea(a) {
     <h2>${esc(a.name)}</h2>${badge(a.active === false ? 'Inactive' : 'Active')}
     <span class="loc">${ic('pin')}${esc(a.location)} Area</span>
     <div class="actions">
-      <button class="btn" data-act="editArea" data-id="${a.id}">${ic('edit')}Edit</button>
+      ${can('areas.edit', 'areas.delete') ? `<button class="btn" data-act="editArea" data-id="${a.id}">${ic('edit')}Edit</button>` : ''}
       <button class="btn" data-act="toHistory">${ic('history')}View History</button>
-      <button class="btn primary" data-act="invModal" data-id="${a.id}">${ic('plus')}Add New</button>
+      ${can('inventory.edit') ? `<button class="btn primary" data-act="invModal" data-id="${a.id}">${ic('plus')}Add New</button>` : ''}
     </div>
   </div>
 
@@ -855,22 +887,23 @@ function viewArea(a) {
     </div>
     <div class="card d-qa">
       <div class="card-h"><h3>Quick Actions</h3></div>
-      ${qa.map(([i, c, l, act]) => `<button class="qa-item" data-act="${act}" data-id="${a.id}"><span class="qa-ic" style="background:${c}">${ic(i)}</span>${l}</button>`).join('')}
+      ${qa.map(([i, c, l, act]) => `<button class="qa-item" data-act="${act}" data-id="${a.id}"><span class="qa-ic" style="background:${c}">${ic(i)}</span>${l}</button>`).join('')
+        || '<p class="muted">Your account can view this break area but not change it.</p>'}
     </div>
     <div class="card d-photos">
       <div class="card-h"><h3>Photos</h3><span class="muted">(${a.photos.length})</span><span class="sp"></span>
         <div class="tabs">${['All', ...PHOTO_CATEGORIES].map(t => `<button data-act="photoTab" data-tab="${t}" class="${F.photoTab === t ? 'on' : ''}">${t}</button>`).join('')}</div></div>
       <div class="thumbs">
         ${photos.map(p => `<div class="thumb" data-act="viewPhoto" data-id="${a.id}" data-pid="${p.id}"><div class="ph">${photoHTML(p)}</div><span>${esc(p.caption)}</span></div>`).join('')}
-        <div class="thumb add" data-act="uploadModal" data-id="${a.id}"><div class="ph">${ic('plus')}</div><span>Add Photo</span></div>
+        ${can('files.upload') ? `<div class="thumb add" data-act="uploadModal" data-id="${a.id}"><div class="ph">${ic('plus')}</div><span>Add Photo</span></div>` : ''}
       </div>
     </div>
   </div>
 
   <div class="detail-mid">
     <div class="card">
-      <div class="card-h"><h3>Inventory / Contents</h3><span class="sp"></span><button class="btn sm" data-act="invModal" data-id="${a.id}">${ic('edit')}Update</button></div>
-      <div class="inv">${a.inventory.map(e => `<div class="inv-tile" data-act="invModal" data-id="${a.id}" data-item="${e.item}" title="${esc(e.note || '')}">
+      <div class="card-h"><h3>Inventory / Contents</h3><span class="sp"></span>${can('inventory.edit', 'inventory.delete') ? `<button class="btn sm" data-act="invModal" data-id="${a.id}">${ic('edit')}Update</button>` : ''}</div>
+      <div class="inv">${a.inventory.map(e => `<div class="inv-tile" ${can('inventory.edit', 'inventory.delete') ? `data-act="invModal" data-id="${a.id}" data-item="${e.item}"` : 'style="cursor:default"'} title="${esc(e.note || '')}">
         ${itemIcon(e.item)}<div class="n">${esc(itemName(e.item))}</div><div class="q">${e.qty}</div>${badge(e.condition || 'Good')}</div>`).join('') || '<p class="muted">No items recorded yet.</p>'}</div>
     </div>
     <div class="card">
@@ -878,7 +911,7 @@ function viewArea(a) {
       <div class="insp-row">${ic('calCheck')}<div><small>Last Inspection</small><b>${fmt(a.lastInspection)}</b></div></div>
       <div class="insp-row">${ic('calendar')}<div><small>Next Inspection</small><b class="${nd != null && nd < 0 ? 'overdue' : ''}">${fmt(a.nextInspection)}</b></div></div>
       <div class="insp-row">${ic('user')}<div><small>Inspected By</small><b>${esc(a.inspectedBy || '-')}</b></div></div>
-      <button class="btn sm" style="margin-top:8px;width:100%" data-act="inspModal" data-id="${a.id}">${ic('clipboard')}Record Inspection</button>
+      ${can('inspections.create', 'inspections.delete') ? `<button class="btn sm" style="margin-top:8px;width:100%" data-act="inspModal" data-id="${a.id}">${ic('clipboard')}${can('inspections.create') ? 'Record Inspection' : 'Inspections'}</button>` : ''}
     </div>
     <div class="card">
       <div class="card-h"><h3>Open Issues</h3></div>
@@ -887,19 +920,19 @@ function viewArea(a) {
         <div style="background:var(--green-l);color:#15803d"><b>${closed}</b>Closed</div>
       </div>
       <ul class="issue-list">${oi.slice(0, 3).map(i => `<li data-act="issueView" data-id="${a.id}" data-iid="${i.id}">${badge(i.priority)}<span>${esc(i.title)}</span></li>`).join('')}</ul>
-      <button class="link" data-act="issueModal" data-id="${a.id}">${ic('alert')} Report New Issue</button>
+      ${can('issues.create') ? `<button class="link" data-act="issueModal" data-id="${a.id}">${ic('alert')} Report New Issue</button>` : ''}
     </div>
   </div>
 
   <div class="hist-row">
-  ${viewSurveyBox(a)}
+  ${can('surveys.view') ? viewSurveyBox(a) : ''}
   <div class="card" id="history">
     <div class="card-h"><h3>Update History</h3><span class="sp"></span>
       <div class="filters">
         <select data-f="hist.item" data-res="hist"><option value="">All items</option>${histItems.map(x => `<option ${f.item === x ? 'selected' : ''}>${esc(x)}</option>`).join('')}</select>
         <select data-f="hist.action" data-res="hist"><option value="">All actions</option>${['Created', ...ACTIONS].map(x => `<option ${f.action === x ? 'selected' : ''}>${x}</option>`).join('')}</select>
-        <button class="btn sm" data-act="exportHist" data-id="${a.id}">${ic('download')}Export</button>
-        <button class="btn sm" data-act="areaLog" data-id="${a.id}" title="Every change made to this break area, by whom and when">${ic('activity')}Change Log</button>
+        ${can('export.excel') ? `<button class="btn sm" data-act="exportHist" data-id="${a.id}">${ic('download')}Export</button>` : ''}
+        ${can('logs.view') ? `<button class="btn sm" data-act="areaLog" data-id="${a.id}" title="Every change made to this break area, by whom and when">${ic('activity')}Change Log</button>` : ''}
       </div>
     </div>
     <div class="tbl-wrap"><table class="tbl"><thead><tr><th>#</th><th>Date</th><th>Item</th><th>Action</th><th class="num">Previous Qty</th><th class="num">New Qty</th><th>Details</th><th>Updated By</th></tr></thead>
@@ -909,21 +942,21 @@ function viewArea(a) {
 
   <div class="grid2">
     <div class="card">
-      <div class="card-h"><h3>Issues &amp; Maintenance</h3><span class="sp"></span><button class="btn sm" data-act="maintModal" data-id="${a.id}">${ic('calendar')}Schedule</button></div>
+      <div class="card-h"><h3>Issues &amp; Maintenance</h3><span class="sp"></span>${can('maintenance.create') ? `<button class="btn sm" data-act="maintModal" data-id="${a.id}">${ic('calendar')}Schedule</button>` : ''}</div>
       <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Date</th><th>Type</th><th>Description</th><th>Status</th><th></th></tr></thead><tbody>
       ${tasks.map(t => `<tr><td>${fmt(t.date)}</td><td>${t.kind === 'Issue' ? badge(t.priority) : '<span class="badge b-purple">Maintenance</span>'}</td>
         <td class="wrap">${esc(t.title)}${t.item ? ` <span class="muted">· ${esc(itemShort(t.item))}</span>` : ''}</td><td>${badge(t.status)}</td>
         <td>${t.kind === 'Issue' ? `<button class="btn sm" data-act="issueView" data-id="${a.id}" data-iid="${t.id}">Follow up</button>`
-          : `<span class="nowrap">${t.status !== 'Done' ? `<button class="btn sm" data-act="maintDone" data-id="${a.id}" data-mid="${t.id}">Complete</button>` : ''}
-            <button class="icon-btn" title="Delete this maintenance" data-act="maintDelete" data-id="${a.id}" data-mid="${t.id}">${ic('trash')}</button></span>`}</td></tr>`).join('')
+          : `<span class="nowrap">${t.status !== 'Done' && can('maintenance.complete') ? `<button class="btn sm" data-act="maintDone" data-id="${a.id}" data-mid="${t.id}">Complete</button>` : ''}
+            ${can('maintenance.delete') ? `<button class="icon-btn" title="Delete this maintenance" data-act="maintDelete" data-id="${a.id}" data-mid="${t.id}">${ic('trash')}</button>` : ''}</span>`}</td></tr>`).join('')
         || '<tr><td colspan="5" class="empty">No issues or maintenance recorded</td></tr>'}
       </tbody></table></div>
     </div>
     <div class="card">
-      <div class="card-h"><h3>Documents &amp; Reports</h3><span class="sp"></span><button class="btn sm" data-act="uploadModal" data-id="${a.id}" data-cat="Document">${ic('upload')}Upload</button></div>
+      <div class="card-h"><h3>Documents &amp; Reports</h3><span class="sp"></span>${can('files.upload') ? `<button class="btn sm" data-act="uploadModal" data-id="${a.id}" data-cat="Document">${ic('upload')}Upload</button>` : ''}</div>
       <ul class="doc-list">${a.docs.map(d => `<li>${ic('file')}<div class="t"><b>${esc(d.name)}</b><small>${fmt(d.date)} · ${fileSize(d.size)}${d.caption ? ' · ' + esc(d.caption) : ''}</small></div>
-        <button class="icon-btn" title="Download" data-act="docDownload" data-id="${a.id}" data-did="${d.id}">${ic('download')}</button>
-        <button class="icon-btn" title="Delete" data-act="docDelete" data-id="${a.id}" data-did="${d.id}">${ic('trash')}</button></li>`).join('')
+        ${can('files.download') ? `<button class="icon-btn" title="Download" data-act="docDownload" data-id="${a.id}" data-did="${d.id}">${ic('download')}</button>` : ''}
+        ${can('files.delete') ? `<button class="icon-btn" title="Delete" data-act="docDelete" data-id="${a.id}" data-did="${d.id}">${ic('trash')}</button>` : ''}</li>`).join('')
         || '<li class="muted">No documents uploaded yet (inspection reports, invoices, layouts...)</li>'}</ul>
     </div>
   </div>`;
@@ -935,7 +968,7 @@ function viewSurveyBox(a) {
   const list = [...a.surveys].sort((x, y) => y.month.localeCompare(x.month) || (x.department || '').localeCompare(y.department || ''));
   return `<div class="card survey-box">
     <div class="card-h">${ic('smile')}<h3>Satisfaction Survey</h3><span class="sp"></span>
-      <button class="btn sm primary" data-act="surveyModal" data-id="${a.id}">${ic('plus')}Add Result</button></div>
+      ${can('surveys.create') ? `<button class="btn sm primary" data-act="surveyModal" data-id="${a.id}">${ic('plus')}Add Result</button>` : ''}</div>
     ${last ? `<div class="sv-sum">
         <div><small>Latest – ${esc(monthName(last.month))}</small><b>${pct(last.value)}</b>
           <span class="sat-pill ${satLevel(last.value)}">${SAT_LABEL[satLevel(last.value)]}</span></div>
@@ -946,9 +979,9 @@ function viewSurveyBox(a) {
         <div class="m"><b>${esc(monthName(s.month))}</b>${s.department ? `<small>${esc(s.department)}</small>` : ''}</div>
         <div class="t"><div class="f ${satLevel(+s.percentage)}" style="width:${+s.percentage}%"></div></div>
         <b class="p">${pct(+s.percentage)}</b>
-        <button class="icon-btn" title="Edit" data-act="surveyModal" data-id="${a.id}" data-sid="${s.id}">${ic('edit')}</button>
+        ${can('surveys.edit', 'surveys.delete') ? `<button class="icon-btn" title="Edit" data-act="surveyModal" data-id="${a.id}" data-sid="${s.id}">${ic('edit')}</button>` : '<span></span>'}
       </li>`).join('') || '<li class="empty">No survey results yet.<br>Add the monthly satisfaction percentage here.</li>'}</ul>
-    <p class="hint">Target: ${satTarget()}% (change in Settings)</p>
+    <p class="hint">Target: ${satTarget()}%${can('settings.edit') ? ' (change in Settings)' : ''}</p>
   </div>`;
 }
 function surveyModal(a, sid) {
@@ -964,8 +997,8 @@ function surveyModal(a, sid) {
     <label class="full">Notes<textarea name="notes" placeholder="Main comments from the survey...">${esc(s ? s.notes || '' : '')}</textarea></label>
     <p class="full hint">One result per month per department. If several departments share this area, add one line for each; the area's monthly value is their average.</p>
   </div>`, {
-    submit: s ? 'Save Changes' : 'Add Result',
-    extra: s ? `<button type="button" class="btn danger" data-act="surveyDelete" data-id="${a.id}" data-sid="${s.id}">${ic('trash')}Delete</button>` : '',
+    submit: s ? 'Save Changes' : 'Add Result', allow: can(s ? 'surveys.edit' : 'surveys.create'),
+    extra: s && can('surveys.delete') ? `<button type="button" class="btn danger" data-act="surveyDelete" data-id="${a.id}" data-sid="${s.id}">${ic('trash')}Delete</button>` : '',
     async onSubmit(d) {
       const p = +d.percentage;
       if (!/^\d{4}-\d{2}$/.test(d.month)) { toast('Choose the month', true); return false; }
@@ -986,8 +1019,10 @@ function filteredHist(a) {
 }
 
 /* ============================== Modals ============================== */
-function modal(title, body, { submit = 'Save', onSubmit, wide = false, extra = '', cls = '', locked = false } = {}) {
+/* allow: false shows the form read-only (the user may look but not change) */
+function modal(title, body, { submit = 'Save', onSubmit, wide = false, extra = '', cls = '', locked = false, allow = true } = {}) {
   const m = $('#modal');
+  if (!allow) onSubmit = undefined;
   track('open', 'dialog', title.replace(/<[^>]+>/g, ''));
   m.dataset.locked = locked ? '1' : '';
   m.innerHTML = `<div class="modal-back" ${locked ? '' : 'data-act="closeModal"'}></div>
@@ -1012,6 +1047,7 @@ function modal(title, body, { submit = 'Save', onSubmit, wide = false, extra = '
       toast('Error: ' + err.message, true, 6000);
     } finally { btn.disabled = false; }
   };
+  if (!allow) $$('.modal-b input, .modal-b select, .modal-b textarea', form).forEach(el => (el.disabled = true));
   const first = $('input:not([type=hidden]),select,textarea', form);
   if (first && matchMedia('(min-width: 821px)').matches) first.focus();
   return form;
@@ -1038,8 +1074,8 @@ function invModal(a, presetItem) {
     <label class="full">Details / Remarks<textarea name="details" placeholder="e.g. Added 10 new chairs from supplier X"></textarea></label>
   </div>`;
   const form = modal(`Update Inventory – ${esc(a.name)}`, body, {
-    submit: 'Save Update',
-    extra: `<button type="button" class="btn danger" data-act="invDelete" data-id="${a.id}" title="Remove the selected item from this break area's inventory">${ic('trash')}Delete Item</button>`,
+    submit: 'Save Update', allow: can('inventory.edit'),
+    extra: can('inventory.delete') ? `<button type="button" class="btn danger" data-act="invDelete" data-id="${a.id}" title="Remove the selected item from this break area's inventory">${ic('trash')}Delete Item</button>` : '',
     async onSubmit(d) {
       const prev = qty(a, d.item), n = Math.floor(+d.qty || 0);
       const moves = ['Added', 'Removed', 'Transferred'].includes(d.action);
@@ -1072,6 +1108,7 @@ function invModal(a, presetItem) {
     if (ev.target.name === 'item') { const en = invEntry(a, form.item.value); form.condition.value = en ? en.condition : 'Good'; }
     sync();
   });
+  if (!can('inventory.edit')) form.item.disabled = false; // still lets a user who may only delete pick the item
   sync();
 }
 
@@ -1109,8 +1146,8 @@ function issueView(a, iid) {
       <label>Date<input type="date" name="date" value="${today()}"></label>
       <label class="full">Follow-up Note<textarea name="text" placeholder="Action taken, technician assigned, parts ordered..."></textarea></label>
     </div>`, {
-    submit: 'Save Follow-up', wide: true,
-    extra: `<button type="button" class="btn danger" data-act="issueDelete" data-id="${a.id}" data-iid="${i.id}">${ic('trash')}Delete</button>`,
+    submit: 'Save Follow-up', wide: true, allow: can('issues.followup'),
+    extra: can('issues.delete') ? `<button type="button" class="btn danger" data-act="issueDelete" data-id="${a.id}" data-iid="${i.id}">${ic('trash')}Delete</button>` : '',
     async onSubmit(d) {
       if (!d.text.trim() && d.status === i.status) { toast('Add a note or change the status', true); return false; }
       i.log = i.log || [];
@@ -1170,8 +1207,8 @@ function inspModal(a) {
   </div>
   ${a.inspections.length ? `<b>Previous inspections</b><table class="tbl" style="margin-top:6px"><thead><tr><th>Date</th><th>By</th><th>Result</th><th>Notes</th><th></th></tr></thead><tbody>
     ${[...a.inspections].sort(byDateDesc).map(i => `<tr><td>${fmt(i.date)}</td><td>${esc(i.by)}</td><td>${badge(i.result)}</td><td class="wrap">${esc(i.notes || '')}</td>
-      <td><button type="button" class="icon-btn" title="Delete this inspection" data-act="inspDelete" data-id="${a.id}" data-iid="${i.id}">${ic('trash')}</button></td></tr>`).join('')}</tbody></table>` : ''}`, {
-    submit: 'Save Inspection', wide: true,
+      <td>${can('inspections.delete') ? `<button type="button" class="icon-btn" title="Delete this inspection" data-act="inspDelete" data-id="${a.id}" data-iid="${i.id}">${ic('trash')}</button>` : ''}</td></tr>`).join('')}</tbody></table>` : ''}`, {
+    submit: 'Save Inspection', wide: true, allow: can('inspections.create'),
     async onSubmit(d) {
       a.inspections.push({ id: uid(), date: d.date, by: d.by, result: d.result, notes: d.notes });
       if (!a.lastInspection || d.date >= a.lastInspection) { a.lastInspection = d.date; a.inspectedBy = d.by; a.nextInspection = d.next; }
@@ -1235,7 +1272,7 @@ function uploadModal(a, cat = 'Current') {
 
 function viewPhoto(a, pid) {
   const p = a.photos.find(x => x.id === pid);
-  if (!p) return uploadModal(a);
+  if (!p) return can('files.upload') ? uploadModal(a) : undefined;
   const i = a.photos.indexOf(p), prev = a.photos[i - 1], next = a.photos[i + 1];
   const nav = (x, dir) => x ? `<button type="button" class="lb-nav ${dir}" data-act="viewPhoto" data-id="${a.id}" data-pid="${x.id}" aria-label="${dir === 'l' ? 'Previous' : 'Next'} photo">${ic(dir === 'l' ? 'chevL' : 'chevR')}</button>` : '';
   modal(esc(p.caption), `<div class="viewer">
@@ -1243,8 +1280,8 @@ function viewPhoto(a, pid) {
     </div>
     <p class="muted" style="margin:10px 0 0">${badge(p.category)} &nbsp;Uploaded ${fmt(p.date)} · Photo ${i + 1} of ${a.photos.length}${p.main ? ' · <b>Main photo</b>' : ''}${p.src ? '' : ' · Placeholder image – upload a real photo to replace it'}</p>`, {
     cls: 'lightbox',
-    extra: `<button type="button" class="btn danger" data-act="photoDelete" data-id="${a.id}" data-pid="${p.id}">${ic('trash')}Delete</button>
-      ${p.main ? '' : `<button type="button" class="btn" data-act="photoMain" data-id="${a.id}" data-pid="${p.id}">${ic('star')}Set as Main Photo</button>`}
+    extra: `${can('files.delete') ? `<button type="button" class="btn danger" data-act="photoDelete" data-id="${a.id}" data-pid="${p.id}">${ic('trash')}Delete</button>` : ''}
+      ${p.main || !can('files.upload') ? '' : `<button type="button" class="btn" data-act="photoMain" data-id="${a.id}" data-pid="${p.id}">${ic('star')}Set as Main Photo</button>`}
       ${p.src ? `<a class="btn" href="${esc(p.src)}" target="_blank" rel="noopener">${ic('expand')}Open Original</a>` : ''}`
   });
 }
@@ -1257,14 +1294,14 @@ function qrModal(a) {
     <p class="hint">Scanning opens this break area profile (contents, status, latest updates and history).
     Phones must be on the same company network as the server PC.</p></div>`, {
     extra: `<button type="button" class="btn" data-act="copyLink" data-url="${esc(url)}">${ic('copy')}Copy Link</button>
-      <button type="button" class="btn primary" data-act="printLabel" data-id="${a.id}">${ic('printer')}Print Label</button>`
+      ${can('report.labels') ? `<button type="button" class="btn primary" data-act="printLabel" data-id="${a.id}">${ic('printer')}Print Label</button>` : ''}`
   });
 }
 
 function editArea(a) {
   modal(`Edit – ${esc(a.name)}`, areaFields(a), {
-    submit: 'Save Changes', wide: true,
-    extra: `<button type="button" class="btn danger" data-act="deleteArea" data-id="${a.id}">${ic('trash')}Delete Break Area</button>`,
+    submit: 'Save Changes', wide: true, allow: can('areas.edit'),
+    extra: can('areas.delete') ? `<button type="button" class="btn danger" data-act="deleteArea" data-id="${a.id}">${ic('trash')}Delete Break Area</button>` : '',
     async onSubmit(d) {
       const before = { status: a.status, responsible: a.responsible };
       applyAreaFields(a, d);
@@ -1282,14 +1319,14 @@ function editArea(a) {
 function viewEquipment() {
   const A = DB.areas;
   return `<div class="page-head"><h2>Furniture &amp; Equipment</h2>
-    <div class="actions"><button class="btn" data-act="exportEquip">${ic('download')}Export Excel</button><button class="btn primary" data-act="itemTypeModal">${ic('plus')}Add Item Type</button></div></div>
+    <div class="actions">${can('export.excel') ? `<button class="btn" data-act="exportEquip">${ic('download')}Export Excel</button>` : ''}${can('itemtypes.manage') ? `<button class="btn primary" data-act="itemTypeModal">${ic('plus')}Add Item Type</button>` : ''}</div></div>
   <div class="kpis">${DB.itemTypes.map(t => {
     const total = A.reduce((s, a) => s + qty(a, t.id), 0);
     const bad = A.reduce((s, a) => { const e = invEntry(a, t.id); return s + (e && e.qty && e.condition !== 'Good' ? 1 : 0); }, 0);
     return `<div class="card kpi"><div class="kic ${bad ? 'orange' : ''}">${ic(t.icon)}</div><div><div class="lbl">${esc(t.name)}</div><div class="val">${total}</div>
       <div class="hint">${A.filter(a => qty(a, t.id)).length} areas${bad ? ` · <span style="color:#b45309">${bad} need attention</span>` : ''}</div></div></div>`;
   }).join('')}</div>
-  <div class="card mb"><div class="card-h"><h3>Inventory by Break Area</h3><span class="sp"></span><span class="hint">Click a row to update its contents</span></div>
+  <div class="card mb"><div class="card-h"><h3>Inventory by Break Area</h3><span class="sp"></span><span class="hint">Click a row to open the break area</span></div>
     <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Break Area</th><th>Location</th>${DB.itemTypes.map(t => `<th class="num">${esc(t.name)}</th>`).join('')}<th class="num">Total Items</th></tr></thead>
     <tbody>${A.map(a => `<tr class="click" data-act="go" data-href="#/area/${a.id}"><td><b>${esc(a.name)}</b></td><td>${esc(a.location)}</td>
       ${DB.itemTypes.map(t => { const e = invEntry(a, t.id); return `<td class="num">${e && e.qty ? (e.condition !== 'Good' ? `<span class="badge ${STATUS_CLS[e.condition]}" title="${e.condition}">${e.qty}</span>` : e.qty) : '-'}</td>`; }).join('')}
@@ -1299,7 +1336,7 @@ function viewEquipment() {
   <div class="card"><div class="card-h"><h3>Item Types</h3></div>
     <div class="tbl-wrap"><table class="tbl"><thead><tr><th></th><th>Name</th><th>Singular</th><th>Code</th><th></th></tr></thead><tbody>
     ${DB.itemTypes.map(t => `<tr><td>${ic(t.icon)}</td><td><b>${esc(t.name)}</b></td><td>${esc(t.short || '')}</td><td class="muted">${esc(t.id)}</td>
-      <td><button class="btn sm" data-act="itemTypeModal" data-tid="${t.id}">${ic('edit')}Edit</button></td></tr>`).join('')}</tbody></table></div></div>`;
+      <td>${can('itemtypes.manage') ? `<button class="btn sm" data-act="itemTypeModal" data-tid="${t.id}">${ic('edit')}Edit</button>` : ''}</td></tr>`).join('')}</tbody></table></div></div>`;
 }
 function itemTypeModal(tid) {
   const t = tid ? itemType(tid) : null;
@@ -1338,7 +1375,7 @@ const TX_HEAD = ['Date', 'Break Area', 'Item', 'Action', 'Previous Qty', 'New Qt
 function viewTransactions() {
   const f = F.tx;
   return `<div class="page-head"><h2>Transactions</h2><span class="muted" id="txCount"></span>
-    <div class="actions"><button class="btn" data-act="printTx">${ic('printer')}Print</button><button class="btn" data-act="exportTx">${ic('download')}Export Excel</button></div></div>
+    <div class="actions">${can('print') ? `<button class="btn" data-act="printTx">${ic('printer')}Print</button>` : ''}${can('export.excel') ? `<button class="btn" data-act="exportTx">${ic('download')}Export Excel</button>` : ''}</div></div>
   <div class="card">
     <div class="card-h filters">
       <label class="search">${ic('search')}<input data-f="tx.q" data-res="tx" placeholder="Search details, person..." value="${esc(f.q)}"></label>
@@ -1371,7 +1408,7 @@ function viewMaintenance() {
     ['clipboard', 'Inspections Overdue', DB.areas.filter(a => inspStatus(a) === 'Overdue').length, 'red']
   ];
   return `<div class="page-head"><h2>Inspection &amp; Maintenance</h2>
-    <div class="actions"><button class="btn" data-act="exportIssues">${ic('download')}Export Issues</button></div></div>
+    <div class="actions">${can('export.excel') ? `<button class="btn" data-act="exportIssues">${ic('download')}Export Issues</button>` : ''}</div></div>
   <div class="kpis">${k.map(([i, l, v, c]) => `<div class="card kpi"><div class="kic ${c}">${ic(i)}</div><div><div class="lbl">${l}</div><div class="val">${v}</div></div></div>`).join('')}</div>
   <div class="card mb"><div class="card-h"><h3>Open Issues</h3><span class="muted">(${open.length})</span></div>
     <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Reported</th><th>Break Area</th><th>Issue</th><th>Item</th><th>Priority</th><th>Status</th><th class="num">Age (days)</th><th>Reported By</th><th></th></tr></thead><tbody>
@@ -1383,13 +1420,13 @@ function viewMaintenance() {
     <div class="card"><div class="card-h"><h3>Scheduled Maintenance</h3></div>
       <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Planned</th><th>Break Area</th><th>Work</th><th>Assigned To</th><th></th></tr></thead><tbody>
       ${maint.map(m => `<tr><td class="${daysFromToday(m.date) < 0 ? 'overdue' : ''}">${fmt(m.date)}</td><td><a class="link" href="#/area/${m.a.id}">${esc(m.a.name)}</a></td><td class="wrap">${esc(m.details)}</td><td>${esc(m.assignedTo)}</td>
-        <td class="nowrap"><button class="btn sm" data-act="maintDone" data-id="${m.a.id}" data-mid="${m.id}">Complete</button>
-          <button class="icon-btn" title="Delete this maintenance" data-act="maintDelete" data-id="${m.a.id}" data-mid="${m.id}">${ic('trash')}</button></td></tr>`).join('') || '<tr><td colspan="5" class="empty">Nothing scheduled</td></tr>'}
+        <td class="nowrap">${can('maintenance.complete') ? `<button class="btn sm" data-act="maintDone" data-id="${m.a.id}" data-mid="${m.id}">Complete</button>` : ''}
+          ${can('maintenance.delete') ? `<button class="icon-btn" title="Delete this maintenance" data-act="maintDelete" data-id="${m.a.id}" data-mid="${m.id}">${ic('trash')}</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="5" class="empty">Nothing scheduled</td></tr>'}
       </tbody></table></div></div>
     <div class="card"><div class="card-h"><h3>Inspection Schedule</h3><span class="sp"></span><span class="hint">Every ${setting('inspectionDays')} days</span></div>
       <div class="tbl-wrap scroll"><table class="tbl"><thead><tr><th>Break Area</th><th>Last</th><th>Next</th><th>Status</th><th></th></tr></thead><tbody>
       ${insp.map(a => `<tr><td><a class="link" href="#/area/${a.id}">${esc(a.name)}</a></td><td>${fmt(a.lastInspection)}</td><td>${fmt(a.nextInspection)}</td><td>${badge(inspStatus(a))}</td>
-        <td><button class="btn sm" data-act="inspModal" data-id="${a.id}">Record</button></td></tr>`).join('')}
+        <td>${can('inspections.create', 'inspections.delete') ? `<button class="btn sm" data-act="inspModal" data-id="${a.id}">${can('inspections.create') ? 'Record' : 'View'}</button>` : ''}</td></tr>`).join('')}
       </tbody></table></div></div>
   </div>`;
 }
@@ -1437,26 +1474,27 @@ const REPORTS = {
 function viewReports() {
   return `<div class="page-head"><h2>Reports</h2></div>
   <div class="report-grid">
-    ${Object.entries(REPORTS).map(([k, r]) => `<div class="card report-card" data-report="${k}">
+    ${Object.entries(REPORTS).filter(([k]) => can('report.' + k) && (k !== 'satisfaction' || can('surveys.view'))).map(([k, r]) => `<div class="card report-card" data-report="${k}">
       <div class="card-h" style="margin:0">${ic('report')}<h3>${r.title}</h3></div><p>${r.desc}</p>
       ${r.dated ? `<div class="filters"><input type="date" name="from" title="From"><input type="date" name="to" title="To"></div>` : ''}
       <div class="filters"><button class="btn sm" data-act="runReport" data-k="${k}" data-mode="xlsx">${ic('download')}Export Excel</button>
-      <button class="btn sm" data-act="runReport" data-k="${k}" data-mode="print">${ic('printer')}Print / PDF</button></div></div>`).join('')}
-    <div class="card report-card"><div class="card-h" style="margin:0">${ic('qr')}<h3>QR Code Labels</h3></div>
+      ${can('print') ? `<button class="btn sm" data-act="runReport" data-k="${k}" data-mode="print">${ic('printer')}Print / PDF</button>` : ''}</div></div>`).join('')}
+    ${can('report.labels') ? `<div class="card report-card"><div class="card-h" style="margin:0">${ic('qr')}<h3>QR Code Labels</h3></div>
       <p>Print QR labels for all break areas to stick at each entrance.</p>
-      <div class="filters"><button class="btn sm" data-act="printAllLabels">${ic('printer')}Print All Labels</button></div></div>
-    <div class="card report-card"><div class="card-h" style="margin:0">${ic('database')}<h3>Complete Database Export</h3></div>
+      <div class="filters"><button class="btn sm" data-act="printAllLabels">${ic('printer')}Print All Labels</button></div></div>` : ''}
+    ${can('report.full') && allAreas() ? `<div class="card report-card"><div class="card-h" style="margin:0">${ic('database')}<h3>Complete Database Export</h3></div>
       <p>One Excel workbook with every table (areas, surveys, inventory, issues, photos, documents…), deleted records and the full activity logs – for documentation.</p>
-      <div class="filters"><button class="btn sm primary" data-act="fullExport">${ic('download')}Export Everything</button></div></div>
-  </div>`;
+      <div class="filters"><button class="btn sm primary" data-act="fullExport">${ic('download')}Export Everything</button></div></div>` : ''}
+  </div>
+  ${!Object.keys(REPORTS).some(k => can('report.' + k)) && !can('report.labels', 'report.full') ? '<p class="empty">No reports are enabled for your account. Ask the administrator.</p>' : ''}`;
 }
 
 /* ============================== Settings ============================== */
 function viewSettings() {
-  const s = DB.settings;
+  const s = DB.settings, ro = can('settings.edit') ? '' : 'disabled';
   return `<div class="page-head"><h2>Settings</h2></div>
   <div class="grid2 mb">
-    <form class="card" data-form="settings">
+    ${can('settings.view') ? `<form class="card" data-form="settings"><fieldset class="plain" ${ro}>
       <div class="card-h">${ic('settings')}<h3>General</h3></div>
       <div class="form-grid">
         <label class="full">System Name<input name="systemName" value="${esc(s.systemName)}"></label>
@@ -1467,32 +1505,33 @@ function viewSettings() {
         <label class="full">Logo Image (optional)<input type="file" name="logo" accept="image/*"></label>
         <label class="full">Locations <span class="hint">(one per line)</span><textarea name="locations" rows="5">${esc(s.locations.join('\n'))}</textarea></label>
       </div>
-      <div style="display:flex;gap:8px;margin-top:12px">${s.logoImage ? `<button type="button" class="btn" data-act="removeLogo">Remove logo image</button>` : ''}<span class="sp"></span><button class="btn primary">${ic('check')}Save Settings</button></div>
-    </form>
+      ${ro ? '<p class="hint" style="margin-top:12px">You can see the settings but not change them.</p>'
+        : `<div style="display:flex;gap:8px;margin-top:12px">${s.logoImage ? `<button type="button" class="btn" data-act="removeLogo">Remove logo image</button>` : ''}<span class="sp"></span><button class="btn primary">${ic('check')}Save Settings</button></div>`}
+    </fieldset></form>` : ''}
     <div class="card">
       <div class="card-h">${ic('database')}<h3>Server &amp; Database</h3></div>
-      <div data-async="serverInfo"><p class="muted">Loading…</p></div>
+      ${can('settings.view') ? '<div data-async="serverInfo"><p class="muted">Loading…</p></div>' : ''}
       <div class="filters" style="margin-top:12px">
-        <button class="btn primary" data-act="fullExport">${ic('download')}Full Excel Export (all data + logs)</button>
-        <label class="btn">${ic('upload')}Import Old Version (JSON)<input type="file" accept=".json,application/json" data-act-change="importBackup" hidden></label>
+        ${can('report.full') && allAreas() ? `<button class="btn primary" data-act="fullExport">${ic('download')}Full Excel Export (all data + logs)</button>` : ''}
+        ${can('data.import') ? `<label class="btn">${ic('upload')}Import Old Version (JSON)<input type="file" accept=".json,application/json" data-act-change="importBackup" hidden></label>` : ''}
       </div>
-      <div class="start-fresh">
+      ${can('data.import') && allAreas() ? `<div class="start-fresh">
         <div><b>Start real use</b><small>The system comes filled with sample data so everyone can see how it works.
           When you are ready, delete it all in one step and add your real break areas.</small></div>
         ${DB.areas.length ? `<button class="btn danger" data-act="clearAll">${ic('trash')}Delete All Sample Data</button>`
           : `<button class="btn" data-act="loadDemo">${ic('database')}Load Sample Data</button>`}
-      </div>
+      </div>` : ''}
     </div>
   </div>
   <div class="grid2">
-    <div class="card">
-      <div class="card-h">${ic('restore')}<h3>Backups</h3><span class="sp"></span><button class="btn sm primary" data-act="backupNow">${ic('download')}Backup Now</button></div>
+    ${can('backups.manage', 'backups.restore') ? `<div class="card">
+      <div class="card-h">${ic('restore')}<h3>Backups</h3><span class="sp"></span>${can('backups.manage') ? `<button class="btn sm primary" data-act="backupNow">${ic('download')}Backup Now</button>` : ''}</div>
       <div data-async="backups"><p class="muted">Loading…</p></div>
-    </div>
-    <div class="card">
+    </div>` : ''}
+    ${can('trash.restore') ? `<div class="card">
       <div class="card-h">${ic('trash')}<h3>Recycle Bin</h3><span class="hint">Nothing is ever erased – deleted records can be restored</span></div>
       <div data-async="trash"><p class="muted">Loading…</p></div>
-    </div>
+    </div>` : ''}
   </div>`;
 }
 
@@ -1502,17 +1541,26 @@ const ENTITY_NAME = {
   issueLog: 'Issue Follow-up', maintenance: 'Maintenance', inspections: 'Inspection', history: 'Transaction', itemTypes: 'Item Type', settings: 'Setting'
 };
 const OP_BADGE = { insert: ['Added', 'b-green'], update: ['Changed', 'b-blue'], delete: ['Deleted', 'b-red'] };
-const ACTIVITY_TYPES = ['session', 'login', 'navigate', 'click', 'open', 'filter', 'save', 'save-failed', 'export', 'restore', 'js-error', 'server-error'];
+const ACTIVITY_TYPES = ['session', 'navigate', 'click', 'open', 'filter', 'save', 'save-failed', 'denied', 'export', 'backup', 'restore', 'js-error', 'server-error'];
+const SECURITY_EVENTS = [['login', 'Logged in'], ['logout', 'Logged out'], ['login-failed', 'Wrong password / user name'], ['login-blocked', 'Login blocked (locked / disabled)'],
+  ['account-locked', 'Account locked'], ['session-expired', 'Logged out automatically'], ['password-changed', 'Changed own password'],
+  ['password-change-failed', 'Password change failed'], ['password-reset', 'Password reset by admin'], ['user-created', 'User created'],
+  ['user-changed', 'User / permissions changed'], ['user-disabled', 'User disabled'], ['user-deleted', 'User deleted'], ['user-unlocked', 'User unlocked'],
+  ['forced-logout', 'Logged out by admin'], ['access-denied', 'Access denied'], ['backup-restored', 'Backup restored'], ['setup', 'First setup'], ['admin-reset', 'Admin password reset on server']];
+const SEC_LABEL = Object.fromEntries(SECURITY_EVENTS);
+const SEC_BAD = /failed|blocked|locked|denied|reset|deleted|disabled/;
 let LOGDATA = { rows: [], total: 0, users: [] };
 
 function viewLogs() {
+  const tabs = LOG_TABS.filter(t => can(t[2]));
+  if (!tabs.some(t => t[0] === F.log.tab)) F.log = { ...F.log, tab: tabs[0][0], type: '', area: '' };
   const f = F.log, audit = f.tab === 'audit';
-  const types = audit ? Object.entries(OP_BADGE).map(([k, [l]]) => [k, l]) : ACTIVITY_TYPES;
+  const types = audit ? Object.entries(OP_BADGE).map(([k, [l]]) => [k, l]) : f.tab === 'security' ? SECURITY_EVENTS : ACTIVITY_TYPES;
   return `<div class="page-head"><h2>Activity Log</h2><span class="muted" id="logCount"></span>
     <div class="actions"><button class="btn" data-act="logRefresh">${ic('history')}Refresh</button><button class="btn" data-act="logExport">${ic('download')}Export Excel</button></div></div>
   <div class="card">
     <div class="card-h filters">
-      <div class="tabs"><button data-act="logTab" data-tab="audit" class="${audit ? 'on' : ''}">Data Changes</button><button data-act="logTab" data-tab="activity" class="${audit ? '' : 'on'}">User Activity &amp; Errors</button></div>
+      <div class="tabs">${tabs.map(([k, l]) => `<button data-act="logTab" data-tab="${k}" class="${f.tab === k ? 'on' : ''}">${esc(l)}</button>`).join('')}</div>
       <label class="search">${ic('search')}<input data-logf="q" placeholder="Search..." value="${esc(f.q)}"></label>
       <select data-logf="user"><option value="">All users</option>${options(LOGDATA.users, f.user)}</select>
       <select data-logf="type"><option value="">All types</option>${options(types, f.type)}</select>
@@ -1545,13 +1593,17 @@ function logRowsHTML(rows) {
     return `<tr><td class="nowrap">${esc(r.ts.replace('T', ' '))}</td><td>${esc(r.user)}</td><td class="muted">${esc(r.ip)}</td><td class="wrap">${esc(r.label)}</td>
       <td>${esc(ENTITY_NAME[r.entity] || r.entity)}${a ? `<br><a class="link" href="#/area/${a.id}">${esc(a.name)}</a>` : ''}</td><td><span class="badge ${c}">${l}</span></td><td class="wrap log-detail">${auditDetail(r)}</td></tr>`;
   }).join('');
-  return rows.map(r => `<tr class="${/error|failed/.test(r.type) ? 'err' : ''}"><td class="nowrap">${esc(r.ts.replace('T', ' '))}</td><td>${esc(r.user)}</td><td class="muted">${esc(r.ip)}</td>
-    <td><span class="badge ${/error|failed/.test(r.type) ? 'b-red' : r.type === 'save' ? 'b-green' : 'b-gray'}">${esc(r.type)}</span></td><td class="wrap">${esc(r.action)}</td><td class="wrap">${esc(r.target)}</td>
+  if (F.log.tab === 'security') return rows.map(r => `<tr class="${SEC_BAD.test(r.event) ? 'err' : ''}"><td class="nowrap">${esc(r.ts.replace('T', ' '))}</td><td>${esc(r.user)}</td>
+    <td class="muted">${esc(r.ip)}</td><td><span class="badge ${SEC_BAD.test(r.event) ? 'b-red' : r.event === 'login' ? 'b-green' : 'b-gray'}">${esc(SEC_LABEL[r.event] || r.event)}</span></td>
+    <td class="wrap">${esc(r.target)}</td><td class="wrap log-detail">${esc(r.detail)}</td></tr>`).join('');
+  return rows.map(r => `<tr class="${/error|failed|denied/.test(r.type) ? 'err' : ''}"><td class="nowrap">${esc(r.ts.replace('T', ' '))}</td><td>${esc(r.user)}</td><td class="muted">${esc(r.ip)}</td>
+    <td><span class="badge ${/error|failed|denied/.test(r.type) ? 'b-red' : r.type === 'save' ? 'b-green' : 'b-gray'}">${esc(r.type)}</span></td><td class="wrap">${esc(r.action)}</td><td class="wrap">${esc(r.target)}</td>
     <td class="muted">${esc(r.page)}</td><td class="wrap log-detail" title="${esc(r.detail)}">${esc(short(r.detail, 120))}</td></tr>`).join('');
 }
 function logTableHTML() {
   const audit = F.log.tab === 'audit';
-  const head = audit ? ['Time', 'User', 'PC (IP)', 'Action', 'Record', 'Change', 'Details'] : ['Time', 'User', 'PC (IP)', 'Type', 'Action', 'Target', 'Page', 'Detail'];
+  const head = audit ? ['Time', 'User', 'PC (IP)', 'Action', 'Record', 'Change', 'Details']
+    : F.log.tab === 'security' ? ['Time', 'User', 'PC (IP)', 'Event', 'Account / Target', 'Details'] : ['Time', 'User', 'PC (IP)', 'Type', 'Action', 'Target', 'Page', 'Detail'];
   return `<div class="tbl-wrap"><table class="tbl log-tbl"><thead><tr>${head.map(h => `<th>${h}</th>`).join('')}</tr></thead>
     <tbody>${logRowsHTML(LOGDATA.rows) || `<tr><td colspan="${head.length}" class="empty">No records match the filters</td></tr>`}</tbody></table></div>
     ${LOGDATA.rows.length < LOGDATA.total ? `<div style="text-align:center;margin-top:10px"><button class="btn" data-act="logMore">Load more (${LOGDATA.total - LOGDATA.rows.length} remaining)</button></div>` : ''}`;
@@ -1584,7 +1636,7 @@ const ASYNC = {
     const kind = { auto: 'Automatic', startup: 'Server start', manual: 'Manual', 'pre-import': 'Before import', 'pre-restore': 'Before restore' };
     el.innerHTML = list.length ? `<div class="tbl-wrap scroll"><table class="tbl"><thead><tr><th>Date &amp; Time</th><th>Type</th><th class="num">Size</th><th></th></tr></thead><tbody>
       ${list.map(b => `<tr><td>${esc(b.time.replace('T', ' '))}</td><td>${esc(kind[b.kind] || b.kind)}</td><td class="num">${fileSize(b.size)}</td>
-        <td><button class="btn sm" data-act="backupRestore" data-name="${esc(b.name)}" data-time="${esc(b.time)}">${ic('restore')}Restore</button></td></tr>`).join('')}
+        <td>${can('backups.restore') ? `<button class="btn sm" data-act="backupRestore" data-name="${esc(b.name)}" data-time="${esc(b.time)}">${ic('restore')}Restore</button>` : ''}</td></tr>`).join('')}
       </tbody></table></div><p class="hint">${list.length} backups. Restoring first saves the current data as a new backup, so a restore can always be undone.</p>`
       : '<p class="empty">No backups yet – click "Backup Now".</p>';
   },
@@ -1599,19 +1651,239 @@ const ASYNC = {
   }
 };
 
-/* ============================== User ============================== */
-let USER_MEM = '';
-function userModal(first) {
-  modal(first ? 'Welcome – who is using this PC?' : 'Change User', `<div class="form-grid">
-    <label class="full">Your name *<input name="name" required value="${esc(me())}" placeholder="e.g. Ahmed Hassan" autocomplete="name"></label>
-    <p class="full hint">Your name is remembered on this PC and recorded with every change you make, so the Activity Log shows who did what.</p></div>`, {
-    submit: 'Continue', locked: first,
-    onSubmit(d) {
-      const n = d.name.trim().slice(0, 60);
-      USER_MEM = n;
-      try { localStorage.setItem(USER_KEY, n); } catch (e) { /* private window – kept for this session only */ }
-      track('login', 'user', n);
-      toast('Welcome, ' + n);
+/* ============================== Login screens ============================== */
+function authScreen(html) {
+  document.body.classList.add('locked');
+  closeModal();
+  $('#auth').innerHTML = `<div class="auth-card"><div class="logo">${esc((DB && setting('logoText')) || 'SAMSUNG')}</div>${html}</div>`;
+  const first = $('#auth input');
+  if (first) first.focus();
+}
+const pwRules = () => `At least ${(ME && ME.minPasswordLength) || 8} characters with letters and a number or symbol. Not your name or user name.`;
+
+function showLogin(msg = '') {
+  if (document.body.classList.contains('locked') && $('#loginForm')) { if (msg) $('#authMsg').textContent = msg; return; }
+  ME = null;
+  authScreen(`<h2>Break Area Management System</h2><p class="muted">Log in with your user name and password.</p>
+    <form id="loginForm" class="auth-form" data-form="login" autocomplete="on">
+      <label>User name<input name="username" autocomplete="username" required autocapitalize="none" spellcheck="false"></label>
+      <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
+      <p class="auth-msg" id="authMsg">${esc(msg)}</p>
+      <button class="btn primary">${ic('user')}Log In</button>
+    </form>
+    <p class="hint">Forgot your password? Ask the system administrator to set a new one.</p>`);
+}
+function showSetup(local) {
+  authScreen(local ? `<h2>Create the administrator account</h2>
+    <p class="muted">This is the first start. The administrator can add users, choose what each one may see and do, and review everything they did.</p>
+    <form class="auth-form" data-form="setup">
+      <label>Full name<input name="full_name" required autocomplete="name" placeholder="e.g. Ayman Essam"></label>
+      <label>User name<input name="username" required autocomplete="username" autocapitalize="none" spellcheck="false" placeholder="e.g. ayman"></label>
+      <label>Password<input name="password" type="password" required autocomplete="new-password"></label>
+      <label>Repeat password<input name="password2" type="password" required autocomplete="new-password"></label>
+      <p class="hint">${pwRules()}</p>
+      <p class="auth-msg" id="authMsg"></p>
+      <button class="btn primary">${ic('check')}Create Administrator</button>
+    </form>`
+    : `<h2>System not set up yet</h2><p class="muted">The administrator account must first be created <b>on the server PC itself</b>
+      (the PC running start.bat) by opening <b>http://localhost:${esc(location.port || '80')}/</b> there.</p>
+      <button class="btn" data-act="reloadPage">${ic('restore')}Try again</button>`);
+}
+async function afterLogin(user) {
+  ME = user;
+  document.body.classList.remove('locked');
+  $('#auth').innerHTML = '';
+  await start();
+}
+async function submitAuth(form) {
+  const d = Object.fromEntries(new FormData(form));
+  const msg = $('#authMsg'), btn = $('button.primary', form);
+  msg.textContent = '';
+  if (form.dataset.form === 'setup' && d.password !== d.password2) { msg.textContent = 'The two passwords are not the same.'; return; }
+  btn.disabled = true;
+  try {
+    const user = await api('POST', form.dataset.form === 'setup' ? '/api/auth/setup' : '/api/auth/login', d);
+    await afterLogin(user);
+  } catch (e) {
+    msg.textContent = e.message;
+    if (form.password) { form.password.value = ''; form.password.focus(); }
+  } finally { btn.disabled = false; }
+}
+
+/* ============================== My account ============================== */
+function passwordModal(forced) {
+  modal(forced ? 'Choose your own password' : 'Change My Password', `<div class="form-grid">
+    ${forced ? '<p class="full">You are using a temporary password from the administrator. Choose your own password to continue – nobody else, not even the administrator, will know it.</p>' : ''}
+    <label class="full">Current password<input type="password" name="old" required autocomplete="current-password"></label>
+    <label>New password<input type="password" name="new" required autocomplete="new-password"></label>
+    <label>Repeat new password<input type="password" name="new2" required autocomplete="new-password"></label>
+    <p class="full hint">${pwRules()} Other PCs where you are logged in will be logged out.</p></div>`, {
+    submit: 'Change Password', locked: forced,
+    extra: forced ? `<button type="button" class="btn" data-act="logout">${ic('arrowLeft')}Log out</button>` : '',
+    async onSubmit(d) {
+      if (d.new !== d.new2) { toast('The two new passwords are not the same', true); return false; }
+      try { ME = await api('POST', '/api/auth/password', { old: d.old, new: d.new }); }
+      catch (e) { toast(e.message, true, 6000); return false; }
+      toast('Password changed');
+      if (forced) setTimeout(() => start(), 0);
+    }
+  });
+}
+function accountMenu() {
+  modal('My Account', `<div class="acct">
+      <div class="avatar lg">${esc(initials(me()))}</div>
+      <div><b>${esc(ME.full_name)}</b><div class="muted">${esc(ME.username)}${ME.title ? ' · ' + esc(ME.title) : ''}</div>
+        <div class="muted">${esc(ME.role || 'Custom')} · ${allAreas() ? 'All break areas' : ME.areas.length + ' break area(s)'} · ${ME.perms.length} permissions</div></div>
+    </div>
+    <p class="hint">For your security you are logged out automatically after ${ME.sessionIdleMinutes} minutes without activity.
+      Always log out when you leave a shared PC.</p>`, {
+    extra: `<a class="btn" href="#/account" data-act="closeModal">${ic('eye')}What I can do</a>
+      <button type="button" class="btn" data-act="changePassword">${ic('edit')}Change Password</button>
+      <button type="button" class="btn danger" data-act="logout">${ic('arrowLeft')}Log Out</button>`
+  });
+}
+const permGroupsHTML = (perms, input) => ME.permissions.map(([g, list]) => `<fieldset class="perm-group">
+    <legend>${input ? `<label class="check"><input type="checkbox" data-group="${esc(g)}"> ${esc(g)}</label>` : esc(g)}</legend>
+    ${list.map(([p, l]) => input
+      ? `<label class="check"><input type="checkbox" name="perm" value="${p}" ${perms.includes(p) ? 'checked' : ''}> ${esc(l)}</label>`
+      : `<div class="perm ${perms.includes(p) ? 'yes' : 'no'}">${ic(perms.includes(p) ? 'check' : 'x')}${esc(l)}</div>`).join('')}
+  </fieldset>`).join('');
+function viewAccount() {
+  return `<div class="page-head"><h2>My Permissions</h2><span class="muted">${esc(ME.full_name)} · ${esc(ME.role || 'Custom')}</span>
+    <div class="actions"><button class="btn" data-act="changePassword">${ic('edit')}Change Password</button></div></div>
+  <div class="card mb"><div class="card-h">${ic('building')}<h3>Break areas</h3></div>
+    <p>${allAreas() ? 'You can work with <b>all break areas</b>.' : `You can only see and work with: <b>${ME.areas.map(id => esc((area(id) || { name: id }).name)).join(', ') || 'none'}</b>`}</p></div>
+  <div class="card"><div class="card-h">${ic('check')}<h3>What your account may do</h3><span class="hint">Set by the system administrator</span></div>
+    <div class="perm-grid">${permGroupsHTML(ME.perms, false)}</div></div>`;
+}
+
+/* ============================== Users & permissions (administrator) ============================== */
+let USERS = { users: [], permissions: [], roles: {} };
+const ago = ts => {
+  if (!ts) return 'Never';
+  const m = Math.round((new Date() - new Date(ts)) / 60000);
+  return m < 1 ? 'just now' : m < 60 ? m + ' min ago' : m < 1440 ? Math.round(m / 60) + ' h ago' : fmt(ts.slice(0, 10));
+};
+function viewUsers() {
+  return `<div class="page-head"><h2>Users &amp; Permissions</h2><span class="muted" id="userCount"></span>
+    <div class="actions">${can('logs.security') ? `<button class="btn" data-act="securityLog">${ic('activity')}Logins &amp; Security Log</button>` : ''}
+      <button class="btn primary" data-act="userEdit">${ic('plus')}Add User</button></div></div>
+  <div class="card"><div data-async="users"><p class="muted">Loading…</p></div></div>
+  <p class="hint">Every user logs in with a personal user name and password. Everything each user does is recorded in the Activity Log with their name.
+    Disable or delete an account as soon as the person leaves – their history stays in the logs.</p>`;
+}
+function userRowsHTML() {
+  return `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Name</th><th>User name</th><th>Role</th><th>Break areas</th><th class="num">Permissions</th><th>Status</th><th>Last login</th><th></th></tr></thead><tbody>
+    ${USERS.users.map(u => `<tr class="click" data-act="userEdit" data-uid="${u.id}">
+      <td><b>${esc(u.full_name)}</b>${u.title ? `<br><small class="muted">${esc(u.title)}</small>` : ''}</td><td class="mono">${esc(u.username)}</td>
+      <td>${esc(u.role || 'Custom')}</td><td>${u.areas == null ? 'All' : u.areas.length}</td><td class="num">${u.perms.length} / ${USERS.permissions.flatMap(g => g[1]).length}</td>
+      <td class="nowrap">${u.active ? badge('Active') : badge('Inactive')} ${u.online ? '<span class="badge b-green" title="Logged in now">● Online</span>' : ''}
+        ${u.locked ? '<span class="badge b-red">Locked</span>' : ''} ${u.must_change ? '<span class="badge b-orange" title="Must choose a new password at the next login">New password</span>' : ''}</td>
+      <td class="nowrap" title="${esc(u.last_login || '')} ${esc(u.last_ip || '')}">${ago(u.last_login)}</td>
+      <td><button class="btn sm" data-act="userEdit" data-uid="${u.id}">${ic('edit')}Edit</button></td></tr>`).join('')}
+  </tbody></table></div>`;
+}
+const genPassword = () => {
+  const c = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789', a = new Uint32Array(10);
+  crypto.getRandomValues(a);
+  return [...a].map(x => c[x % c.length]).join('').replace(/^(.{4})(.{4})(.{2})$/, '$1-$2-$3') + '7';
+};
+function userEdit(uid) {
+  const u = uid ? USERS.users.find(x => x.id === uid) : null;
+  const perms = u ? u.perms : USERS.roles['Data Entry'];
+  const scoped = u && u.areas != null;
+  const roleOpts = [...Object.keys(USERS.roles), 'Custom'];
+  const form = modal(u ? `User – ${esc(u.full_name)}` : 'Add User', `<div class="form-grid">
+      <label>Full name *<input name="full_name" required value="${esc(u ? u.full_name : '')}" placeholder="e.g. Sara Mostafa"></label>
+      <label>User name * <span class="hint">(for logging in)</span><input name="username" required value="${esc(u ? u.username : '')}" autocapitalize="none" spellcheck="false" placeholder="e.g. sara.m"></label>
+      <label>Job title / department<input name="title" value="${esc(u ? u.title || '' : '')}" placeholder="e.g. HR Specialist"></label>
+      ${u ? `<label>Account<select name="active">${options([['1', 'Active – can log in'], ['0', 'Disabled – cannot log in']], u.active ? '1' : '0')}</select></label>`
+        : `<label>Temporary password *<span style="display:flex;gap:6px"><input name="password" required value="${genPassword()}" style="flex:1" class="mono">
+          <button type="button" class="btn sm" data-act="genPw">New</button></span></label>`}
+      <label class="full check"><input type="checkbox" name="must_change" ${!u || u.must_change ? 'checked' : ''}> Must choose a new password at the next login (recommended)</label>
+      <label class="full">Notes<input name="notes" value="${esc(u ? u.notes || '' : '')}" placeholder="optional"></label>
+    </div>
+    <h4 class="sec-h">${ic('building')} Break areas this user can see and work with</h4>
+    <div class="filters"><label class="check"><input type="radio" name="scope" value="all" ${scoped ? '' : 'checked'}> All break areas (also new ones)</label>
+      <label class="check"><input type="radio" name="scope" value="some" ${scoped ? 'checked' : ''}> Only the selected break areas</label></div>
+    <div class="area-picks ${scoped ? '' : 'hidden'}">${DB.areas.map(a => `<label class="check"><input type="checkbox" name="area" value="${a.id}" ${scoped && u.areas.includes(a.id) ? 'checked' : ''}> ${esc(a.name)} <span class="muted">${esc(a.location)}</span></label>`).join('')
+      || '<p class="muted">No break areas yet.</p>'}</div>
+    <h4 class="sec-h">${ic('check')} Permissions – what this user can see and do
+      <span class="sp"></span><label class="fld" style="flex-direction:row;align-items:center;gap:6px">Quick role<select name="role">${options(roleOpts, u ? (u.role || 'Custom') : 'Data Entry')}</select></label></h4>
+    <div class="perm-grid">${permGroupsHTML(perms, true)}</div>
+    ${u ? `<p class="hint">Created ${esc((u.created_at || '').replace('T', ' '))} by ${esc(u.created_by || '-')} · Last changed ${esc((u.updated_at || '').replace('T', ' '))} by ${esc(u.updated_by || '-')}
+      · Password set ${esc((u.pw_changed_at || '').replace('T', ' '))} · Last login ${esc((u.last_login || 'never').replace('T', ' '))} ${esc(u.last_ip || '')}</p>` : ''}`, {
+    submit: u ? 'Save Changes' : 'Create User', wide: true, cls: 'user-modal',
+    extra: u ? `<button type="button" class="btn" data-act="userReset" data-uid="${u.id}">${ic('edit')}Reset Password</button>
+      ${u.locked ? `<button type="button" class="btn" data-act="userUnlock" data-uid="${u.id}">${ic('check')}Unlock</button>` : ''}
+      ${u.online ? `<button type="button" class="btn" data-act="userLogout" data-uid="${u.id}">${ic('arrowLeft')}Log Out Now</button>` : ''}
+      ${can('logs.activity') ? `<button type="button" class="btn" data-act="userActivity" data-uid="${u.id}">${ic('activity')}Activity</button>` : ''}
+      ${u.id !== ME.id ? `<button type="button" class="btn danger" data-act="userDelete" data-uid="${u.id}">${ic('trash')}Delete</button>` : ''}` : '',
+    async onSubmit(d, f) {
+      const perms = $$('input[name=perm]:checked', f).map(x => x.value);
+      const areas = d.scope === 'some' ? $$('input[name=area]:checked', f).map(x => x.value) : null;
+      if (areas && !areas.length && !confirm('No break area is selected – this user will not see any break area. Continue?')) return false;
+      if (!perms.length && !confirm('No permission is selected – this user will not be able to see anything. Continue?')) return false;
+      const body = { id: u ? u.id : undefined, ver: u ? u.ver : undefined, full_name: d.full_name, username: d.username.trim(), title: d.title,
+        notes: d.notes, role: d.role, perms, areas, active: u ? d.active === '1' : true, must_change: !!d.must_change, password: d.password };
+      try { await api('POST', '/api/users/save', body); }
+      catch (e) { toast(e.message, true, 7000); return false; }
+      if (!u) {
+        modal('User created', `<p><b>${esc(d.full_name)}</b> can now log in on any PC in the network with:</p>
+          <dl class="kv"><dt>Address</dt><dd class="mono">${esc(BASE_URL)}</dd><dt>User name</dt><dd class="mono">${esc(body.username)}</dd><dt>Password</dt><dd class="mono">${esc(d.password)}</dd></dl>
+          <p class="hint">Give the password to the person privately. ${body.must_change ? 'They must choose their own password at the first login.' : ''} It is not shown again.</p>`);
+        await ASYNC.users($('[data-async=users]'));
+        return false;
+      }
+      toast('User saved');
+      if (u.id === ME.id) { ME = await api('GET', '/api/me'); }
+    }
+  });
+  const sync = () => {
+    $$('fieldset.perm-group', form).forEach(g => {
+      const boxes = $$('input[name=perm]', g), on = boxes.filter(b => b.checked).length;
+      const all = $('input[data-group]', g); all.checked = on === boxes.length; all.indeterminate = on > 0 && on < boxes.length;
+    });
+  };
+  const matchRole = () => {
+    const cur = $$('input[name=perm]:checked', form).map(x => x.value).sort().join();
+    form.role.value = Object.keys(USERS.roles).find(r => [...USERS.roles[r]].sort().join() === cur) || 'Custom';
+  };
+  form.addEventListener('change', e => {
+    const t = e.target;
+    if (t.name === 'role' && USERS.roles[t.value]) $$('input[name=perm]', form).forEach(b => (b.checked = USERS.roles[t.value].includes(b.value)));
+    else if (t.dataset.group) { $$('input[name=perm]', t.closest('fieldset')).forEach(b => (b.checked = t.checked)); matchRole(); }
+    else if (t.name === 'perm') matchRole();
+    if (t.name === 'scope') $('.area-picks', form).classList.toggle('hidden', t.value !== 'some');
+    sync();
+  });
+  sync();
+}
+ASYNC.users = async el => {
+  USERS = await api('GET', '/api/users');
+  el.innerHTML = userRowsHTML();
+  const c = $('#userCount'); if (c) c.textContent = USERS.users.length + ' users · ' + USERS.users.filter(u => u.online).length + ' online now';
+};
+async function userAction(action, uid, confirmText, done) {
+  const u = USERS.users.find(x => x.id === uid);
+  if (!u || (confirmText && !confirm(confirmText.replace('{name}', u.full_name)))) return;
+  try { await api('POST', '/api/users/' + action, { id: uid }); closeModal(); toast(done.replace('{name}', u.full_name)); rerender(); }
+  catch (e) { toast(e.message, true, 7000); }
+}
+function userReset(uid) {
+  const u = USERS.users.find(x => x.id === uid);
+  if (!u) return;
+  modal(`Reset Password – ${esc(u.full_name)}`, `<div class="form-grid">
+    <label class="full">New temporary password<span style="display:flex;gap:6px"><input name="password" class="mono" style="flex:1" required value="${genPassword()}">
+      <button type="button" class="btn sm" data-act="genPw">New</button></span></label>
+    <p class="full hint">${esc(u.full_name)} is logged out everywhere, must log in with this password and then choose their own. The account is also unlocked.</p></div>`, {
+    submit: 'Set Password',
+    async onSubmit(d) {
+      try { await api('POST', '/api/users/reset', { id: uid, password: d.password }); }
+      catch (e) { toast(e.message, true, 7000); return false; }
+      modal('Password reset', `<p>Give this temporary password to <b>${esc(u.full_name)}</b> privately:</p><p class="big-pw mono">${esc(d.password)}</p>
+        <p class="hint">User name: <b class="mono">${esc(u.username)}</b>. It is not shown again.</p>`);
+      return false;
     }
   });
 }
@@ -1656,7 +1928,29 @@ const ACT = {
   go: d => { location.hash = d.href; },
   toggleNav: () => document.body.classList.toggle('nav-open'),
   closeModal,
-  userModal: () => userModal(false),
+  accountMenu,
+  changePassword: () => passwordModal(false),
+  async logout() {
+    flushLog();
+    try { await api('POST', '/api/auth/logout', {}); } catch (e) { /* logged out anyway */ }
+    DB = null; SNAP = {};
+    location.hash = '';
+    showLogin('You have been logged out.');
+  },
+  reloadPage: () => location.reload(),
+  genPw: (d, el) => { el.closest('label').querySelector('input').value = genPassword(); },
+  userEdit: d => userEdit(d.uid),
+  userReset: d => userReset(d.uid),
+  userUnlock: d => userAction('unlock', d.uid, '', '{name} unlocked'),
+  userLogout: d => userAction('logout', d.uid, 'Log {name} out on all PCs now?', '{name} was logged out'),
+  userDelete: d => userAction('delete', d.uid, 'Delete the account of {name}?\n\nThey can never log in again. Everything they did stays in the logs with their name. (To block someone only for a while, choose "Disabled" instead.)', 'Account of {name} deleted'),
+  userActivity: d => {
+    const u = USERS.users.find(x => x.id === d.uid);
+    closeModal();
+    F.log = { tab: 'activity', q: '', user: `${u.full_name} (${u.username})`, type: '', area: '', from: '', to: '' };
+    location.hash = '#/logs';
+  },
+  securityLog: () => { F.log = { tab: 'security', q: '', user: '', type: '', area: '', from: '', to: '' }; location.hash = '#/logs'; },
   scrollTrack: d => { const t = $('#track'); t.scrollBy({ left: d.dir * t.clientWidth * .7 }); },
   toHistory: () => $('#history').scrollIntoView({ behavior: 'smooth' }),
   photoTab: d => { F.photoTab = d.tab; rerender(); },
@@ -1826,6 +2120,8 @@ const ACT = {
     } catch (e) { return toast('Export failed: ' + e.message, true); }
     if (audit) exportXLSX('data_changes_log', ['Time', 'User', 'IP', 'Action', 'Table', 'Record ID', 'Break Area', 'Operation', 'Changes / Record'],
       rows.map(r => [r.ts, r.user, r.ip, r.label, ENTITY_NAME[r.entity] || r.entity, r.entity_id, (area(r.area_id) || {}).name || r.area_id || '', (OP_BADGE[r.op] || [r.op])[0], r.op === 'update' ? r.changes : r.after || r.before]), 'Data Changes');
+    else if (F.log.tab === 'security') exportXLSX('security_log', ['Time', 'User', 'IP', 'Event', 'Account / Target', 'Details'],
+      rows.map(r => [r.ts, r.user, r.ip, SEC_LABEL[r.event] || r.event, r.target, r.detail]), 'Logins & Security');
     else exportXLSX('user_activity_log', ['Time', 'User', 'IP', 'Type', 'Action', 'Target', 'Page', 'Detail'],
       rows.map(r => [r.ts, r.user, r.ip, r.type, r.action, r.target, r.page, r.detail]), 'User Activity');
   }
@@ -1872,6 +2168,7 @@ document.addEventListener('change', async e => {
 
 document.addEventListener('submit', async e => {
   const f = e.target;
+  if (f.dataset.form === 'login' || f.dataset.form === 'setup') { e.preventDefault(); await submitAuth(f); }
   if (f.dataset.form === 'newArea') { e.preventDefault(); await submitNewArea(f); }
   if (f.dataset.form === 'settings') {
     e.preventDefault();
@@ -1890,6 +2187,8 @@ document.addEventListener('submit', async e => {
 });
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#modal').dataset.locked) closeModal(); });
 window.addEventListener('hashchange', () => {
+  if (!ME || !DB) return;
+  if (!$('#modal').dataset.locked) closeModal();
   F.hist = { item: '', action: '' }; F.photoTab = 'All';
   track('navigate', location.hash);
   render(); scrollTo(0, 0);
@@ -1912,33 +2211,45 @@ document.addEventListener('mousemove', e => {
 
 /* Pick up changes made on other PCs (only when the user is not in the middle of something) */
 setInterval(async () => {
-  if (!DB || document.hidden || $('#modal').classList.contains('open')) return;
+  if (!DB || !ME || document.hidden || $('#modal').classList.contains('open')) return;
   if (/^#\/(areas\/new|settings)/.test(location.hash)) return;
   const ae = document.activeElement;
   if (ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName) && ae.closest('#view')) return;
   try {
-    const { version } = await api('GET', '/api/version');
-    if (version !== DB.version) { await load(); rerender(); }
+    const { version, me: mv } = await api('GET', '/api/version');
+    if (mv !== ME.ver) { // the administrator changed this account - apply the new permissions right away
+      ME = await api('GET', '/api/me');
+      if (ME.must_change) return start();
+      await load(); rerender();
+      toast('Your permissions were updated by the administrator', false, 5000);
+    } else if (version !== DB.version) { await load(); rerender(); }
   } catch (e) { /* server briefly unreachable – try again next time */ }
 }, 10000);
 
-async function boot() {
-  try { await load(); }
-  catch (e) {
-    $('#view').innerHTML = `<div class="card welcome"><div class="kic">${ic('alert')}</div><h2>Cannot connect to the server</h2>
-      <p>${esc(e.message)}</p><p class="hint">Start the system with <b>start.bat</b> on the server PC, then open the address shown in its window.
-      Opening index.html directly from the folder does not work.</p></div>`;
-    return;
+const serverDown = e => {
+  document.body.classList.add('locked');
+  $('#auth').innerHTML = `<div class="auth-card"><div class="kic red" style="margin:0 auto 10px">${ic('alert')}</div><h2>Cannot connect to the server</h2>
+    <p>${esc(e.message)}</p><p class="hint">Start the system with <b>start.bat</b> on the server PC, then open the address shown in its window.
+    Opening index.html directly from the folder does not work.</p><button class="btn" data-act="reloadPage">${ic('restore')}Try again</button></div>`;
+};
+/* After a successful login: load the data the user may see and show their start page */
+async function start() {
+  if (ME.must_change) {
+    authScreen(`<h2>Welcome, ${esc(ME.full_name)}</h2><p class="muted">Please choose your own password to continue.</p>`);
+    return passwordModal(true);
   }
-  if (!DB.initialized && !DB.areas.length) {
+  document.body.classList.remove('locked');
+  $('#auth').innerHTML = '';
+  try { await load(); } catch (e) { if (ME) serverDown(e); return; }
+  if (!DB.initialized && !DB.areas.length && can('data.import')) {
     try {
       const r = await api('POST', '/api/first-run', {});
       if (r.loadSample) await loadSample();
       else await load(); // another PC is loading it right now
     } catch (e) { /* the welcome screen offers "Load Sample Data" */ }
   }
+  if (!canPage(parseRoute()[0])) history.replaceState(null, '', '#/' + firstPage());
   render();
-  if (!me()) userModal(true);
   track('session', 'open', navigator.userAgent);
   try {
     const info = await api('GET', '/api/info');
@@ -1948,5 +2259,12 @@ async function boot() {
       if (lan) { BASE_URL = lan; if (!$('#modal').classList.contains('open')) rerender(); }
     }
   } catch (e) { /* QR falls back to the current address */ }
+}
+async function boot() {
+  let st;
+  try { st = await api('GET', '/api/auth/status'); } catch (e) { return serverDown(e); }
+  if (!st.hasUsers) return showSetup(st.local);
+  if (!st.me) return showLogin();
+  await afterLogin(st.me);
 }
 boot();

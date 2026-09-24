@@ -6,6 +6,9 @@
     are mirrored incrementally (only new files are copied).
   * Every backup is also copied to each "extra_backup_dirs" folder from
     config.json (e.g. a network drive) when that folder is reachable.
+  * The user accounts (auth.db) are copied next to each backup as auth_<time>.db.
+    A restore never touches them, so it cannot bring back a deleted user or an
+    old password.
   * Only automatic backups are pruned (oldest first); manual, pre-import and
     pre-restore backups are kept forever.
 """
@@ -22,8 +25,9 @@ NAME_RE = re.compile(r'^bams_\d{8}_\d{6}_[a-z-]+\.db$')
 
 
 class Backups:
-    def __init__(self, store, uploads_dir, backup_dir, extra_dirs=(), keep_auto=200, interval_hours=6, log=print):
+    def __init__(self, store, uploads_dir, backup_dir, extra_dirs=(), keep_auto=200, interval_hours=6, log=print, auth=None):
         self.store = store
+        self.auth = auth
         self.uploads_dir = uploads_dir
         self.dir = backup_dir
         self.extra = [d for d in extra_dirs if d]
@@ -56,6 +60,10 @@ class Backups:
             os.remove(tmp)
             raise RuntimeError('Backup failed the integrity check: ' + result)
         os.replace(tmp, dest)
+        auth_copy = None
+        if self.auth:
+            auth_copy = os.path.join(self.dir, 'db', 'auth' + name[4:])
+            self.auth.backup_to(auth_copy)
         self._mirror_uploads(os.path.join(self.dir, 'uploads'))
         self.last_version, self.last_time = version, time.time()
 
@@ -64,6 +72,8 @@ class Backups:
             try:
                 os.makedirs(os.path.join(extra, 'db'), exist_ok=True)
                 shutil.copy2(dest, os.path.join(extra, 'db', name))
+                if auth_copy:
+                    shutil.copy2(auth_copy, os.path.join(extra, 'db', os.path.basename(auth_copy)))
                 self._mirror_uploads(os.path.join(extra, 'uploads'))
             except OSError as e:
                 errors.append(f'{extra}: {e}')
@@ -87,10 +97,11 @@ class Backups:
     def _prune(self):
         autos = [b for b in self.list() if b['kind'] in AUTO_KINDS]
         for b in autos[self.keep_auto:]:
-            try:
-                os.remove(os.path.join(self.dir, 'db', b['name']))
-            except OSError:
-                pass
+            for n in (b['name'], 'auth' + b['name'][4:]):
+                try:
+                    os.remove(os.path.join(self.dir, 'db', n))
+                except OSError:
+                    pass
 
     # ------------------------------------------------------------ list / restore
     def list(self):

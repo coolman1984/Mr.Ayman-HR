@@ -11,6 +11,29 @@ No installation is needed: a portable Python is included in `runtime/python`.
 3. The first time Windows may ask to allow Python through the firewall – allow it on the
    *private/domain* network, otherwise the other PCs cannot connect.
 
+## Users, passwords and permissions
+
+- **First start:** open `http://localhost:8080/` **on the server PC itself** and create the administrator account
+  (this is not possible from other PCs, so nobody else can claim it).
+- Everybody logs in with a personal user name and password. The administrator manages accounts in
+  **Users & Permissions**: add, disable, delete, reset password, unlock, log out now.
+- For each user the administrator ticks exactly what they may **see** (pages, survey results, logs) and **do**
+  (add / edit / delete per area of the system, which reports, Excel export, print, backups, settings, users),
+  and can limit the user to **selected break areas only**. Quick roles (Administrator, Manager, Data Entry,
+  Maintenance Team, Viewer) fill the ticks in one click. Changes apply immediately, even on PCs already logged in.
+- Every permission is checked by the server for every request, not only hidden in the browser.
+- Everything a user does is logged with their name and PC: data changes, clicks and pages, exports, and
+  refused attempts. **Activity Log → Logins & Security** shows every login, wrong password, lockout, logout and
+  every change to a user or their permissions.
+- Security: passwords stored only as salted PBKDF2 hashes; 5 wrong passwords lock the account for 15 minutes;
+  automatic logout after 30 minutes without activity (12 hours at most); new users must choose their own
+  password at the first login. These values can be changed in `config.json`.
+- **Administrator password lost?** On the server PC run **reset_admin.bat** – it prints a new temporary password.
+- User accounts live in `data/auth.db`. Restoring a data backup never changes them (a copy is saved with every
+  backup as `auth_<time>.db`).
+
+See **GUIDE_Users_Permissions.md** for step-by-step instructions.
+
 ## Sample data
 
 On the very first start the database is filled with sample data (22 break areas, inventory, photos, issues,
@@ -24,8 +47,9 @@ loaded again by itself.
 | Folder | Content |
 |---|---|
 | `data/bams.db` | SQLite database (all records, audit log, activity log) |
+| `data/auth.db` | User accounts, login sessions and the security log |
 | `data/uploads/` | Photos (original quality) and documents |
-| `data/logs/` | `audit-YYYY-MM.jsonl` (every change, never overwritten) and `server.log` |
+| `data/logs/` | `audit-YYYY-MM.jsonl` (every change), `security-YYYY-MM.jsonl` (logins, users) – never overwritten – and `server.log` |
 | `backups/` | Database backups + a mirror of the uploads |
 
 ## How data is protected
@@ -41,7 +65,8 @@ loaded again by itself.
 ## Settings (`config.json`)
 
 `port`, `backup_interval_hours`, `keep_auto_backups` (only automatic backups are ever pruned), `max_upload_mb`,
-`extra_backup_dirs`, `open_browser`. Restart start.bat after changing it.
+`extra_backup_dirs`, `open_browser`, `session_idle_minutes`, `session_max_hours`, `max_failed_logins`,
+`lockout_minutes`, `min_password_length`. Restart start.bat after changing it.
 
 ## Moving data from the old browser-only version
 
