@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Break Area Management System</title>
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <button class="icon-btn menu-btn" data-act="toggleNav" aria-label="Menu"></button>
+      <div class="brand" id="brand"></div>
+      <div class="title-block">
+        <h1 id="sysName"></h1>
+        <small id="factoryName"></small>
+      </div>
+      <div class="top-right">
+        <a class="bell" href="#/maintenance" id="bell" title="Open issues"></a>
+        <div class="user" id="user"></div>
+      </div>
+    </header>
+    <nav class="sidebar" id="sidebar"></nav>
+    <main class="content" id="view"></main>
+  </div>
+
+  <div id="modal"></div>
+  <div id="toast"></div>
+  <div id="print"></div>
+
+  <script src="lib/qrcode.min.js"></script>
+  <script src="js/data.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
