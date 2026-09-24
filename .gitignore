@@ -1,0 +1,5 @@
+# Company data, photos, logs and backups stay on the server PC - never in git
+data/
+backups/
+__pycache__/
+*.pyc

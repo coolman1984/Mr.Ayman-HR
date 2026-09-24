@@ -1,5 +1,5 @@
 /* Seed / demo data for the Break Area Management System.
-   Loaded only the first time (or after "Reset demo data" in Settings). */
+   Used only by the "Load Demo Data" button shown while the database is empty. */
 'use strict';
 
 const STATUSES = ['Good', 'Need Maintenance', 'Under Update'];
@@ -75,8 +75,19 @@ function buildSeed() {
       if (i === 3) issues.push({ id: 'is' + seq++, date: '2026-09-18', title: 'Air conditioner not cooling', item: 'other', priority: 'High', status: 'In Progress', reportedBy: 'Omar Khaled', details: 'AC unit in break area not cooling properly.', log: [{ date: '2026-09-19', by: 'Facility Team', text: 'Technician assigned.' }] });
     }
 
+    // Monthly satisfaction survey: Jan–Aug 2026, one result per department using the area
+    const depts = location === 'Production' ? ['Production – Line ' + (1 + i % 4), ...(i % 5 === 0 ? ['Quality'] : [])] : [location];
+    const surveys = [];
+    for (let m = 1; m <= 8; m++) {
+      depts.forEach((dept, k) => {
+        const base = 68 + (i * 7) % 22 + (status === 'Good' ? 4 : -6);
+        const p = Math.max(40, Math.min(99, base + Math.round(Math.sin(i + m / 2) * 5) + m - k * 3));
+        surveys.push({ id: id + 's' + m + k, month: '2026-' + pad(m), department: dept, percentage: p, respondents: 18 + (i * m) % 25, notes: '', by: 'HR Team' });
+      });
+    }
+
     areas.push({
-      id, name: 'Break Area ' + pad(i), location,
+      id, name: 'Break Area ' + pad(i), location, surveys,
       building: buildingFor[location], floor: floors[i % 3],
       startDate, size: 60 + (chairs[i - 1] * 3), capacity: chairs[i - 1] + 10,
       responsible: people[i % people.length], status, active: true,
@@ -114,6 +125,7 @@ function buildSeed() {
       userName: 'Ayman Essam',
       userRole: 'Admin',
       inspectionDays: 30,
+      satisfactionTarget: 80,
       locations: ['Production', 'Admin', 'Utility', 'Logistics', 'Other']
     },
     itemTypes: DEFAULT_ITEM_TYPES.map(t => ({ ...t })),

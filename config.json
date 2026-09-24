@@ -1,0 +1,11 @@
+{
+  "port": 8080,
+  "host": "0.0.0.0",
+  "data_dir": "data",
+  "backup_dir": "backups",
+  "extra_backup_dirs": [],
+  "backup_interval_hours": 6,
+  "keep_auto_backups": 200,
+  "max_upload_mb": 50,
+  "open_browser": true
+}

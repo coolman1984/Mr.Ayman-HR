@@ -1,23 +1,147 @@
 /* Break Area Management System – single page application.
-   Data is kept in the browser (localStorage) so the prototype runs without a server. */
+   All data lives in the SQLite database of the local server (server/app.py).
+   The page edits an in-memory copy (DB); save() sends only the rows that changed
+   since the last load, and the server applies them in one transaction. */
 'use strict';
 
-const KEY = 'bams-data-v1';
 let DB;
+let SNAP = {};          // "entity|id" -> { s: row as JSON, ver } as last loaded from the server
+let BASE_URL = location.origin + location.pathname;
+const DEFAULT_SETTINGS = {
+  systemName: 'Break Area Management System', factory: 'Beni Suef Factory', logoText: 'SAMSUNG', logoImage: '',
+  inspectionDays: 30, satisfactionTarget: 80, locations: ['Production', 'Admin', 'Utility', 'Logistics', 'Other']
+};
 
-/* ============================== Storage ============================== */
-function load() {
+/* ============================== Server API ============================== */
+const USER_KEY = 'bams-user';
+const me = () => { try { return localStorage.getItem(USER_KEY) || USER_MEM; } catch (e) { return USER_MEM; } };
+
+async function api(method, url, body, { raw = false, blob = false } = {}) {
+  const headers = { 'X-User': encodeURIComponent(me() || 'Unknown') };
+  if (body !== undefined && !raw) headers['Content-Type'] = 'application/json';
+  let res;
   try {
-    const s = localStorage.getItem(KEY);
-    if (s) { DB = JSON.parse(s); return; }
-  } catch (e) { /* fall through to seed */ }
-  DB = buildSeed();
-  save();
+    res = await fetch(url, { method, headers, body: body === undefined ? undefined : raw ? body : JSON.stringify(body) });
+  } catch (e) {
+    throw new Error('Cannot reach the server. Check that the server window is open on the host PC.');
+  }
+  if (!res.ok) {
+    let msg = res.status + ' ' + res.statusText;
+    try { msg = (await res.json()).error || msg; } catch (e) { /* not JSON */ }
+    throw new Error(msg);
+  }
+  return blob ? res.blob() : res.json();
 }
-function save() {
-  try { localStorage.setItem(KEY, JSON.stringify(DB)); return true; }
-  catch (e) { toast('Storage is full – remove some photos or documents', true); return false; }
+
+const stable = v => JSON.stringify(v, (k, x) => x && typeof x === 'object' && !Array.isArray(x)
+  ? Object.keys(x).sort().reduce((o, key) => { if (x[key] != null) o[key] = x[key]; return o; }, {}) : x);
+
+/* The nested DB object as flat database rows: { "entity|id": { e, id, row } } */
+function flatten(db) {
+  const out = {};
+  const put = (e, row) => { const { ver, ...r } = row; out[e + '|' + r.id] = { e, id: r.id, row: r }; };
+  Object.entries(db.settings).forEach(([id, value]) => put('settings', { id, value }));
+  db.itemTypes.forEach(t => put('itemTypes', t));
+  db.areas.forEach(a => {
+    const { inventory, photos, docs, issues, maintenance, inspections, surveys, ...base } = a;
+    put('areas', base);
+    inventory.forEach(x => put('inventory', { ...x, id: x.id || a.id + ':' + x.item, areaId: a.id }));
+    [['photos', photos], ['docs', docs], ['maintenance', maintenance], ['inspections', inspections], ['surveys', surveys || []]]
+      .forEach(([e, list]) => list.forEach(x => put(e, { ...x, areaId: a.id })));
+    issues.forEach(i => {
+      const { log, ...b } = i;
+      put('issues', { ...b, areaId: a.id });
+      (log || []).forEach((l, k) => put('issueLog', { ...l, id: l.id || i.id + ':' + k, issueId: i.id }));
+    });
+  });
+  db.history.forEach(h => put('history', h));
+  return out;
 }
+
+async function load() {
+  const s = await api('GET', '/api/state');
+  s.settings = { ...DEFAULT_SETTINGS, ...s.settings };
+  s.areas.forEach(a => { a.surveys = a.surveys || []; a.issues.forEach(i => (i.log = i.log || [])); });
+  const vers = {};
+  const walk = (e, x) => { if (x.ver) vers[e + '|' + x.id] = x.ver; };
+  (s.settingsVer ? Object.entries(s.settingsVer) : []).forEach(([id, ver]) => (vers['settings|' + id] = ver));
+  s.itemTypes.forEach(x => walk('itemTypes', x));
+  s.history.forEach(x => walk('history', x));
+  s.areas.forEach(a => {
+    walk('areas', a);
+    a.inventory.forEach(x => walk('inventory', x));
+    ['photos', 'docs', 'maintenance', 'inspections', 'surveys'].forEach(e => a[e].forEach(x => walk(e, x)));
+    a.issues.forEach(i => { walk('issues', i); i.log.forEach(l => walk('issueLog', l)); });
+  });
+  DB = s;
+  SNAP = {};
+  const flat = flatten(DB);
+  for (const k in flat) SNAP[k] = { s: stable(flat[k].row), ver: vers[k] };
+  // settings filled from defaults are not in the database yet
+  for (const k in SNAP) if (k.startsWith('settings|') && !vers[k]) delete SNAP[k];
+}
+
+/* Send every change made to DB since the last load. Returns true when saved. */
+async function save(label = 'Change', { force = false } = {}) {
+  const cur = flatten(DB), ops = [];
+  for (const k in cur) {
+    const s = stable(cur[k].row), old = SNAP[k];
+    if (!old || old.s !== s) ops.push({ e: cur[k].e, id: cur[k].id, op: 'put', row: cur[k].row, ver: old ? old.ver : undefined });
+  }
+  for (const k in SNAP) if (!cur[k]) { const [e, ...id] = k.split('|'); ops.push({ e, id: id.join('|'), op: 'del', ver: SNAP[k].ver }); }
+  if (!ops.length) return true;
+  try {
+    await api('POST', '/api/commit', { label, ops, force });
+    track('save', label, ops.length + ' change(s)');
+    await load();
+    return true;
+  } catch (err) {
+    track('save-failed', label, err.message);
+    closeModal();
+    try { await load(); } catch (e) { /* keep the screen */ }
+    rerender();
+    toast('Not saved: ' + err.message, true, 8000);
+    return false;
+  }
+}
+
+async function uploadFile(file, name) {
+  const r = await api('POST', '/api/upload?name=' + encodeURIComponent(name || file.name || 'file'), file, { raw: true });
+  return r.src;
+}
+/* Uploads the original image untouched plus a small preview for lists and cards. */
+async function uploadImage(file) {
+  const src = await uploadFile(file);
+  let thumb = '';
+  try { thumb = await uploadFile(await resizeImage(file, 800, true), 'thumb.jpg'); } catch (e) { /* browser can't decode it (e.g. HEIC) */ }
+  return { src, thumb };
+}
+
+/* ============================== Activity log ============================== */
+const LOGQ = [];
+const localIso = () => { const t = new Date(); return iso(t) + 'T' + [t.getHours(), t.getMinutes(), t.getSeconds()].map(pad).join(':'); };
+function track(type, action, target = '', detail = '') {
+  LOGQ.push({ ts: localIso(), user: me(), type, action: String(action || ''), target: String(target || '').slice(0, 200), page: location.hash || '#/dashboard', detail: String(detail || '') });
+  if (LOGQ.length >= 40) flushLog();
+}
+function flushLog(beacon) {
+  if (!LOGQ.length) return;
+  const events = LOGQ.splice(0);
+  const body = JSON.stringify({ events });
+  if (beacon && navigator.sendBeacon) { navigator.sendBeacon('/api/log', new Blob([body], { type: 'application/json' })); return; }
+  fetch('/api/log', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body })
+    .catch(() => { if (LOGQ.length < 2000) LOGQ.unshift(...events); });
+}
+setInterval(flushLog, 4000);
+addEventListener('pagehide', () => flushLog(true));
+addEventListener('error', e => track('js-error', e.message, (e.filename || '') + ':' + (e.lineno || ''), e.error && e.error.stack));
+addEventListener('unhandledrejection', e => track('js-error', String(e.reason && e.reason.message || e.reason), '', e.reason && e.reason.stack));
+document.addEventListener('click', e => {
+  const el = e.target.closest('button, a, [data-act], tr.click, label.btn');
+  if (!el) return;
+  const text = (el.textContent || el.title || el.getAttribute('aria-label') || '').trim().replace(/\s+/g, ' ').slice(0, 80);
+  track('click', el.dataset.act || el.getAttribute('href') || el.tagName.toLowerCase(), text);
+}, true);
 
 /* ============================== Helpers ============================== */
 const $ = (s, r = document) => r.querySelector(s);
@@ -45,7 +169,7 @@ const areaHistory = id => DB.history.filter(h => h.areaId === id).sort(byDateDes
 const lastUpdate = a => DB.history.reduce((m, h) => h.areaId === a.id && h.date > m ? h.date : m, a.startDate || '');
 const openIssues = a => a.issues.filter(i => i.status !== 'Closed');
 const mainPhoto = a => a.photos.find(p => p.main) || a.photos[0];
-const areaURL = id => location.href.split('#')[0] + '#/area/' + id;
+const areaURL = id => BASE_URL + '#/area/' + id;
 const setting = k => DB.settings[k];
 
 function setQty(a, item, value, condition) {
@@ -54,18 +178,42 @@ function setQty(a, item, value, condition) {
   e.qty = Math.max(0, value);
   if (condition) e.condition = condition;
 }
+let lastSeq = 0;
 function pushHistory(rec) {
-  DB.seq = (DB.seq || 1000) + 1;
-  DB.history.push({ id: 'h' + DB.seq, seq: DB.seq, ...rec });
+  // time-based so two PCs saving at the same moment never produce the same record id
+  const seq = lastSeq = Math.max(Date.now(), lastSeq + 1);
+  DB.history.push({ id: 'h' + seq.toString(36) + uid().slice(0, 3), seq, ...rec });
 }
 
-function toast(msg, error) {
+function toast(msg, error, ms = 2600) {
   const t = $('#toast');
   t.textContent = msg;
   t.className = 'show' + (error ? ' error' : '');
   clearTimeout(t._h);
-  t._h = setTimeout(() => (t.className = ''), 2600);
+  t._h = setTimeout(() => (t.className = ''), ms);
 }
+
+/* ============================== Satisfaction survey ============================== */
+const MONTHS_FULL = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+const monthName = m => { if (!m) return '-'; const [y, mm] = m.split('-'); return `${MONTHS_FULL[+mm - 1]} ${y}`; };
+const monthShort = m => { const [y, mm] = m.split('-'); return `${MON[+mm - 1]} ${y.slice(2)}`; };
+const satTarget = () => +setting('satisfactionTarget') || 80;
+const pct = v => v == null ? '-' : (Math.round(v * 10) / 10) + '%';
+const avg = list => list.length ? list.reduce((s, x) => s + x, 0) / list.length : null;
+/* One value per month for an area (average of the departments surveyed that month), oldest first. */
+function areaMonthly(a) {
+  const m = {};
+  (a.surveys || []).forEach(s => (m[s.month] = m[s.month] || []).push(+s.percentage));
+  return Object.keys(m).sort().map(month => ({ month, value: avg(m[month]), n: m[month].length }));
+}
+const latestSat = a => { const m = areaMonthly(a); return m.length ? m[m.length - 1] : null; };
+function satLevel(v) {
+  const t = satTarget();
+  return v == null ? '' : v >= t ? 'good' : v >= t - 15 ? 'warn' : 'bad';
+}
+const SAT_LABEL = { good: 'On target', warn: 'Below target', bad: 'Needs action' };
+const satBadge = v => v == null ? '<span class="muted">-</span>'
+  : `<span class="sat-pill ${satLevel(v)}" title="${SAT_LABEL[satLevel(v)]} (target ${satTarget()}%)">${pct(v)}</span>`;
 
 /* ============================== Icons ============================== */
 const IC = {
@@ -119,7 +267,13 @@ const IC = {
   clipboard: '<rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="m9 14 2 2 4-4"/>',
   area: '<rect x="3" y="3" width="18" height="18" rx="1"/><path d="M3 9h4M3 15h4M9 3v4M15 3v4"/>',
   star: '<path d="m12 3 2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z"/>',
-  copy: '<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/>'
+  copy: '<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/>',
+  smile: '<circle cx="12" cy="12" r="9"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><path d="M9 9h.01M15 9h.01"/>',
+  activity: '<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',
+  database: '<ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/>',
+  restore: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/>',
+  expand: '<path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>',
+  trend: '<path d="m3 17 6-6 4 4 8-8"/><path d="M14 7h7v7"/>'
 };
 const ITEM_ICONS = ['chair', 'table', 'tv', 'dispenser', 'rug', 'fridge', 'microwave', 'coffee', 'plant', 'sofa', 'box'];
 const ic = (n, cls = '') => `<svg class="ic ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${IC[n] || IC.box}</svg>`;
@@ -216,9 +370,13 @@ function roomSVG(seed, variant = 'seating') {
   }
   return s + '</svg>';
 }
-const photoHTML = p => p && p.src
-  ? `<img src="${p.src}" alt="${esc(p.caption)}" loading="lazy">`
-  : roomSVG(p ? (p.seed || p.id) : 'x', p ? p.variant : 'seating');
+/* Real photos are shown complete inside their frame (object-fit: contain); a blurred copy of
+   the same photo fills the empty edges. full=true uses the original file instead of the preview. */
+function photoHTML(p, full) {
+  if (!p || !p.src) return roomSVG(p ? (p.seed || p.id) : 'x', p ? p.variant : 'seating');
+  const u = esc(full ? p.src : (p.thumb || p.src));
+  return `<img class="bg" src="${u}" alt="" aria-hidden="true" loading="lazy"><img class="fit" src="${u}" alt="${esc(p.caption)}" loading="lazy">`;
+}
 
 /* ============================== QR ============================== */
 function qrSVG(text) {
@@ -239,11 +397,13 @@ function download(name, content, type) {
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(u), 1500);
 }
-function exportCSV(name, head, rows) {
-  const cell = v => { v = v == null ? '' : String(v); return /[",\n\r]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
-  const text = [head, ...rows].map(r => r.map(cell).join(',')).join('\r\n');
-  download(name + '_' + today() + '.csv', '﻿' + text, 'text/csv;charset=utf-8');
-  toast('Exported ' + rows.length + ' rows');
+async function exportXLSX(name, head, rows, sheet) {
+  try {
+    const b = await api('POST', '/api/xlsx', { filename: name + '_' + today(), sheets: [{ name: sheet || name.replace(/_/g, ' '), head, rows }] }, { blob: true });
+    download(name + '_' + today() + '.xlsx', b);
+    track('export', name, rows.length + ' rows');
+    toast('Exported ' + rows.length + ' rows');
+  } catch (e) { toast('Export failed: ' + e.message, true); }
 }
 function printHTML(html) {
   const p = $('#print');
@@ -255,7 +415,7 @@ function printHTML(html) {
 }
 function printTable(title, head, rows) {
   printHTML(`<div class="print-report"><div class="logo">${esc(setting('logoText'))}</div>
-    <h2>${esc(title)}</h2><div>${esc(setting('factory'))} · Printed ${fmt(today())} by ${esc(setting('userName'))}</div>
+    <h2>${esc(title)}</h2><div>${esc(setting('factory'))} · Printed ${fmt(today())} by ${esc(me())}</div>
     <table><thead><tr>${head.map(h => `<th>${esc(h)}</th>`).join('')}</tr></thead>
     <tbody>${rows.map(r => `<tr>${r.map(c => `<td>${esc(c)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`);
 }
@@ -274,7 +434,8 @@ function renderShell(route) {
   $('#factoryName').textContent = s.factory;
   const open = DB.areas.reduce((n, a) => n + openIssues(a).length, 0);
   $('#bell').innerHTML = ic('bell') + (open ? `<span class="cnt">${open}</span>` : '');
-  $('#user').innerHTML = `<div class="avatar">${esc(initials(s.userName))}</div><div class="who"><b>${esc(s.userName)}</b><small>${esc(s.userRole)}</small></div>`;
+  $('#user').innerHTML = `<div class="avatar">${esc(initials(me()))}</div><div class="who"><b>${esc(me())}</b><small>Change user</small></div>`;
+  $('#user').dataset.act = 'userModal';
   $('.menu-btn').innerHTML = ic('menu');
 
   const top = route[0];
@@ -290,6 +451,7 @@ function renderShell(route) {
       ${link('#/transactions', 'swap', 'Transactions', top === 'transactions')}
       ${link('#/maintenance', 'wrench', 'Maintenance', top === 'maintenance')}
       ${link('#/reports', 'report', 'Reports', top === 'reports')}
+      ${link('#/logs', 'activity', 'Activity Log', top === 'logs')}
       ${link('#/settings', 'settings', 'Settings', top === 'settings')}
     </div>
     <div class="side-foot"><b>Better Break Areas</b>for a better workplace.</div>`;
@@ -311,8 +473,12 @@ function render() {
   else if (top === 'maintenance') v.innerHTML = viewMaintenance();
   else if (top === 'reports') v.innerHTML = viewReports();
   else if (top === 'settings') v.innerHTML = viewSettings();
+  else if (top === 'logs') v.innerHTML = viewLogs();
   else v.innerHTML = viewDashboard();
   $$('[data-results]', v).forEach(el => RESULTS[el.dataset.results](el));
+  $$('[data-async]', v).forEach(el => ASYNC[el.dataset.async](el).catch(err => {
+    el.innerHTML = `<p class="empty">Could not load: ${esc(err.message)}</p>`;
+  }));
 }
 function rerender() { const y = scrollY; render(); scrollTo(0, y); }
 
@@ -342,12 +508,68 @@ function hbars(data) {
   const max = Math.max(1, ...data.map(d => d.value));
   return data.map(d => `<div class="hbar"><span>${esc(d.label)}</span><div class="t"><div class="f" style="width:${d.value / max * 100}%"></div></div><b>${d.value}</b></div>`).join('');
 }
+/* Monthly satisfaction line (0–100 %) with a dashed target line. points: [{month, value, n}] oldest first. */
+function satLine(points, { h = 230, compact = false } = {}) {
+  if (!points.length) return '<p class="empty">No survey results yet.</p>';
+  const W = 640, H = h, L = compact ? 8 : 38, R = compact ? 8 : 18, T = 14, B = compact ? 10 : 30;
+  const t = satTarget();
+  const lo = Math.max(0, Math.floor((Math.min(t, ...points.map(p => p.value)) - 10) / 10) * 10);
+  const x = i => points.length === 1 ? (L + W - R) / 2 : L + i * (W - L - R) / (points.length - 1);
+  const y = v => T + (100 - v) / (100 - lo) * (H - T - B);
+  let s = `<svg class="sat-line" viewBox="0 0 ${W} ${H}" role="img" aria-label="Monthly satisfaction">`;
+  if (!compact) for (let v = lo; v <= 100; v += 10) {
+    s += `<line class="grid" x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}"/><text class="ax" x="${L - 6}" y="${y(v) + 4}" text-anchor="end">${v}%</text>`;
+  }
+  s += `<line class="target" x1="${L}" x2="${W - R}" y1="${y(t)}" y2="${y(t)}"/>`;
+  if (!compact) s += `<text class="target-l" x="${W - R}" y="${y(t) - 5}" text-anchor="end">Target ${t}%</text>`;
+  const d = points.map((p, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)} ${y(p.value).toFixed(1)}`).join('');
+  if (points.length > 1) s += `<path class="fill" d="${d}L${x(points.length - 1)} ${H - B}L${x(0)} ${H - B}Z"/><path class="ln" d="${d}"/>`;
+  const step = points.length > 1 ? (W - L - R) / (points.length - 1) : W;
+  points.forEach((p, i) => {
+    const tip = `${monthName(p.month)}: ${pct(p.value)}` + (p.n > 1 ? ` (average of ${p.n})` : '') + ` – ${SAT_LABEL[satLevel(p.value)]}`;
+    s += `<g class="pt" data-tip="${esc(tip)}"><rect class="hit" x="${x(i) - step / 2}" y="0" width="${step}" height="${H}"/>
+      <line class="guide" x1="${x(i)}" x2="${x(i)}" y1="${T}" y2="${H - B}"/><circle cx="${x(i)}" cy="${y(p.value)}" r="${compact ? 3 : 4.5}"/></g>`;
+    if (!compact && (points.length <= 12 || i % 2 === points.length % 2)) s += `<text class="ax" x="${x(i)}" y="${H - 10}" text-anchor="middle">${monthShort(p.month)}</text>`;
+  });
+  const lp = points[points.length - 1];
+  if (!compact) s += `<text class="last-l" x="${x(points.length - 1) - 8}" y="${y(lp.value) - 10}" text-anchor="end">${pct(lp.value)}</text>`;
+  return s + '</svg>';
+}
 
 /* ============================== Dashboard ============================== */
-const F = { dash: { q: '', status: '' }, areas: { q: '', loc: '', status: '', active: '' }, tx: { q: '', area: '', item: '', action: '', from: '', to: '' }, hist: { item: '', action: '' }, photoTab: 'All' };
+const F = {
+  dash: { q: '', status: '' }, areas: { q: '', loc: '', status: '', active: '' }, tx: { q: '', area: '', item: '', action: '', from: '', to: '' },
+  hist: { item: '', action: '' }, photoTab: 'All', sat: { loc: '', month: '' },
+  log: { tab: 'audit', q: '', user: '', type: '', from: '', to: '' }
+};
+
+function viewWelcome() {
+  return `<div class="card welcome">
+    <div class="kic">${ic('database')}</div>
+    <h2>Welcome to the ${esc(setting('systemName'))}</h2>
+    <p>The database is empty. Start by adding your first break area, bring over the data from the old browser version, or load demo data to try the system.</p>
+    <div class="filters" style="justify-content:center">
+      <a class="btn primary" href="#/areas/new">${ic('plus')}Add First Break Area</a>
+      <label class="btn">${ic('upload')}Import Old Version Backup (JSON)<input type="file" accept=".json,application/json" data-act-change="importBackup" hidden></label>
+      <button class="btn" data-act="loadDemo">${ic('database')}Load Sample Data</button>
+    </div>
+    <p class="hint">To move data from the old version: open the old index.html, go to Settings &rarr; Download Backup (JSON), then import that file here.</p>
+  </div>`;
+}
+
+function viewSatisfactionCard() {
+  return `<div class="card mb">
+    <div class="card-h">${ic('smile')}<h3>Break Area Satisfaction</h3><span class="hint">Monthly survey results from the departments using each area</span><span class="sp"></span>
+      <div class="filters"><select data-f="sat.loc" data-res="sat"><option value="">All locations</option>${options(setting('locations'), F.sat.loc)}</select>
+      <button class="btn sm" data-act="exportSurveys">${ic('download')}Export</button></div>
+    </div>
+    <div data-results="sat"></div>
+  </div>`;
+}
 
 function viewDashboard() {
   const A = DB.areas;
+  if (!A.length) return viewWelcome();
   const tot = id => A.reduce((s, a) => s + qty(a, id), 0);
   const kpis = [['building', 'Total Break Areas', A.length], ['chair', 'Total Chairs', tot('chairs')], ['table', 'Total Tables', tot('tables')], ['tv', 'TV Screens', tot('tv')], ['dispenser', 'Water Dispensers', tot('water')]];
   const statusData = STATUSES.map(s => ({ label: s, value: A.filter(a => a.status === s).length, color: STATUS_COLOR[s] }));
@@ -394,7 +616,9 @@ function viewDashboard() {
       <div class="card-h"><h3>Recent Transactions</h3><span class="sp"></span><a class="link" href="#/transactions">View All</a></div>
       <ul class="tx-list">${tx.map(txRow).join('') || '<li class="muted">No transactions yet</li>'}</ul>
     </div>
-  </div>`;
+  </div>
+
+  <div style="margin-top:14px">${viewSatisfactionCard()}</div>`;
 }
 function txRow(h) {
   const [i, bg, fg] = TX_STYLE[h.action] || TX_STYLE['Condition Update'];
@@ -411,6 +635,38 @@ const RESULTS = {
       <td class="num">${qty(a, 'chairs')}</td><td class="num">${qty(a, 'tables')}</td><td class="num">${qty(a, 'tv')}</td><td class="num">${qty(a, 'water')}</td>
       <td>${badge(a.status)}</td><td>${fmt(lastUpdate(a))}</td></tr>`).join('') || `<tr><td colspan="9" class="empty">No break areas match your search</td></tr>`;
   },
+  sat(el) {
+    const A = DB.areas.filter(a => !F.sat.loc || a.location === F.sat.loc);
+    const byMonth = {};
+    A.forEach(a => areaMonthly(a).forEach(m => (byMonth[m.month] = byMonth[m.month] || []).push(m.value)));
+    const all = Object.keys(byMonth).sort();
+    if (!all.length) {
+      el.innerHTML = `<p class="empty">No survey results yet. Open a break area and use <b>Satisfaction Survey &rarr; Add Result</b> to enter the monthly percentage.</p>`;
+      return;
+    }
+    const sel = byMonth[F.sat.month] ? F.sat.month : all[all.length - 1];
+    const points = all.slice(-12).map(m => ({ month: m, value: avg(byMonth[m]), n: byMonth[m].length }));
+    const cur = avg(byMonth[sel]), prevM = all[all.indexOf(sel) - 1], prev = prevM ? avg(byMonth[prevM]) : null;
+    const rank = A.map(a => { const m = areaMonthly(a).find(x => x.month === sel); return m && { a, v: m.value }; }).filter(Boolean).sort((x, y) => y.v - x.v);
+    const below = rank.filter(r => r.v < satTarget()).length;
+    const diff = prev == null ? null : Math.round((cur - prev) * 10) / 10;
+    const tiles = [
+      ['smile', `Average – ${monthName(sel)}`, pct(cur), `<span class="sat-pill ${satLevel(cur)}">${SAT_LABEL[satLevel(cur)]}</span>`],
+      ['trend', 'Change vs previous month', diff == null ? '-' : (diff > 0 ? '+' : '') + diff + ' pts', prevM ? `${monthName(prevM)}: ${pct(prev)}` : 'No earlier month'],
+      ['building', 'Areas surveyed', `${rank.length} / ${A.length}`, A.length - rank.length ? `${A.length - rank.length} missing this month` : 'All areas surveyed'],
+      ['alert', `Below target (${satTarget()}%)`, below, below ? 'Need follow-up' : 'All on target']
+    ];
+    el.innerHTML = `<div class="sat-tiles">${tiles.map(([i, l, v, sub]) => `<div class="sat-tile"><div class="kic">${ic(i)}</div><div><div class="lbl">${l}</div><div class="val">${v}</div><div class="hint">${sub}</div></div></div>`).join('')}</div>
+      <div class="sat-charts">
+        <div><div class="sub-h">Average satisfaction per month <span class="hint">(last ${points.length} month${points.length > 1 ? 's' : ''})</span></div>${satLine(points)}</div>
+        <div><div class="sub-h">By break area
+          <select data-f="sat.month" data-res="sat" class="sm">${[...all].reverse().map(m => `<option value="${m}" ${m === sel ? 'selected' : ''}>${monthName(m)}</option>`).join('')}</select></div>
+          <div class="sat-rank">${rank.map(r => `<div class="sat-row click" data-act="go" data-href="#/area/${r.a.id}" data-tip="${esc(r.a.name)} – ${esc(monthName(sel))}: ${pct(r.v)} (${SAT_LABEL[satLevel(r.v)]})">
+            <span class="n">${esc(r.a.name)}</span><div class="t"><div class="f ${satLevel(r.v)}" style="width:${r.v}%"></div><i class="tg" style="left:${satTarget()}%"></i></div><b>${pct(r.v)}</b></div>`).join('')}</div>
+          <div class="sat-legend"><span><i class="good"></i>On target</span><span><i class="warn"></i>Below target</span><span><i class="bad"></i>Needs action (&lt; ${satTarget() - 15}%)</span><span><i class="tgt"></i>Target</span></div>
+        </div>
+      </div>`;
+  },
   areas(el) {
     const rows = filteredAreas();
     el.innerHTML = rows.map(a => {
@@ -418,9 +674,9 @@ const RESULTS = {
       return `<tr class="click" data-act="go" data-href="#/area/${a.id}">
         <td><span class="thumb-s ph">${photoHTML(mainPhoto(a))}</span></td><td><b>${esc(a.name)}</b></td><td>${esc(a.location)}</td><td>${esc(a.building)} / ${esc(a.floor)}</td>
         <td class="num">${a.capacity}</td><td class="num">${qty(a, 'chairs')}</td><td class="num">${qty(a, 'tables')}</td><td class="num">${qty(a, 'tv')}</td><td class="num">${qty(a, 'water')}</td>
-        <td>${esc(a.responsible)}</td><td>${badge(a.status)}</td><td class="${nd < 0 ? 'overdue' : ''}">${fmt(a.nextInspection)}</td>
+        <td>${esc(a.responsible)}</td><td>${badge(a.status)}</td><td class="num">${satBadge((latestSat(a) || {}).value)}</td><td class="${nd < 0 ? 'overdue' : ''}">${fmt(a.nextInspection)}</td>
         <td class="num">${openIssues(a).length || '-'}</td><td>${fmt(lastUpdate(a))}</td></tr>`;
-    }).join('') || `<tr><td colspan="14" class="empty">No break areas match the filters</td></tr>`;
+    }).join('') || `<tr><td colspan="15" class="empty">No break areas match the filters</td></tr>`;
     const c = $('#areaCount'); if (c) c.textContent = rows.length + ' of ' + DB.areas.length;
   },
   tx(el) {
@@ -451,10 +707,11 @@ function filteredAreas() {
 }
 function areaRows(list) {
   return list.map(a => [a.name, a.location, a.building, a.floor, a.startDate, a.size, a.capacity, a.responsible, a.status, a.active === false ? 'Inactive' : 'Active',
-    ...DB.itemTypes.map(t => qty(a, t.id)), a.lastInspection, a.nextInspection, openIssues(a).length, lastUpdate(a), areaURL(a.id)]);
+    ...DB.itemTypes.map(t => qty(a, t.id)), a.lastInspection, a.nextInspection, openIssues(a).length,
+    (latestSat(a) || {}).month || '', latestSat(a) ? Math.round(latestSat(a).value * 10) / 10 : '', lastUpdate(a), areaURL(a.id)]);
 }
 const areaHead = () => ['Break Area', 'Location', 'Building', 'Floor', 'Start Date', 'Area Size (m2)', 'Capacity', 'Responsible', 'Status', 'Operational',
-  ...DB.itemTypes.map(t => t.name), 'Last Inspection', 'Next Inspection', 'Open Issues', 'Last Update', 'Profile Link'];
+  ...DB.itemTypes.map(t => t.name), 'Last Inspection', 'Next Inspection', 'Open Issues', 'Last Survey Month', 'Last Satisfaction %', 'Last Update', 'Profile Link'];
 
 function viewAreas() {
   const f = F.areas;
@@ -472,7 +729,7 @@ function viewAreas() {
       <select data-f="areas.status" data-res="areas"><option value="">All statuses</option>${opt(STATUSES, f.status)}</select>
       <select data-f="areas.active" data-res="areas"><option value="">Active &amp; inactive</option>${opt(['Active', 'Inactive'], f.active)}</select>
     </div>
-    <div class="tbl-wrap"><table class="tbl"><thead><tr><th></th><th>Break Area</th><th>Location</th><th>Building / Floor</th><th class="num">Capacity</th><th class="num">Chairs</th><th class="num">Tables</th><th class="num">TV</th><th class="num">Water</th><th>Responsible</th><th>Status</th><th>Next Inspection</th><th class="num">Open Issues</th><th>Last Update</th></tr></thead>
+    <div class="tbl-wrap"><table class="tbl"><thead><tr><th></th><th>Break Area</th><th>Location</th><th>Building / Floor</th><th class="num">Capacity</th><th class="num">Chairs</th><th class="num">Tables</th><th class="num">TV</th><th class="num">Water</th><th>Responsible</th><th>Status</th><th class="num">Satisfaction</th><th>Next Inspection</th><th class="num">Open Issues</th><th>Last Update</th></tr></thead>
     <tbody data-results="areas"></tbody></table></div>
   </div>`;
 }
@@ -489,7 +746,7 @@ function areaFields(a = {}) {
     ${inp('startDate', 'Start Date', a.startDate || today(), 'date')}
     ${inp('size', 'Area Size (m²)', a.size, 'number')}
     ${inp('capacity', 'Capacity (persons)', a.capacity, 'number')}
-    ${inp('responsible', 'Responsible Person', a.responsible ?? setting('userName'))}
+    ${inp('responsible', 'Responsible Person', a.responsible ?? me())}
     ${sel('status', 'Current Status', STATUSES, a.status || 'Good')}
     ${sel('active', 'Operational', ['Active', 'Inactive'], a.active === false ? 'Inactive' : 'Active')}
     <label class="full">Description<textarea name="description">${esc(a.description || '')}</textarea></label>
@@ -526,18 +783,23 @@ async function submitNewArea(form) {
   if (!d.name.trim()) return toast('Name is required', true);
   let n = DB.areas.length + 1, id;
   do { id = 'ba' + pad(n++); } while (area(id));
-  const a = { id, inventory: [], photos: [], docs: [], issues: [], maintenance: [], inspections: [], lastInspection: '', nextInspection: addDays(d.startDate || today(), setting('inspectionDays')), inspectedBy: '' };
+  const a = { id, inventory: [], photos: [], docs: [], issues: [], maintenance: [], inspections: [], surveys: [], lastInspection: '', nextInspection: addDays(d.startDate || today(), setting('inspectionDays')), inspectedBy: '' };
   applyAreaFields(a, d);
   DB.itemTypes.forEach(t => { const q = +d['qty_' + t.id] || 0; if (q > 0) a.inventory.push({ item: t.id, qty: q, condition: d['cond_' + t.id] }); });
-  for (const f of form.photos.files) {
-    if (!f.type.startsWith('image/')) continue;
-    a.photos.push({ id: uid(), caption: f.name.replace(/\.[^.]+$/, ''), category: 'Current', date: today(), src: await resizeImage(f), main: !a.photos.length });
-  }
+  const btn = $('button.primary', form);
+  btn.disabled = true;
+  try {
+    for (const f of form.photos.files) {
+      if (!f.type.startsWith('image/')) continue;
+      a.photos.push({ id: uid(), caption: f.name.replace(/\.[^.]+$/, ''), category: 'Current', date: today(), ...await uploadImage(f), main: !a.photos.length });
+    }
+  } catch (e) { btn.disabled = false; return toast('Photo upload failed: ' + e.message, true); }
   if (!a.photos.length) a.photos.push({ id: uid(), caption: 'Seating Area', variant: 'seating', seed: id + 'seating', category: 'Current', date: today(), main: true });
   DB.areas.push(a);
   const summary = a.inventory.map(i => `${i.qty} ${itemName(i.item)}`).join(', ');
-  pushHistory({ areaId: id, date: a.startDate, item: 'Initial Setup', action: 'Created', prev: null, next: null, details: 'Break area created' + (summary ? ' with ' + summary : ''), by: setting('userName') });
-  if (save()) { toast(a.name + ' created'); location.hash = '#/area/' + id; }
+  pushHistory({ areaId: id, date: a.startDate, item: 'Initial Setup', action: 'Created', prev: null, next: null, details: 'Break area created' + (summary ? ' with ' + summary : ''), by: me() });
+  if (await save('Create break area – ' + a.name)) { toast(a.name + ' created'); location.hash = '#/area/' + id; }
+  else btn.disabled = false;
 }
 
 /* ============================== Area detail ============================== */
@@ -629,16 +891,20 @@ function viewArea(a) {
     </div>
   </div>
 
-  <div class="card mb" id="history">
+  <div class="hist-row">
+  ${viewSurveyBox(a)}
+  <div class="card" id="history">
     <div class="card-h"><h3>Update History</h3><span class="sp"></span>
       <div class="filters">
         <select data-f="hist.item" data-res="hist"><option value="">All items</option>${histItems.map(x => `<option ${f.item === x ? 'selected' : ''}>${esc(x)}</option>`).join('')}</select>
         <select data-f="hist.action" data-res="hist"><option value="">All actions</option>${['Created', ...ACTIONS].map(x => `<option ${f.action === x ? 'selected' : ''}>${x}</option>`).join('')}</select>
         <button class="btn sm" data-act="exportHist" data-id="${a.id}">${ic('download')}Export</button>
+        <button class="btn sm" data-act="areaLog" data-id="${a.id}" title="Every change made to this break area, by whom and when">${ic('activity')}Change Log</button>
       </div>
     </div>
     <div class="tbl-wrap"><table class="tbl"><thead><tr><th>#</th><th>Date</th><th>Item</th><th>Action</th><th class="num">Previous Qty</th><th class="num">New Qty</th><th>Details</th><th>Updated By</th></tr></thead>
     <tbody data-results="hist" data-area="${a.id}"></tbody></table></div>
+  </div>
   </div>
 
   <div class="grid2">
@@ -648,7 +914,8 @@ function viewArea(a) {
       ${tasks.map(t => `<tr><td>${fmt(t.date)}</td><td>${t.kind === 'Issue' ? badge(t.priority) : '<span class="badge b-purple">Maintenance</span>'}</td>
         <td class="wrap">${esc(t.title)}${t.item ? ` <span class="muted">· ${esc(itemShort(t.item))}</span>` : ''}</td><td>${badge(t.status)}</td>
         <td>${t.kind === 'Issue' ? `<button class="btn sm" data-act="issueView" data-id="${a.id}" data-iid="${t.id}">Follow up</button>`
-          : t.status !== 'Done' ? `<button class="btn sm" data-act="maintDone" data-id="${a.id}" data-mid="${t.id}">Complete</button>` : ''}</td></tr>`).join('')
+          : `<span class="nowrap">${t.status !== 'Done' ? `<button class="btn sm" data-act="maintDone" data-id="${a.id}" data-mid="${t.id}">Complete</button>` : ''}
+            <button class="icon-btn" title="Delete this maintenance" data-act="maintDelete" data-id="${a.id}" data-mid="${t.id}">${ic('trash')}</button></span>`}</td></tr>`).join('')
         || '<tr><td colspan="5" class="empty">No issues or maintenance recorded</td></tr>'}
       </tbody></table></div>
     </div>
@@ -661,18 +928,73 @@ function viewArea(a) {
     </div>
   </div>`;
 }
+function viewSurveyBox(a) {
+  const monthly = areaMonthly(a);
+  const last = monthly[monthly.length - 1], prev = monthly[monthly.length - 2];
+  const diff = last && prev ? Math.round((last.value - prev.value) * 10) / 10 : null;
+  const list = [...a.surveys].sort((x, y) => y.month.localeCompare(x.month) || (x.department || '').localeCompare(y.department || ''));
+  return `<div class="card survey-box">
+    <div class="card-h">${ic('smile')}<h3>Satisfaction Survey</h3><span class="sp"></span>
+      <button class="btn sm primary" data-act="surveyModal" data-id="${a.id}">${ic('plus')}Add Result</button></div>
+    ${last ? `<div class="sv-sum">
+        <div><small>Latest – ${esc(monthName(last.month))}</small><b>${pct(last.value)}</b>
+          <span class="sat-pill ${satLevel(last.value)}">${SAT_LABEL[satLevel(last.value)]}</span></div>
+        <div class="delta ${diff == null ? '' : diff >= 0 ? 'up' : 'down'}">${diff == null ? '' : (diff >= 0 ? '▲ +' : '▼ ') + diff + ' pts'}<small>${prev ? 'vs ' + esc(monthShort(prev.month)) : ''}</small></div>
+      </div>
+      ${monthly.length > 1 ? `<div class="sv-spark">${satLine(monthly.slice(-12), { h: 90, compact: true })}</div>` : ''}` : ''}
+    <ul class="sv-list">${list.map(s => `<li>
+        <div class="m"><b>${esc(monthName(s.month))}</b>${s.department ? `<small>${esc(s.department)}</small>` : ''}</div>
+        <div class="t"><div class="f ${satLevel(+s.percentage)}" style="width:${+s.percentage}%"></div></div>
+        <b class="p">${pct(+s.percentage)}</b>
+        <button class="icon-btn" title="Edit" data-act="surveyModal" data-id="${a.id}" data-sid="${s.id}">${ic('edit')}</button>
+      </li>`).join('') || '<li class="empty">No survey results yet.<br>Add the monthly satisfaction percentage here.</li>'}</ul>
+    <p class="hint">Target: ${satTarget()}% (change in Settings)</p>
+  </div>`;
+}
+function surveyModal(a, sid) {
+  const s = sid ? a.surveys.find(x => x.id === sid) : null;
+  const depts = [...new Set(DB.areas.flatMap(x => x.surveys.map(y => y.department)).filter(Boolean))];
+  const thisMonth = today().slice(0, 7);
+  modal(`${s ? 'Edit' : 'Add'} Satisfaction Result – ${esc(a.name)}`, `<div class="form-grid">
+    <label>Month *<input type="month" name="month" required value="${esc(s ? s.month : thisMonth)}" max="${thisMonth}"></label>
+    <label>Satisfaction % *<input type="number" name="percentage" required min="0" max="100" step="0.1" value="${s ? s.percentage : ''}" placeholder="e.g. 85"></label>
+    <label>Department <span class="hint">(optional)</span><input name="department" list="deptList" value="${esc(s ? s.department || '' : '')}" placeholder="e.g. Production – Line 2">
+      <datalist id="deptList">${depts.map(d => `<option value="${esc(d)}">`).join('')}</datalist></label>
+    <label>Respondents <span class="hint">(optional)</span><input type="number" name="respondents" min="0" value="${s && s.respondents != null ? s.respondents : ''}"></label>
+    <label class="full">Notes<textarea name="notes" placeholder="Main comments from the survey...">${esc(s ? s.notes || '' : '')}</textarea></label>
+    <p class="full hint">One result per month per department. If several departments share this area, add one line for each; the area's monthly value is their average.</p>
+  </div>`, {
+    submit: s ? 'Save Changes' : 'Add Result',
+    extra: s ? `<button type="button" class="btn danger" data-act="surveyDelete" data-id="${a.id}" data-sid="${s.id}">${ic('trash')}Delete</button>` : '',
+    async onSubmit(d) {
+      const p = +d.percentage;
+      if (!/^\d{4}-\d{2}$/.test(d.month)) { toast('Choose the month', true); return false; }
+      if (d.percentage === '' || !(p >= 0 && p <= 100)) { toast('Percentage must be between 0 and 100', true); return false; }
+      const dept = d.department.trim();
+      const dup = a.surveys.find(x => x !== s && x.month === d.month && (x.department || '').toLowerCase() === dept.toLowerCase());
+      if (dup) { toast(`${monthName(d.month)}${dept ? ' / ' + dept : ''} already has a result (${pct(+dup.percentage)}). Edit that one instead.`, true, 5000); return false; }
+      const row = { month: d.month, percentage: p, department: dept, respondents: d.respondents === '' ? null : +d.respondents, notes: d.notes.trim(), by: me() };
+      if (s) Object.assign(s, row); else a.surveys.push({ id: uid(), ...row });
+      if (!(await save(`${s ? 'Edit' : 'Add'} satisfaction ${monthName(d.month)} ${pct(p)} – ${a.name}`))) return false;
+      toast('Satisfaction result saved');
+    }
+  });
+}
+
 function filteredHist(a) {
   return areaHistory(a.id).filter(h => (!F.hist.item || histItem(h) === F.hist.item) && (!F.hist.action || h.action === F.hist.action));
 }
 
 /* ============================== Modals ============================== */
-function modal(title, body, { submit = 'Save', onSubmit, wide = false, extra = '' } = {}) {
+function modal(title, body, { submit = 'Save', onSubmit, wide = false, extra = '', cls = '', locked = false } = {}) {
   const m = $('#modal');
-  m.innerHTML = `<div class="modal-back" data-act="closeModal"></div>
-    <form class="modal ${wide ? 'wide' : ''}" novalidate>
-      <div class="modal-h"><h3>${title}</h3><button type="button" class="icon-btn" data-act="closeModal" aria-label="Close">${ic('x')}</button></div>
+  track('open', 'dialog', title.replace(/<[^>]+>/g, ''));
+  m.dataset.locked = locked ? '1' : '';
+  m.innerHTML = `<div class="modal-back" ${locked ? '' : 'data-act="closeModal"'}></div>
+    <form class="modal ${wide ? 'wide' : ''} ${cls}" novalidate>
+      <div class="modal-h"><h3>${title}</h3>${locked ? '' : `<button type="button" class="icon-btn" data-act="closeModal" aria-label="Close">${ic('x')}</button>`}</div>
       <div class="modal-b">${body}</div>
-      <div class="modal-f">${extra}<span class="sp"></span><button type="button" class="btn" data-act="closeModal">${onSubmit ? 'Cancel' : 'Close'}</button>${onSubmit ? `<button class="btn primary">${submit}</button>` : ''}</div>
+      <div class="modal-f">${extra}<span class="sp"></span>${locked ? '' : `<button type="button" class="btn" data-act="closeModal">${onSubmit ? 'Cancel' : 'Close'}</button>`}${onSubmit ? `<button class="btn primary">${submit}</button>` : ''}</div>
     </form>`;
   m.classList.add('open');
   const form = $('form', m);
@@ -685,13 +1007,16 @@ function modal(title, body, { submit = 'Save', onSubmit, wide = false, extra = '
     try {
       const ok = await onSubmit(Object.fromEntries(new FormData(form)), form);
       if (ok !== false) { closeModal(); rerender(); }
+    } catch (err) {
+      track('js-error', 'dialog submit', title, err.stack || err.message);
+      toast('Error: ' + err.message, true, 6000);
     } finally { btn.disabled = false; }
   };
   const first = $('input:not([type=hidden]),select,textarea', form);
   if (first && matchMedia('(min-width: 821px)').matches) first.focus();
   return form;
 }
-function closeModal() { const m = $('#modal'); m.classList.remove('open'); m.innerHTML = ''; }
+function closeModal() { const m = $('#modal'); m.classList.remove('open'); m.innerHTML = ''; m.dataset.locked = ''; }
 
 const options = (list, v) => list.map(x => Array.isArray(x)
   ? `<option value="${esc(x[0])}" ${x[0] === v ? 'selected' : ''}>${esc(x[1])}</option>`
@@ -709,12 +1034,13 @@ function invModal(a, presetItem) {
     <label>Condition after update<select name="condition">${options(CONDITIONS, e ? e.condition : 'Good')}</select></label>
     <label>Date<input name="date" type="date" value="${today()}" required></label>
     <label class="full hidden" data-show="transfer">Transfer to<select name="target">${options(DB.areas.filter(x => x.id !== a.id).map(x => [x.id, x.name + ' – ' + x.location]))}</select></label>
-    <label>Updated By<input name="by" value="${esc(setting('userName'))}" required></label>
+    <label>Updated By<input name="by" value="${esc(me())}" required></label>
     <label class="full">Details / Remarks<textarea name="details" placeholder="e.g. Added 10 new chairs from supplier X"></textarea></label>
   </div>`;
   const form = modal(`Update Inventory – ${esc(a.name)}`, body, {
     submit: 'Save Update',
-    onSubmit(d) {
+    extra: `<button type="button" class="btn danger" data-act="invDelete" data-id="${a.id}" title="Remove the selected item from this break area's inventory">${ic('trash')}Delete Item</button>`,
+    async onSubmit(d) {
       const prev = qty(a, d.item), n = Math.floor(+d.qty || 0);
       const moves = ['Added', 'Removed', 'Transferred'].includes(d.action);
       if (moves && n <= 0) { toast('Enter a quantity greater than 0', true); return false; }
@@ -731,7 +1057,8 @@ function invModal(a, presetItem) {
       }
       setQty(a, d.item, next, d.condition);
       pushHistory({ areaId: a.id, date: d.date, item: d.item, action: d.action, prev, next, details: details || txTitle({ action: d.action, item: d.item, prev, next }), by: d.by });
-      if (save()) toast('Inventory updated');
+      if (!(await save(`${d.action} ${itemName(d.item)} – ${a.name}`))) return false;
+      toast('Inventory updated');
     }
   });
   const sync = () => {
@@ -754,15 +1081,16 @@ function issueModal(a) {
     <label>Related Item<select name="item"><option value="">General / Area</option>${itemOptions('')}</select></label>
     <label>Priority<select name="priority">${options(PRIORITIES, 'Medium')}</select></label>
     <label>Date<input type="date" name="date" value="${today()}"></label>
-    <label>Reported By<input name="by" value="${esc(setting('userName'))}" required></label>
+    <label>Reported By<input name="by" value="${esc(me())}" required></label>
     <label class="full">Details<textarea name="details"></textarea></label>
     <label class="full check"><input type="checkbox" name="flag" ${a.status === 'Good' ? 'checked' : ''}> Set break area status to "Need Maintenance"</label>
   </div>`, {
     submit: 'Report Issue',
-    onSubmit(d) {
+    async onSubmit(d) {
       a.issues.push({ id: uid(), date: d.date, title: d.title.trim(), item: d.item, priority: d.priority, status: 'Open', reportedBy: d.by, details: d.details, log: [] });
       if (d.flag) a.status = 'Need Maintenance';
-      if (save()) toast('Issue reported');
+      if (!(await save(`Report issue "${d.title.trim()}" – ${a.name}`))) return false;
+      toast('Issue reported');
     }
   });
 }
@@ -783,13 +1111,14 @@ function issueView(a, iid) {
     </div>`, {
     submit: 'Save Follow-up', wide: true,
     extra: `<button type="button" class="btn danger" data-act="issueDelete" data-id="${a.id}" data-iid="${i.id}">${ic('trash')}Delete</button>`,
-    onSubmit(d) {
+    async onSubmit(d) {
       if (!d.text.trim() && d.status === i.status) { toast('Add a note or change the status', true); return false; }
       i.log = i.log || [];
-      i.log.push({ date: d.date, by: setting('userName'), text: (d.status !== i.status ? `Status changed to ${d.status}. ` : '') + d.text.trim() });
+      i.log.push({ id: uid(), date: d.date, by: me(), text: (d.status !== i.status ? `Status changed to ${d.status}. ` : '') + d.text.trim() });
       i.status = d.status;
       i.closedDate = d.status === 'Closed' ? d.date : '';
-      if (save()) toast('Issue updated');
+      if (!(await save(`Issue follow-up "${i.title}" – ${a.name}`))) return false;
+      toast('Issue updated');
     }
   });
 }
@@ -803,10 +1132,11 @@ function maintModal(a) {
     <label class="full">Work Description<textarea name="details" required placeholder="e.g. Replace damaged chair cushions"></textarea></label>
   </div>`, {
     submit: 'Schedule',
-    onSubmit(d) {
+    async onSubmit(d) {
       a.maintenance.push({ id: uid(), date: d.date, item: d.item, assignedTo: d.assignedTo, details: d.details.trim(), status: 'Scheduled' });
       if (d.status !== 'Keep current status') a.status = d.status;
-      if (save()) toast('Maintenance scheduled');
+      if (!(await save(`Schedule maintenance – ${a.name}`))) return false;
+      toast('Maintenance scheduled');
     }
   });
 }
@@ -818,12 +1148,13 @@ function maintDone(a, mid) {
     <label>Area status after work<select name="status">${options(STATUSES, 'Good')}</select></label>
     <label class="full">Notes<textarea name="notes"></textarea></label></div>`, {
     submit: 'Mark as Done',
-    onSubmit(d) {
+    async onSubmit(d) {
       m.status = 'Done'; m.doneDate = d.date; m.notes = d.notes;
       a.status = d.status;
       const q = m.item ? qty(a, m.item) : null;
       pushHistory({ areaId: a.id, date: d.date, item: m.item || 'area', action: 'Maintenance', prev: q, next: q, details: m.details + (d.notes ? '. ' + d.notes : ''), by: m.assignedTo });
-      if (save()) toast('Maintenance completed');
+      if (!(await save(`Complete maintenance – ${a.name}`))) return false;
+      toast('Maintenance completed');
     }
   });
 }
@@ -837,19 +1168,22 @@ function inspModal(a) {
     <label>Next Inspection<input type="date" name="next" value="${addDays(today(), days)}"></label>
     <label class="full">Notes<textarea name="notes"></textarea></label>
   </div>
-  ${a.inspections.length ? `<b>Previous inspections</b><table class="tbl" style="margin-top:6px"><thead><tr><th>Date</th><th>By</th><th>Result</th><th>Notes</th></tr></thead><tbody>
-    ${[...a.inspections].sort(byDateDesc).map(i => `<tr><td>${fmt(i.date)}</td><td>${esc(i.by)}</td><td>${badge(i.result)}</td><td class="wrap">${esc(i.notes || '')}</td></tr>`).join('')}</tbody></table>` : ''}`, {
+  ${a.inspections.length ? `<b>Previous inspections</b><table class="tbl" style="margin-top:6px"><thead><tr><th>Date</th><th>By</th><th>Result</th><th>Notes</th><th></th></tr></thead><tbody>
+    ${[...a.inspections].sort(byDateDesc).map(i => `<tr><td>${fmt(i.date)}</td><td>${esc(i.by)}</td><td>${badge(i.result)}</td><td class="wrap">${esc(i.notes || '')}</td>
+      <td><button type="button" class="icon-btn" title="Delete this inspection" data-act="inspDelete" data-id="${a.id}" data-iid="${i.id}">${ic('trash')}</button></td></tr>`).join('')}</tbody></table>` : ''}`, {
     submit: 'Save Inspection', wide: true,
-    onSubmit(d) {
+    async onSubmit(d) {
       a.inspections.push({ id: uid(), date: d.date, by: d.by, result: d.result, notes: d.notes });
       if (!a.lastInspection || d.date >= a.lastInspection) { a.lastInspection = d.date; a.inspectedBy = d.by; a.nextInspection = d.next; }
-      if (save()) toast('Inspection recorded');
+      if (!(await save(`Record inspection – ${a.name}`))) return false;
+      toast('Inspection recorded');
     }
   });
   form.date.addEventListener('change', () => { form.next.value = addDays(form.date.value, days); });
 }
 
-function resizeImage(file, max = 1280) {
+/* Scales an image down (never up). Returns a JPEG data URL, or a Blob when asBlob is true. */
+function resizeImage(file, max = 1280, asBlob = false) {
   return new Promise((res, rej) => {
     const img = new Image();
     const url = URL.createObjectURL(file);
@@ -859,20 +1193,20 @@ function resizeImage(file, max = 1280) {
       c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
       c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
       URL.revokeObjectURL(url);
-      res(c.toDataURL('image/jpeg', .78));
+      if (asBlob) c.toBlob(b => (b ? res(b) : rej(new Error('bad image'))), 'image/jpeg', .82);
+      else res(c.toDataURL('image/jpeg', .78));
     };
     img.onerror = () => { URL.revokeObjectURL(url); rej(new Error('bad image')); };
     img.src = url;
   });
 }
-const readDataURL = f => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(f); });
 
 function uploadModal(a, cat = 'Current') {
   modal(`Upload Photo / Document – ${esc(a.name)}`, `<div class="form-grid">
-    <label class="full">Files<input type="file" name="files" multiple required accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt"></label>
+    <label class="full">Files<input type="file" name="files" multiple required accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.zip"></label>
     <label>Category<select name="category">${options([...PHOTO_CATEGORIES.map(c => [c, c + ' Photo']), ['Document', 'Document / Report']], cat)}</select></label>
     <label>Caption / Title<input name="caption" placeholder="e.g. Seating area after renovation"></label>
-    <p class="full hint">Images are resized automatically. Documents up to 2 MB each in this prototype (the server version has no such limit).</p>
+    <p class="full hint">Photos are stored in their original full quality on the server. Files up to 50 MB each.</p>
   </div>`, {
     submit: 'Upload',
     async onSubmit(d, form) {
@@ -882,18 +1216,19 @@ function uploadModal(a, cat = 'Current') {
       for (const f of files) {
         const isImg = f.type.startsWith('image/');
         const caption = d.caption.trim() || f.name.replace(/\.[^.]+$/, '');
-        if (isImg && d.category !== 'Document') {
-          a.photos.push({ id: uid(), caption, category: d.category, date: today(), src: await resizeImage(f) });
+        try {
+          if (isImg && d.category !== 'Document') {
+            a.photos.push({ id: uid(), caption, category: d.category, date: today(), ...await uploadImage(f) });
+          } else {
+            a.docs.push({ id: uid(), name: f.name, caption: d.caption.trim(), size: f.size, type: f.type, date: today(), src: await uploadFile(f) });
+          }
           added++;
-        } else {
-          if (f.size > 2 * 1048576) { toast(`${f.name} is larger than 2 MB`, true); continue; }
-          a.docs.push({ id: uid(), name: f.name, caption: d.caption.trim(), size: f.size, type: f.type, date: today(), src: await readDataURL(f) });
-          added++;
-        }
+        } catch (e) { toast(`${f.name}: ${e.message}`, true, 6000); }
       }
       if (!added) return false;
       if (d.category === 'Before' || d.category === 'After') F.photoTab = d.category;
-      if (save()) toast(added + ' file(s) uploaded');
+      if (!(await save(`Upload ${added} file(s) – ${a.name}`))) return false;
+      toast(added + ' file(s) uploaded');
     }
   });
 }
@@ -901,11 +1236,16 @@ function uploadModal(a, cat = 'Current') {
 function viewPhoto(a, pid) {
   const p = a.photos.find(x => x.id === pid);
   if (!p) return uploadModal(a);
-  modal(esc(p.caption), `<div class="viewer"><div class="ph">${photoHTML(p)}</div>
-    <p class="muted" style="margin:10px 0 0">${badge(p.category)} &nbsp;Uploaded ${fmt(p.date)}${p.main ? ' · <b>Main photo</b>' : ''}${p.src ? '' : ' · Placeholder image – upload a real photo to replace it'}</p></div>`, {
-    wide: true,
+  const i = a.photos.indexOf(p), prev = a.photos[i - 1], next = a.photos[i + 1];
+  const nav = (x, dir) => x ? `<button type="button" class="lb-nav ${dir}" data-act="viewPhoto" data-id="${a.id}" data-pid="${x.id}" aria-label="${dir === 'l' ? 'Previous' : 'Next'} photo">${ic(dir === 'l' ? 'chevL' : 'chevR')}</button>` : '';
+  modal(esc(p.caption), `<div class="viewer">
+      <div class="ph">${photoHTML(p, true)}</div>${nav(prev, 'l')}${nav(next, 'r')}
+    </div>
+    <p class="muted" style="margin:10px 0 0">${badge(p.category)} &nbsp;Uploaded ${fmt(p.date)} · Photo ${i + 1} of ${a.photos.length}${p.main ? ' · <b>Main photo</b>' : ''}${p.src ? '' : ' · Placeholder image – upload a real photo to replace it'}</p>`, {
+    cls: 'lightbox',
     extra: `<button type="button" class="btn danger" data-act="photoDelete" data-id="${a.id}" data-pid="${p.id}">${ic('trash')}Delete</button>
-      ${p.main ? '' : `<button type="button" class="btn" data-act="photoMain" data-id="${a.id}" data-pid="${p.id}">${ic('star')}Set as Main Photo</button>`}`
+      ${p.main ? '' : `<button type="button" class="btn" data-act="photoMain" data-id="${a.id}" data-pid="${p.id}">${ic('star')}Set as Main Photo</button>`}
+      ${p.src ? `<a class="btn" href="${esc(p.src)}" target="_blank" rel="noopener">${ic('expand')}Open Original</a>` : ''}`
   });
 }
 
@@ -915,7 +1255,7 @@ function qrModal(a) {
     <div style="max-width:260px;margin:0 auto">${qrSVG(url)}</div>
     <p style="word-break:break-all" class="muted">${esc(url)}</p>
     <p class="hint">Scanning opens this break area profile (contents, status, latest updates and history).
-    ${location.protocol === 'file:' ? '<br><b>Note:</b> the app is opened from a local file, so phones can only use this QR after the system is hosted on a server.' : ''}</p></div>`, {
+    Phones must be on the same company network as the server PC.</p></div>`, {
     extra: `<button type="button" class="btn" data-act="copyLink" data-url="${esc(url)}">${ic('copy')}Copy Link</button>
       <button type="button" class="btn primary" data-act="printLabel" data-id="${a.id}">${ic('printer')}Print Label</button>`
   });
@@ -925,14 +1265,15 @@ function editArea(a) {
   modal(`Edit – ${esc(a.name)}`, areaFields(a), {
     submit: 'Save Changes', wide: true,
     extra: `<button type="button" class="btn danger" data-act="deleteArea" data-id="${a.id}">${ic('trash')}Delete Break Area</button>`,
-    onSubmit(d) {
+    async onSubmit(d) {
       const before = { status: a.status, responsible: a.responsible };
       applyAreaFields(a, d);
       const changes = [];
       if (before.status !== a.status) changes.push(`Status: ${before.status} → ${a.status}`);
       if (before.responsible !== a.responsible) changes.push(`Responsible: ${before.responsible} → ${a.responsible}`);
-      if (changes.length) pushHistory({ areaId: a.id, date: today(), item: 'area', action: 'Condition Update', prev: null, next: null, details: changes.join('; '), by: setting('userName') });
-      if (save()) toast('Break area updated');
+      if (changes.length) pushHistory({ areaId: a.id, date: today(), item: 'area', action: 'Condition Update', prev: null, next: null, details: changes.join('; '), by: me() });
+      if (!(await save(`Edit break area – ${a.name}`))) return false;
+      toast('Break area updated');
     }
   });
 }
@@ -967,14 +1308,16 @@ function itemTypeModal(tid) {
     <label>Singular<input name="short" value="${esc(t ? t.short : '')}" placeholder="e.g. Microwave"></label>
     <label class="full">Icon<select name="icon">${options(ITEM_ICONS, t ? t.icon : 'box')}</select></label></div>`, {
     submit: t ? 'Save' : 'Add',
-    onSubmit(d) {
+    extra: t ? `<button type="button" class="btn danger" data-act="itemTypeDelete" data-tid="${t.id}">${ic('trash')}Delete Item Type</button>` : '',
+    async onSubmit(d) {
       if (t) Object.assign(t, { name: d.name.trim(), short: d.short.trim() || d.name.trim(), icon: d.icon });
       else {
         let id = d.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || uid();
         while (itemType(id)) id += '_';
         DB.itemTypes.push({ id, name: d.name.trim(), short: d.short.trim() || d.name.trim(), icon: d.icon });
       }
-      if (save()) toast('Item type saved');
+      if (!(await save(`${t ? 'Edit' : 'Add'} item type – ${d.name.trim()}`))) return false;
+      toast('Item type saved');
     }
   });
 }
@@ -1040,7 +1383,8 @@ function viewMaintenance() {
     <div class="card"><div class="card-h"><h3>Scheduled Maintenance</h3></div>
       <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Planned</th><th>Break Area</th><th>Work</th><th>Assigned To</th><th></th></tr></thead><tbody>
       ${maint.map(m => `<tr><td class="${daysFromToday(m.date) < 0 ? 'overdue' : ''}">${fmt(m.date)}</td><td><a class="link" href="#/area/${m.a.id}">${esc(m.a.name)}</a></td><td class="wrap">${esc(m.details)}</td><td>${esc(m.assignedTo)}</td>
-        <td><button class="btn sm" data-act="maintDone" data-id="${m.a.id}" data-mid="${m.id}">Complete</button></td></tr>`).join('') || '<tr><td colspan="5" class="empty">Nothing scheduled</td></tr>'}
+        <td class="nowrap"><button class="btn sm" data-act="maintDone" data-id="${m.a.id}" data-mid="${m.id}">Complete</button>
+          <button class="icon-btn" title="Delete this maintenance" data-act="maintDelete" data-id="${m.a.id}" data-mid="${m.id}">${ic('trash')}</button></td></tr>`).join('') || '<tr><td colspan="5" class="empty">Nothing scheduled</td></tr>'}
       </tbody></table></div></div>
     <div class="card"><div class="card-h"><h3>Inspection Schedule</h3><span class="sp"></span><span class="hint">Every ${setting('inspectionDays')} days</span></div>
       <div class="tbl-wrap scroll"><table class="tbl"><thead><tr><th>Break Area</th><th>Last</th><th>Next</th><th>Status</th><th></th></tr></thead><tbody>
@@ -1073,6 +1417,14 @@ const REPORTS = {
     head: () => ['Break Area', 'Location', 'Last Inspection', 'Inspected By', 'Next Inspection', 'Status'],
     rows: () => [...DB.areas].sort((x, y) => (x.nextInspection || '').localeCompare(y.nextInspection || '')).map(a => [a.name, a.location, a.lastInspection, a.inspectedBy, a.nextInspection, inspStatus(a)])
   },
+  satisfaction: {
+    title: 'Satisfaction Survey', desc: 'Monthly satisfaction % of every break area and department, compared with the target.', dated: true,
+    head: () => ['Month', 'Break Area', 'Location', 'Department', 'Satisfaction %', 'Respondents', 'Target %', 'Result', 'Notes', 'Entered By'],
+    rows: (from, to) => DB.areas.flatMap(a => a.surveys.map(s => ({ a, s })))
+      .filter(({ s }) => (!from || s.month >= from.slice(0, 7)) && (!to || s.month <= to.slice(0, 7)))
+      .sort((x, y) => y.s.month.localeCompare(x.s.month) || x.a.name.localeCompare(y.a.name))
+      .map(({ a, s }) => [monthName(s.month), a.name, a.location, s.department || '', +s.percentage, s.respondents ?? '', satTarget(), SAT_LABEL[satLevel(+s.percentage)], s.notes || '', s.by || ''])
+  },
   locations: {
     title: 'Summary by Location', desc: 'Number of break areas, capacity and equipment totals per location.',
     head: () => ['Location', 'Break Areas', 'Capacity', ...DB.itemTypes.map(t => t.name), 'Open Issues'],
@@ -1088,11 +1440,14 @@ function viewReports() {
     ${Object.entries(REPORTS).map(([k, r]) => `<div class="card report-card" data-report="${k}">
       <div class="card-h" style="margin:0">${ic('report')}<h3>${r.title}</h3></div><p>${r.desc}</p>
       ${r.dated ? `<div class="filters"><input type="date" name="from" title="From"><input type="date" name="to" title="To"></div>` : ''}
-      <div class="filters"><button class="btn sm" data-act="runReport" data-k="${k}" data-mode="csv">${ic('download')}Export Excel</button>
+      <div class="filters"><button class="btn sm" data-act="runReport" data-k="${k}" data-mode="xlsx">${ic('download')}Export Excel</button>
       <button class="btn sm" data-act="runReport" data-k="${k}" data-mode="print">${ic('printer')}Print / PDF</button></div></div>`).join('')}
     <div class="card report-card"><div class="card-h" style="margin:0">${ic('qr')}<h3>QR Code Labels</h3></div>
       <p>Print QR labels for all break areas to stick at each entrance.</p>
       <div class="filters"><button class="btn sm" data-act="printAllLabels">${ic('printer')}Print All Labels</button></div></div>
+    <div class="card report-card"><div class="card-h" style="margin:0">${ic('database')}<h3>Complete Database Export</h3></div>
+      <p>One Excel workbook with every table (areas, surveys, inventory, issues, photos, documents…), deleted records and the full activity logs – for documentation.</p>
+      <div class="filters"><button class="btn sm primary" data-act="fullExport">${ic('download')}Export Everything</button></div></div>
   </div>`;
 }
 
@@ -1100,33 +1455,200 @@ function viewReports() {
 function viewSettings() {
   const s = DB.settings;
   return `<div class="page-head"><h2>Settings</h2></div>
-  <div class="grid2">
+  <div class="grid2 mb">
     <form class="card" data-form="settings">
       <div class="card-h">${ic('settings')}<h3>General</h3></div>
       <div class="form-grid">
         <label class="full">System Name<input name="systemName" value="${esc(s.systemName)}"></label>
         <label>Factory / Site<input name="factory" value="${esc(s.factory)}"></label>
         <label>Logo Text<input name="logoText" value="${esc(s.logoText)}"></label>
-        <label>Current User<input name="userName" value="${esc(s.userName)}"></label>
-        <label>Role<input name="userRole" value="${esc(s.userRole)}"></label>
         <label>Inspection frequency (days)<input type="number" min="1" name="inspectionDays" value="${s.inspectionDays}"></label>
-        <label>Logo Image (optional)<input type="file" name="logo" accept="image/*"></label>
+        <label>Satisfaction target (%)<input type="number" min="1" max="100" name="satisfactionTarget" value="${satTarget()}"></label>
+        <label class="full">Logo Image (optional)<input type="file" name="logo" accept="image/*"></label>
         <label class="full">Locations <span class="hint">(one per line)</span><textarea name="locations" rows="5">${esc(s.locations.join('\n'))}</textarea></label>
       </div>
       <div style="display:flex;gap:8px;margin-top:12px">${s.logoImage ? `<button type="button" class="btn" data-act="removeLogo">Remove logo image</button>` : ''}<span class="sp"></span><button class="btn primary">${ic('check')}Save Settings</button></div>
     </form>
     <div class="card">
-      <div class="card-h">${ic('download')}<h3>Data &amp; Backup</h3></div>
-      <p class="muted">In this prototype all data is stored in this browser. Take a backup regularly, or move it to another PC with Import.</p>
-      <div class="filters mb">
-        <button class="btn" data-act="backup">${ic('download')}Download Backup (JSON)</button>
-        <label class="btn">${ic('upload')}Import Backup<input type="file" accept=".json,application/json" data-act-change="importBackup" hidden></label>
+      <div class="card-h">${ic('database')}<h3>Server &amp; Database</h3></div>
+      <div data-async="serverInfo"><p class="muted">Loading…</p></div>
+      <div class="filters" style="margin-top:12px">
+        <button class="btn primary" data-act="fullExport">${ic('download')}Full Excel Export (all data + logs)</button>
+        <label class="btn">${ic('upload')}Import Old Version (JSON)<input type="file" accept=".json,application/json" data-act-change="importBackup" hidden></label>
       </div>
-      <p class="muted">Reset removes all changes and restores the demo data.</p>
-      <button class="btn danger" data-act="resetData">${ic('trash')}Reset Demo Data</button>
-      <p class="hint" style="margin-top:14px">Storage used: ${fileSize(new Blob([localStorage.getItem(KEY) || '']).size)} of ~5 MB browser limit.</p>
+      <div class="start-fresh">
+        <div><b>Start real use</b><small>The system comes filled with sample data so everyone can see how it works.
+          When you are ready, delete it all in one step and add your real break areas.</small></div>
+        ${DB.areas.length ? `<button class="btn danger" data-act="clearAll">${ic('trash')}Delete All Sample Data</button>`
+          : `<button class="btn" data-act="loadDemo">${ic('database')}Load Sample Data</button>`}
+      </div>
+    </div>
+  </div>
+  <div class="grid2">
+    <div class="card">
+      <div class="card-h">${ic('restore')}<h3>Backups</h3><span class="sp"></span><button class="btn sm primary" data-act="backupNow">${ic('download')}Backup Now</button></div>
+      <div data-async="backups"><p class="muted">Loading…</p></div>
+    </div>
+    <div class="card">
+      <div class="card-h">${ic('trash')}<h3>Recycle Bin</h3><span class="hint">Nothing is ever erased – deleted records can be restored</span></div>
+      <div data-async="trash"><p class="muted">Loading…</p></div>
     </div>
   </div>`;
+}
+
+/* ============================== Activity log ============================== */
+const ENTITY_NAME = {
+  areas: 'Break Area', inventory: 'Inventory', surveys: 'Satisfaction', photos: 'Photo', docs: 'Document', issues: 'Issue',
+  issueLog: 'Issue Follow-up', maintenance: 'Maintenance', inspections: 'Inspection', history: 'Transaction', itemTypes: 'Item Type', settings: 'Setting'
+};
+const OP_BADGE = { insert: ['Added', 'b-green'], update: ['Changed', 'b-blue'], delete: ['Deleted', 'b-red'] };
+const ACTIVITY_TYPES = ['session', 'login', 'navigate', 'click', 'open', 'filter', 'save', 'save-failed', 'export', 'restore', 'js-error', 'server-error'];
+let LOGDATA = { rows: [], total: 0, users: [] };
+
+function viewLogs() {
+  const f = F.log, audit = f.tab === 'audit';
+  const types = audit ? Object.entries(OP_BADGE).map(([k, [l]]) => [k, l]) : ACTIVITY_TYPES;
+  return `<div class="page-head"><h2>Activity Log</h2><span class="muted" id="logCount"></span>
+    <div class="actions"><button class="btn" data-act="logRefresh">${ic('history')}Refresh</button><button class="btn" data-act="logExport">${ic('download')}Export Excel</button></div></div>
+  <div class="card">
+    <div class="card-h filters">
+      <div class="tabs"><button data-act="logTab" data-tab="audit" class="${audit ? 'on' : ''}">Data Changes</button><button data-act="logTab" data-tab="activity" class="${audit ? '' : 'on'}">User Activity &amp; Errors</button></div>
+      <label class="search">${ic('search')}<input data-logf="q" placeholder="Search..." value="${esc(f.q)}"></label>
+      <select data-logf="user"><option value="">All users</option>${options(LOGDATA.users, f.user)}</select>
+      <select data-logf="type"><option value="">All types</option>${options(types, f.type)}</select>
+      ${audit ? `<select data-logf="area"><option value="">All break areas</option>${options(DB.areas.map(a => [a.id, a.name]), f.area)}</select>` : ''}
+      <label class="fld" style="flex-direction:row;align-items:center">From<input type="date" data-logf="from" value="${f.from}"></label>
+      <label class="fld" style="flex-direction:row;align-items:center">To<input type="date" data-logf="to" value="${f.to}"></label>
+      <button class="btn sm" data-act="logClear">Clear</button>
+    </div>
+    <div data-async="logTable"><p class="muted">Loading…</p></div>
+  </div>`;
+}
+const logQuery = (offset = 0, limit = 200) => {
+  const f = F.log, p = new URLSearchParams({ q: f.q, user: f.user, type: f.type, area: f.tab === 'audit' ? f.area || '' : '', from: f.from, to: f.to, offset, limit });
+  return api('GET', `/api/${f.tab}?${p}`);
+};
+const short = (v, n = 60) => { v = v == null ? '' : typeof v === 'object' ? JSON.stringify(v) : String(v); return v.length > n ? v.slice(0, n) + '…' : v; };
+function auditDetail(r) {
+  const parse = s => { try { return JSON.parse(s || 'null'); } catch (e) { return null; } };
+  if (r.op === 'update') {
+    return Object.entries(parse(r.changes) || {}).map(([k, [o, n]]) => `<div><b>${esc(k)}</b>: <s>${esc(short(o))}</s> → ${esc(short(n))}</div>`).join('');
+  }
+  const x = parse(r.op === 'delete' ? r.before : r.after) || {};
+  const keys = ['name', 'title', 'caption', 'month', 'department', 'percentage', 'item', 'qty', 'action', 'details', 'text', 'value', 'status'];
+  return esc(keys.filter(k => x[k] != null && x[k] !== '').map(k => `${k}: ${short(x[k], 50)}`).join(' · '));
+}
+function logRowsHTML(rows) {
+  if (F.log.tab === 'audit') return rows.map(r => {
+    const [l, c] = OP_BADGE[r.op] || [r.op, 'b-gray'];
+    const a = area(r.area_id);
+    return `<tr><td class="nowrap">${esc(r.ts.replace('T', ' '))}</td><td>${esc(r.user)}</td><td class="muted">${esc(r.ip)}</td><td class="wrap">${esc(r.label)}</td>
+      <td>${esc(ENTITY_NAME[r.entity] || r.entity)}${a ? `<br><a class="link" href="#/area/${a.id}">${esc(a.name)}</a>` : ''}</td><td><span class="badge ${c}">${l}</span></td><td class="wrap log-detail">${auditDetail(r)}</td></tr>`;
+  }).join('');
+  return rows.map(r => `<tr class="${/error|failed/.test(r.type) ? 'err' : ''}"><td class="nowrap">${esc(r.ts.replace('T', ' '))}</td><td>${esc(r.user)}</td><td class="muted">${esc(r.ip)}</td>
+    <td><span class="badge ${/error|failed/.test(r.type) ? 'b-red' : r.type === 'save' ? 'b-green' : 'b-gray'}">${esc(r.type)}</span></td><td class="wrap">${esc(r.action)}</td><td class="wrap">${esc(r.target)}</td>
+    <td class="muted">${esc(r.page)}</td><td class="wrap log-detail" title="${esc(r.detail)}">${esc(short(r.detail, 120))}</td></tr>`).join('');
+}
+function logTableHTML() {
+  const audit = F.log.tab === 'audit';
+  const head = audit ? ['Time', 'User', 'PC (IP)', 'Action', 'Record', 'Change', 'Details'] : ['Time', 'User', 'PC (IP)', 'Type', 'Action', 'Target', 'Page', 'Detail'];
+  return `<div class="tbl-wrap"><table class="tbl log-tbl"><thead><tr>${head.map(h => `<th>${h}</th>`).join('')}</tr></thead>
+    <tbody>${logRowsHTML(LOGDATA.rows) || `<tr><td colspan="${head.length}" class="empty">No records match the filters</td></tr>`}</tbody></table></div>
+    ${LOGDATA.rows.length < LOGDATA.total ? `<div style="text-align:center;margin-top:10px"><button class="btn" data-act="logMore">Load more (${LOGDATA.total - LOGDATA.rows.length} remaining)</button></div>` : ''}`;
+}
+
+/* Sections that load their data from the server after the page is drawn */
+const ASYNC = {
+  async logTable(el) {
+    LOGDATA = await logQuery();
+    el.innerHTML = logTableHTML();
+    const c = $('#logCount'); if (c) c.textContent = LOGDATA.total.toLocaleString() + ' records';
+    const us = $('[data-logf=user]');
+    if (us) us.innerHTML = `<option value="">All users</option>${options(LOGDATA.users, F.log.user)}`;
+  },
+  async serverInfo(el) {
+    const i = await api('GET', '/api/info');
+    const counts = Object.entries(i.counts).filter(([k]) => k !== 'Settings').map(([k, v]) => `<span><b>${v.toLocaleString()}</b> ${esc(k)}</span>`).join('');
+    el.innerHTML = `<dl class="kv">
+      <dt>Open from other PCs</dt><dd>${i.urls.map(u => `<div><a class="link" href="${esc(u)}">${esc(u)}</a></div>`).join('')}</dd>
+      <dt>Database folder</dt><dd class="mono">${esc(i.dataDir)}</dd>
+      <dt>Backup folder</dt><dd class="mono">${esc(i.backupDir)}${i.extraBackupDirs.map(d => `<div>+ ${esc(d)}</div>`).join('')}</dd>
+      <dt>Automatic backup</dt><dd>Every ${i.backupIntervalHours} hours when data changed, and at every server start</dd>
+      <dt>Database size</dt><dd>${fileSize(i.dbSize)} · Photos &amp; documents ${fileSize(i.uploadsSize)}</dd>
+    </dl>
+    ${i.lastBackupError ? `<p class="err-box">${ic('alert')} Last backup problem: ${esc(i.lastBackupError)}</p>` : ''}
+    <div class="counts">${counts}</div>`;
+  },
+  async backups(el) {
+    const list = await api('GET', '/api/backups');
+    const kind = { auto: 'Automatic', startup: 'Server start', manual: 'Manual', 'pre-import': 'Before import', 'pre-restore': 'Before restore' };
+    el.innerHTML = list.length ? `<div class="tbl-wrap scroll"><table class="tbl"><thead><tr><th>Date &amp; Time</th><th>Type</th><th class="num">Size</th><th></th></tr></thead><tbody>
+      ${list.map(b => `<tr><td>${esc(b.time.replace('T', ' '))}</td><td>${esc(kind[b.kind] || b.kind)}</td><td class="num">${fileSize(b.size)}</td>
+        <td><button class="btn sm" data-act="backupRestore" data-name="${esc(b.name)}" data-time="${esc(b.time)}">${ic('restore')}Restore</button></td></tr>`).join('')}
+      </tbody></table></div><p class="hint">${list.length} backups. Restoring first saves the current data as a new backup, so a restore can always be undone.</p>`
+      : '<p class="empty">No backups yet – click "Backup Now".</p>';
+  },
+  async trash(el) {
+    const list = await api('GET', '/api/trash');
+    el.innerHTML = list.length ? `<ul class="trash-list">${list.map(g => `<li>
+        <div><b>${esc(g.label || 'Deleted records')}</b>
+          <small>${esc((g.ts || '').replace('T', ' '))} · by ${esc(g.user || '?')} · ${Object.entries(g.items).map(([k, v]) => `${v} ${esc(k)}`).join(', ')}</small>
+          ${g.names.length ? `<small class="muted">${g.names.map(n => esc(short(n, 40))).join(' · ')}</small>` : ''}</div>
+        <button class="btn sm" data-act="trashRestore" data-txn="${esc(g.txn)}">${ic('restore')}Restore</button></li>`).join('')}</ul>`
+      : '<p class="empty">The recycle bin is empty.</p>';
+  }
+};
+
+/* ============================== User ============================== */
+let USER_MEM = '';
+function userModal(first) {
+  modal(first ? 'Welcome – who is using this PC?' : 'Change User', `<div class="form-grid">
+    <label class="full">Your name *<input name="name" required value="${esc(me())}" placeholder="e.g. Ahmed Hassan" autocomplete="name"></label>
+    <p class="full hint">Your name is remembered on this PC and recorded with every change you make, so the Activity Log shows who did what.</p></div>`, {
+    submit: 'Continue', locked: first,
+    onSubmit(d) {
+      const n = d.name.trim().slice(0, 60);
+      USER_MEM = n;
+      try { localStorage.setItem(USER_KEY, n); } catch (e) { /* private window – kept for this session only */ }
+      track('login', 'user', n);
+      toast('Welcome, ' + n);
+    }
+  });
+}
+
+/* Sample data (js/data.js) – loaded automatically the very first time the system starts */
+async function loadSample() {
+  const seed = buildSeed();
+  const { userName, userRole, ...settings } = seed.settings;
+  DB = { ...DB, settings: { ...DEFAULT_SETTINGS, ...settings }, itemTypes: seed.itemTypes, areas: seed.areas, history: seed.history };
+  return save('Load sample data', { force: true });
+}
+
+/* ============================== Import ============================== */
+async function dataURLToBlob(u) { return (await fetch(u)).blob(); }
+const extOf = type => ({ 'image/png': '.png', 'image/gif': '.gif', 'image/webp': '.webp', 'application/pdf': '.pdf' }[type] || '.jpg');
+async function importOldBackup(file) {
+  let data;
+  try { data = JSON.parse(await file.text()); } catch (e) { return toast('This is not a valid backup file', true); }
+  if (!data.areas || !data.settings || !data.history) return toast('This is not a backup of the Break Area system', true);
+  if (!confirm(`Import ${data.areas.length} break areas from "${file.name}"?\n\nThe current data will be replaced. A backup of the current database is taken automatically first, and replaced records stay in the Recycle Bin.`)) return;
+  toast('Importing… please wait', false, 60000);
+  try {
+    for (const a of data.areas) {
+      a.surveys = a.surveys || [];
+      a.issues = a.issues || []; a.docs = a.docs || []; a.photos = a.photos || []; a.maintenance = a.maintenance || []; a.inspections = a.inspections || []; a.inventory = a.inventory || [];
+      for (const p of a.photos) if (p.src && p.src.startsWith('data:')) {
+        const b = await dataURLToBlob(p.src);
+        p.src = await uploadFile(b, 'photo' + extOf(b.type));
+        p.thumb = await uploadFile(await resizeImage(b, 800, true), 'thumb.jpg').catch(() => '');
+      }
+      for (const d of a.docs) if (d.src && d.src.startsWith('data:')) d.src = await uploadFile(await dataURLToBlob(d.src), d.name);
+    }
+    const { userName, userRole, ...settings } = data.settings;
+    if (settings.logoImage && settings.logoImage.startsWith('data:')) { const b = await dataURLToBlob(settings.logoImage); settings.logoImage = await uploadFile(b, 'logo' + extOf(b.type)); }
+    DB = { settings: { ...DEFAULT_SETTINGS, ...settings }, itemTypes: data.itemTypes || DEFAULT_ITEM_TYPES, areas: data.areas, history: data.history };
+  } catch (e) { toast('Import failed: ' + e.message, true, 8000); await load(); return rerender(); }
+  if (await save(`Import old version backup "${file.name}"`, { force: true })) { location.hash = '#/dashboard'; rerender(); toast('Backup imported'); }
 }
 
 /* ============================== Events ============================== */
@@ -1134,6 +1656,7 @@ const ACT = {
   go: d => { location.hash = d.href; },
   toggleNav: () => document.body.classList.toggle('nav-open'),
   closeModal,
+  userModal: () => userModal(false),
   scrollTrack: d => { const t = $('#track'); t.scrollBy({ left: d.dir * t.clientWidth * .7 }); },
   toHistory: () => $('#history').scrollIntoView({ behavior: 'smooth' }),
   photoTab: d => { F.photoTab = d.tab; rerender(); },
@@ -1141,58 +1664,171 @@ const ACT = {
   invModal: d => invModal(area(d.id), d.item),
   issueModal: d => issueModal(area(d.id)),
   issueView: d => issueView(area(d.id), d.iid),
-  issueDelete: d => {
-    const a = area(d.id);
-    if (!confirm('Delete this issue?')) return;
-    a.issues = a.issues.filter(i => i.id !== d.iid);
-    save(); closeModal(); rerender(); toast('Issue deleted');
+  async issueDelete(d) {
+    const a = area(d.id), i = a.issues.find(x => x.id === d.iid);
+    if (!i || !confirm('Delete this issue?')) return;
+    a.issues = a.issues.filter(x => x !== i);
+    if (await save(`Delete issue "${i.title}" – ${a.name}`)) { closeModal(); rerender(); toast('Issue deleted'); }
+  },
+  async invDelete(d) {
+    const a = area(d.id), item = $('#modal form').item.value, e = invEntry(a, item);
+    if (!e) return toast(`${itemName(item)} is not in this break area's inventory`, true);
+    if (!confirm(`Delete ${itemName(item)} (quantity ${e.qty}) from ${a.name}'s inventory?`)) return;
+    a.inventory = a.inventory.filter(x => x !== e);
+    pushHistory({ areaId: a.id, date: today(), item, action: 'Removed', prev: e.qty, next: 0, details: `${itemName(item)} deleted from the inventory`, by: me() });
+    if (await save(`Delete inventory item ${itemName(item)} – ${a.name}`)) { closeModal(); rerender(); toast('Item deleted'); }
+  },
+  async maintDelete(d) {
+    const a = area(d.id), m = a.maintenance.find(x => x.id === d.mid);
+    if (!m || !confirm(`Delete this maintenance?\n\n${m.details}`)) return;
+    a.maintenance = a.maintenance.filter(x => x !== m);
+    if (await save(`Delete maintenance "${m.details}" – ${a.name}`)) { rerender(); toast('Maintenance deleted'); }
+  },
+  async inspDelete(d) {
+    const a = area(d.id), i = a.inspections.find(x => x.id === d.iid);
+    if (!i || !confirm(`Delete the inspection of ${fmt(i.date)}?`)) return;
+    a.inspections = a.inspections.filter(x => x !== i);
+    if (a.lastInspection === i.date) { // show the latest remaining inspection instead
+      const last = [...a.inspections].sort(byDateDesc)[0];
+      a.lastInspection = last ? last.date : '';
+      a.inspectedBy = last ? last.by : '';
+    }
+    if (await save(`Delete inspection ${i.date} – ${a.name}`)) { closeModal(); rerender(); toast('Inspection deleted'); }
+  },
+  async itemTypeDelete(d) {
+    const t = itemType(d.tid);
+    if (!t) return;
+    const used = DB.areas.filter(a => qty(a, t.id) > 0);
+    if (used.length) return toast(`${t.name} are still in ${used.length} break area(s). Set their quantity to 0 or delete them from the inventory first.`, true, 7000);
+    if (!confirm(`Delete the item type "${t.name}"?`)) return;
+    DB.itemTypes = DB.itemTypes.filter(x => x !== t);
+    DB.areas.forEach(a => (a.inventory = a.inventory.filter(e => e.item !== t.id)));
+    if (await save(`Delete item type – ${t.name}`)) { closeModal(); rerender(); toast('Item type deleted'); }
   },
   maintModal: d => maintModal(area(d.id)),
   maintDone: d => maintDone(area(d.id), d.mid),
   inspModal: d => inspModal(area(d.id)),
   uploadModal: d => uploadModal(area(d.id), d.cat),
   viewPhoto: d => viewPhoto(area(d.id), d.pid),
-  photoMain: d => { const a = area(d.id); a.photos.forEach(p => (p.main = p.id === d.pid)); save(); closeModal(); rerender(); toast('Main photo updated'); },
-  photoDelete: d => {
+  surveyModal: d => surveyModal(area(d.id), d.sid),
+  async surveyDelete(d) {
+    const a = area(d.id), s = a.surveys.find(x => x.id === d.sid);
+    if (!s || !confirm(`Delete the ${monthName(s.month)} result (${pct(+s.percentage)})?`)) return;
+    a.surveys = a.surveys.filter(x => x !== s);
+    if (await save(`Delete satisfaction ${monthName(s.month)} – ${a.name}`)) { closeModal(); rerender(); toast('Result deleted'); }
+  },
+  exportSurveys: () => exportXLSX('satisfaction_survey', REPORTS.satisfaction.head(), REPORTS.satisfaction.rows(), 'Satisfaction Survey'),
+  async photoMain(d) {
+    const a = area(d.id);
+    a.photos.forEach(p => (p.main = p.id === d.pid));
+    if (await save(`Set main photo – ${a.name}`)) { closeModal(); rerender(); toast('Main photo updated'); }
+  },
+  async photoDelete(d) {
     const a = area(d.id);
     if (!confirm('Delete this photo?')) return;
     const wasMain = (a.photos.find(p => p.id === d.pid) || {}).main;
     a.photos = a.photos.filter(p => p.id !== d.pid);
     if (wasMain && a.photos[0]) a.photos[0].main = true;
-    save(); closeModal(); rerender(); toast('Photo deleted');
+    if (await save(`Delete photo – ${a.name}`)) { closeModal(); rerender(); toast('Photo deleted'); }
   },
-  docDownload: d => { const doc = area(d.id).docs.find(x => x.id === d.did); if (doc) { const l = document.createElement('a'); l.href = doc.src; l.download = doc.name; l.click(); } },
-  docDelete: d => { const a = area(d.id); if (!confirm('Delete this document?')) return; a.docs = a.docs.filter(x => x.id !== d.did); save(); rerender(); toast('Document deleted'); },
+  docDownload: d => {
+    const doc = area(d.id).docs.find(x => x.id === d.did);
+    if (doc) { const l = document.createElement('a'); l.href = doc.src; l.download = doc.name; document.body.appendChild(l); l.click(); l.remove(); }
+  },
+  async docDelete(d) {
+    const a = area(d.id), doc = a.docs.find(x => x.id === d.did);
+    if (!doc || !confirm('Delete this document?')) return;
+    a.docs = a.docs.filter(x => x !== doc);
+    if (await save(`Delete document "${doc.name}" – ${a.name}`)) { rerender(); toast('Document deleted'); }
+  },
   qrModal: d => qrModal(area(d.id)),
   printLabel: d => printLabels([area(d.id)]),
   printAllLabels: () => printLabels(DB.areas),
   printLabelsFiltered: () => printLabels(filteredAreas()),
   copyLink: d => { navigator.clipboard?.writeText(d.url).then(() => toast('Link copied'), () => toast('Copy failed', true)); },
-  deleteArea: d => {
+  async deleteArea(d) {
     const a = area(d.id);
-    if (!confirm(`Delete ${a.name} and all its history? This cannot be undone.`)) return;
+    if (!confirm(`Delete ${a.name}?\n\nIts photos, documents, surveys and history are kept in the database and can be restored from Settings → Recycle Bin.`)) return;
     DB.areas = DB.areas.filter(x => x.id !== a.id);
     DB.history = DB.history.filter(h => h.areaId !== a.id);
-    save(); closeModal(); location.hash = '#/areas'; toast('Break area deleted');
+    if (await save(`Delete break area – ${a.name}`)) { closeModal(); location.hash = '#/areas'; toast('Break area deleted'); }
   },
-  exportAreas: () => exportCSV('break_areas', areaHead(), areaRows(filteredAreas())),
-  exportHist: d => { const a = area(d.id); exportCSV(a.name.replace(/\s+/g, '_') + '_history', TX_HEAD, txExportRows(filteredHist(a))); },
-  exportTx: () => exportCSV('transactions', TX_HEAD, txExportRows(filteredTx())),
+  areaLog: d => { F.log = { tab: 'audit', q: '', user: '', type: '', area: d.id, from: '', to: '' }; location.hash = '#/logs'; },
+  exportAreas: () => exportXLSX('break_areas', areaHead(), areaRows(filteredAreas())),
+  exportHist: d => { const a = area(d.id); exportXLSX(a.name.replace(/\s+/g, '_') + '_history', TX_HEAD, txExportRows(filteredHist(a))); },
+  exportTx: () => exportXLSX('transactions', TX_HEAD, txExportRows(filteredTx())),
   printTx: () => printTable('Transactions', TX_HEAD, txExportRows(filteredTx()).map(r => [fmt(r[0]), ...r.slice(1)])),
   clearTx: () => { F.tx = { q: '', area: '', item: '', action: '', from: '', to: '' }; rerender(); },
-  exportEquip: () => exportCSV('inventory_by_area', REPORTS.inventory.head(), REPORTS.inventory.rows()),
-  exportIssues: () => exportCSV('issues', REPORTS.issues.head(), REPORTS.issues.rows()),
+  exportEquip: () => exportXLSX('inventory_by_area', REPORTS.inventory.head(), REPORTS.inventory.rows()),
+  exportIssues: () => exportXLSX('issues', REPORTS.issues.head(), REPORTS.issues.rows()),
   itemTypeModal: d => itemTypeModal(d.tid),
   runReport: (d, el) => {
     const r = REPORTS[d.k], card = el.closest('.card');
     const from = card.querySelector('[name=from]')?.value || '', to = card.querySelector('[name=to]')?.value || '';
     const rows = r.rows(from, to);
-    if (d.mode === 'csv') exportCSV(d.k, r.head(), rows);
+    if (d.mode === 'xlsx') exportXLSX(d.k, r.head(), rows, r.title);
     else printTable(r.title + (from || to ? ` (${from ? fmt(from) : '…'} – ${to ? fmt(to) : '…'})` : ''), r.head(), rows);
   },
-  backup: () => download('break_areas_backup_' + today() + '.json', JSON.stringify(DB, null, 1), 'application/json'),
-  removeLogo: () => { DB.settings.logoImage = ''; save(); rerender(); },
-  resetData: () => { if (!confirm('Reset all data to the demo data? All your changes will be lost.')) return; DB = buildSeed(); save(); location.hash = '#/dashboard'; rerender(); toast('Demo data restored'); }
+  async fullExport() {
+    toast('Preparing the Excel file…', false, 30000);
+    try {
+      download(`BAMS_Full_Export_${today()}.xlsx`, await api('GET', '/api/export.xlsx', undefined, { blob: true }));
+      toast('Full export downloaded');
+    } catch (e) { toast('Export failed: ' + e.message, true); }
+  },
+  async removeLogo() { DB.settings.logoImage = ''; if (await save('Remove logo image')) rerender(); },
+  async loadDemo() {
+    if (DB.areas.length && !confirm('Replace the current data with the sample data?')) return;
+    if (await loadSample()) { rerender(); toast('Sample data loaded'); }
+  },
+  async clearAll() {
+    const n = DB.areas.length;
+    const answer = prompt(`This deletes ALL ${n} break areas with their inventory, photos, documents, issues, surveys and history, so you can start with your real data.\n\nA backup is made first, and everything stays restorable from the Recycle Bin.\n\nType DELETE to confirm:`);
+    if ((answer || '').trim().toUpperCase() !== 'DELETE') return toast('Nothing was deleted');
+    DB.areas = []; DB.history = [];
+    if (await save(`Delete all data – start fresh (${n} break areas)`, { force: true })) { location.hash = '#/dashboard'; rerender(); toast('All data deleted – you can now add your real break areas'); }
+  },
+  async backupNow() {
+    try { const r = await api('POST', '/api/backups', {}); toast('Backup created: ' + r.name); rerender(); }
+    catch (e) { toast('Backup failed: ' + e.message, true, 8000); }
+  },
+  async backupRestore(d) {
+    if (!confirm(`Restore the backup from ${d.time.replace('T', ' ')}?\n\nALL data will go back to that moment for every user. The current data is saved as a new backup first, so you can undo this.`)) return;
+    try {
+      const r = await api('POST', '/api/backups/restore', { name: d.name });
+      await load(); rerender();
+      toast('Backup restored. Previous data saved as ' + r.safety, false, 8000);
+    } catch (e) { toast('Restore failed: ' + e.message, true, 8000); }
+  },
+  async trashRestore(d) {
+    try { await api('POST', '/api/trash/restore', { txn: d.txn }); await load(); rerender(); toast('Records restored'); }
+    catch (e) { toast('Restore failed: ' + e.message, true, 8000); }
+  },
+  logTab: d => { F.log = { tab: d.tab, q: '', user: '', type: '', area: '', from: '', to: '' }; rerender(); },
+  logRefresh: () => rerender(),
+  logClear: () => { F.log = { tab: F.log.tab, q: '', user: '', type: '', area: '', from: '', to: '' }; rerender(); },
+  async logMore(d, el) {
+    el.disabled = true;
+    try {
+      const r = await logQuery(LOGDATA.rows.length);
+      LOGDATA.rows.push(...r.rows);
+      $('[data-async=logTable]').innerHTML = logTableHTML();
+    } catch (e) { el.disabled = false; toast(e.message, true); }
+  },
+  async logExport() {
+    const audit = F.log.tab === 'audit', rows = [];
+    try {
+      for (let off = 0; off < 50000; off += 1000) {
+        const r = await logQuery(off, 1000);
+        rows.push(...r.rows);
+        if (rows.length >= r.total || !r.rows.length) break;
+      }
+    } catch (e) { return toast('Export failed: ' + e.message, true); }
+    if (audit) exportXLSX('data_changes_log', ['Time', 'User', 'IP', 'Action', 'Table', 'Record ID', 'Break Area', 'Operation', 'Changes / Record'],
+      rows.map(r => [r.ts, r.user, r.ip, r.label, ENTITY_NAME[r.entity] || r.entity, r.entity_id, (area(r.area_id) || {}).name || r.area_id || '', (OP_BADGE[r.op] || [r.op])[0], r.op === 'update' ? r.changes : r.after || r.before]), 'Data Changes');
+    else exportXLSX('user_activity_log', ['Time', 'User', 'IP', 'Type', 'Action', 'Target', 'Page', 'Detail'],
+      rows.map(r => [r.ts, r.user, r.ip, r.type, r.action, r.target, r.page, r.detail]), 'User Activity');
+  }
 };
 
 document.addEventListener('click', e => {
@@ -1211,18 +1847,26 @@ function onFilter(e) {
   const target = $(`[data-results="${el.dataset.res}"]`);
   if (target) RESULTS[el.dataset.res](target);
 }
-document.addEventListener('input', onFilter);
+let logTimer;
+function onLogFilter(e) {
+  const el = e.target;
+  if (!el.dataset || !el.dataset.logf) return;
+  F.log[el.dataset.logf] = el.value;
+  clearTimeout(logTimer);
+  logTimer = setTimeout(() => {
+    const t = $('[data-async=logTable]');
+    if (t) ASYNC.logTable(t).catch(err => toast(err.message, true));
+  }, e.type === 'input' ? 350 : 0);
+}
+document.addEventListener('input', e => { onFilter(e); if (e.target.tagName === 'INPUT' && e.target.type !== 'date') onLogFilter(e); });
 document.addEventListener('change', async e => {
   onFilter(e);
+  if (e.target.dataset.f) track('filter', e.target.dataset.f, e.target.value);
+  if (e.target.dataset.logf && (e.target.tagName === 'SELECT' || e.target.type === 'date')) onLogFilter(e);
   if (e.target.dataset.actChange === 'importBackup') {
     const f = e.target.files[0];
-    if (!f) return;
-    try {
-      const data = JSON.parse(await f.text());
-      if (!data.areas || !data.settings) throw new Error('invalid');
-      if (!confirm(`Import backup with ${data.areas.length} break areas? Current data will be replaced.`)) return;
-      DB = data; save(); rerender(); toast('Backup imported');
-    } catch (err) { toast('Invalid backup file', true); }
+    e.target.value = '';
+    if (f) await importOldBackup(f);
   }
 });
 
@@ -1234,15 +1878,75 @@ document.addEventListener('submit', async e => {
     const d = Object.fromEntries(new FormData(f));
     Object.assign(DB.settings, {
       systemName: d.systemName.trim() || 'Break Area Management System', factory: d.factory.trim(), logoText: d.logoText.trim(),
-      userName: d.userName.trim() || 'User', userRole: d.userRole.trim(), inspectionDays: Math.max(1, +d.inspectionDays || 30),
+      inspectionDays: Math.max(1, +d.inspectionDays || 30), satisfactionTarget: Math.min(100, Math.max(1, +d.satisfactionTarget || 80)),
       locations: d.locations.split('\n').map(x => x.trim()).filter(Boolean)
     });
-    if (f.logo.files[0]) DB.settings.logoImage = await resizeImage(f.logo.files[0], 400);
-    if (save()) { rerender(); toast('Settings saved'); }
+    if (f.logo.files[0]) {
+      try { DB.settings.logoImage = await uploadFile(await resizeImage(f.logo.files[0], 400, true), 'logo.jpg'); }
+      catch (err) { return toast('Logo upload failed: ' + err.message, true); }
+    }
+    if (await save('Edit settings')) { rerender(); toast('Settings saved'); }
   }
 });
-document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
-window.addEventListener('hashchange', () => { F.hist = { item: '', action: '' }; F.photoTab = 'All'; render(); scrollTo(0, 0); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#modal').dataset.locked) closeModal(); });
+window.addEventListener('hashchange', () => {
+  F.hist = { item: '', action: '' }; F.photoTab = 'All';
+  track('navigate', location.hash);
+  render(); scrollTo(0, 0);
+});
 
-load();
-render();
+/* Hover tooltip for chart points and bars ([data-tip]) */
+const TIP = document.createElement('div');
+TIP.id = 'tip';
+document.body.appendChild(TIP);
+document.addEventListener('mouseover', e => {
+  const el = e.target.closest('[data-tip]');
+  TIP.classList.toggle('show', !!el);
+  if (el) TIP.textContent = el.dataset.tip;
+});
+document.addEventListener('mousemove', e => {
+  if (!TIP.classList.contains('show')) return;
+  const x = Math.min(e.clientX + 14, innerWidth - TIP.offsetWidth - 8);
+  TIP.style.transform = `translate(${x}px, ${e.clientY + 16}px)`;
+});
+
+/* Pick up changes made on other PCs (only when the user is not in the middle of something) */
+setInterval(async () => {
+  if (!DB || document.hidden || $('#modal').classList.contains('open')) return;
+  if (/^#\/(areas\/new|settings)/.test(location.hash)) return;
+  const ae = document.activeElement;
+  if (ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName) && ae.closest('#view')) return;
+  try {
+    const { version } = await api('GET', '/api/version');
+    if (version !== DB.version) { await load(); rerender(); }
+  } catch (e) { /* server briefly unreachable – try again next time */ }
+}, 10000);
+
+async function boot() {
+  try { await load(); }
+  catch (e) {
+    $('#view').innerHTML = `<div class="card welcome"><div class="kic">${ic('alert')}</div><h2>Cannot connect to the server</h2>
+      <p>${esc(e.message)}</p><p class="hint">Start the system with <b>start.bat</b> on the server PC, then open the address shown in its window.
+      Opening index.html directly from the folder does not work.</p></div>`;
+    return;
+  }
+  if (!DB.initialized && !DB.areas.length) {
+    try {
+      const r = await api('POST', '/api/first-run', {});
+      if (r.loadSample) await loadSample();
+      else await load(); // another PC is loading it right now
+    } catch (e) { /* the welcome screen offers "Load Sample Data" */ }
+  }
+  render();
+  if (!me()) userModal(true);
+  track('session', 'open', navigator.userAgent);
+  try {
+    const info = await api('GET', '/api/info');
+    // QR codes must point to an address phones can reach, not "localhost"
+    if (/^(localhost|127\.|\[::1\])/.test(location.hostname)) {
+      const lan = info.urls.find(u => /\/\/\d+\.\d+\.\d+\.\d+/.test(u)) || info.urls[0];
+      if (lan) { BASE_URL = lan; if (!$('#modal').classList.contains('open')) rerender(); }
+    }
+  } catch (e) { /* QR falls back to the current address */ }
+}
+boot();
