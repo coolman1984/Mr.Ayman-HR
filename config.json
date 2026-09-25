@@ -7,5 +7,10 @@
   "backup_interval_hours": 6,
   "keep_auto_backups": 200,
   "max_upload_mb": 50,
-  "open_browser": true
+  "open_browser": true,
+  "session_idle_minutes": 30,
+  "session_max_hours": 12,
+  "max_failed_logins": 5,
+  "lockout_minutes": 15,
+  "min_password_length": 8
 }
