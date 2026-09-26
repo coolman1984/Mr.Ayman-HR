@@ -10,7 +10,8 @@ tick boxes, what each person may see and do. Everything each person does is reco
 1. On the **server PC** (the PC running `start.bat`) the browser opens by itself.
 2. Enter your full name, a user name (e.g. `ayman`) and a password, then click **Create Administrator**.
 
-> This screen only works on the server PC. Other PCs see "System not set up yet" until it is done.
+> This screen only works on the PC itself. The PC where the first administrator is created becomes the
+> **administrator PC**. Other PCs are added later with **Devices & Sync → Add a PC** (see GUIDE_Devices_Sync.md).
 
 ---
 
@@ -33,7 +34,11 @@ tick boxes, what each person may see and do. Everything each person does is reco
 | Maintenance Team | Sees break areas and maintenance, follows up issues, completes maintenance |
 | Viewer | Sees everything and runs the reports, changes nothing |
 
-Changes to a user apply **immediately**, even if that person is logged in right now.
+Changes to a user apply **immediately**, even if that person is logged in right now – on other PCs as soon as they
+receive the change (a PC that is switched off applies it when it comes back).
+
+> **Several PCs:** users, passwords and permissions can only be changed on the **administrator PC** (open its address
+> in any browser). The other PCs show the list read-only. People change their *own* password on any PC.
 
 ---
 
@@ -44,7 +49,7 @@ Open the user (**Users & Permissions** → **Edit**):
 | Need | Button / field |
 |---|---|
 | Person forgot the password | **Reset Password** (new temporary password, logged out everywhere) |
-| Account locked after 5 wrong passwords | **Unlock** (or wait 15 minutes) |
+| Account locked after 5 wrong passwords | **Unlock** (or wait 15 minutes; lockouts count per PC) |
 | Throw someone out now | **Log Out Now** |
 | Block for a while (vacation, suspension) | **Account → Disabled** |
 | Person left the company | **Delete** (history stays in the logs, user name stays reserved) |
@@ -56,14 +61,17 @@ The list shows who is **online now**, the last login and badges such as *Locked*
 
 ## 4. Monitoring – who did what
 
-**Activity Log** (left menu) has three tabs:
+**Activity Log** (left menu) has three tabs, with the entries of **all PCs** and a **PC** column:
 
 - **Data Changes** – every added, changed or deleted record with the old and new values.
 - **User Activity & Errors** – pages opened, clicks, exports, saves, refused attempts ("denied").
 - **Logins & Security** – logins, logouts, wrong passwords, lockouts, automatic logouts, password
   changes and every change to a user or their permissions (who changed what, and when).
 
-All tabs can be filtered by user, type and date and exported to Excel.
+All tabs can be filtered by user, type, PC and date and exported to Excel.
+
+*User Activity & Errors* and *Logins & Security* are **administrator-only**: they need "Manage users" in addition
+to their own tick. This is checked by the server for every request, not only hidden in the menu.
 
 ---
 
@@ -80,5 +88,5 @@ All tabs can be filtered by user, type and date and exported to Excel.
 
 ## 6. Administrator password lost
 
-On the **server PC** double-click **reset_admin.bat**. It shows a new temporary password for the
+On the **administrator PC** double-click **reset_admin.bat**. It shows a new temporary password for the
 administrator account. Log in with it and choose a new password. This action is recorded in the security log.

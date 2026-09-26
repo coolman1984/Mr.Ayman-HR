@@ -2,10 +2,9 @@
 login on the second PC, permissions, live changes, sync light, Devices & Sync, conflicts and logs.
 Skipped when Playwright is not installed (it is only needed for testing, never at runtime)."""
 import os
-import time
 import unittest
 
-from harness import TcpProxy, Server, wait_until
+from harness import Server, wait_until
 
 try:
     from playwright.sync_api import sync_playwright

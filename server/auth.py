@@ -751,47 +751,11 @@ class UserFolder:
             self.conn.execute('DELETE FROM sessions WHERE user_id=?', (uid,))
 
 
-def _reset_admin():
-    """Emergency access from the server PC: give an administrator a new temporary password."""
-    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    cfg_path = os.environ.get('BAMS_CONFIG') or os.path.join(root, 'config.json')
-    cfg = {}
-    if os.path.exists(cfg_path):
-        with open(cfg_path, encoding='utf-8') as f:
-            cfg = json.load(f)
-    data_dir = cfg.get('data_dir', 'data')
-    data_dir = data_dir if os.path.isabs(data_dir) else os.path.join(root, data_dir)
-    os.makedirs(data_dir, exist_ok=True)
-    a = Auth(data_dir, cfg)
-    pw = 'Reset-' + secrets.token_urlsafe(6).replace('_', 'x').replace('-', 'y') + '7'
-    admins = [a._user(r) for r in a.conn.execute('SELECT * FROM users WHERE deleted=0 ORDER BY created_at')]
-    admins = [u for u in admins if 'users.manage' in u['perms']]
-    if admins:
-        u = admins[0]
-        a.conn.execute('UPDATE users SET pw_hash=?, must_change=1, failed=0, locked_until=NULL, active=1, pw_changed_at=?, ver=ver+1 WHERE id=?',
-                       (hash_password(pw), now(), u['id']))
-        a._kill(u['id'])
-        name = u['username']
-    else:
-        name = 'admin'
-        while a.conn.execute('SELECT 1 FROM users WHERE username=?', (name,)).fetchone():
-            name += '1'
-        ts = now()
-        a.conn.execute('INSERT INTO users (id,username,full_name,title,pw_hash,perms,role,must_change,pw_changed_at,created_at,created_by,updated_at,updated_by) '
-                       'VALUES (?,?,?,?,?,?,?,1,?,?,?,?,?)',
-                       (uuid.uuid4().hex, name, 'Administrator', 'System Administrator', hash_password(pw), json.dumps(ALL), 'Administrator',
-                        ts, ts, 'reset-admin', ts, 'reset-admin'))
-    a.log('Server PC', '127.0.0.1', 'admin-reset', name, 'Emergency password reset from the server PC (reset_admin.bat)')
-    print('=' * 64)
-    print(' Administrator access restored')
-    print(f' User name:          {name}')
-    print(f' Temporary password: {pw}')
-    print(' Log in with it now - you will be asked to choose a new password.')
-    print('=' * 64)
-
-
 if __name__ == '__main__':
     if sys.argv[1:] == ['reset-admin']:
-        _reset_admin()
+        # emergency access: see server/nodectl.py (works on the administrator PC and signs the change)
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import nodectl
+        sys.exit(nodectl.cmd_reset_admin())
     else:
         print('Usage: python server/auth.py reset-admin')

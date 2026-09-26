@@ -104,6 +104,77 @@ class Base(unittest.TestCase):
         self.proxies[i].restore()
 
 
+class T00_DefinitionOfSuccess(Base):
+    """The acceptance scenario: three PCs, the administrator PC switched off, two users keep working (with photos),
+    one user PC switched off, the administrator PC returns, then the last PC returns - everything converges."""
+    N = 3
+
+    def test_acceptance_story(self):
+        A, U1, U2 = self.servers
+        ac = self.ac
+        # users with limited rights, created on the administrator PC
+        for name, pw in (('ali', 'Tree-green42'), ('mona', 'Sky-blue7700')):
+            ac.post('/api/users/save', {'username': name, 'full_name': name.title(), 'password': pw, 'must_change': False, 'role': 'Data Entry',
+                                        'perms': ['dashboard.view', 'areas.view', 'areas.create', 'areas.edit', 'inventory.edit', 'files.upload',
+                                                  'files.download', 'issues.create'], 'areas': None})
+        ac.post('/api/commit', {'label': 'start', 'ops': [area_op('S1', 'Main canteen', capacity=40)]})
+        move(ac, 'S1', 'chairs', 30)
+        self.converged()
+        # 1. administrator PC switched off
+        A.stop()
+        ali, mona = U1.client(), U2.client()
+        ali.login('ali', 'Tree-green42')
+        mona.login('mona', 'Sky-blue7700')
+        # 2. both keep working, including attachments
+        img = os.urandom(200_000)
+        up = ali.call('POST', '/api/upload?name=canteen.jpg', raw=img, headers={'Content-Type': 'application/octet-stream'})
+        ali.post('/api/commit', {'label': 'photo', 'ops': [{'e': 'photos', 'id': 'sp1', 'op': 'put', 'row': {'areaId': 'S1', 'src': up['src'], 'caption': 'New'}}]})
+        move(ali, 'S1', 'chairs', -4)
+        edit(ali, 'S1', description='painted')
+        mona.post('/api/commit', {'label': 'new area', 'ops': [area_op('S2', 'Warehouse corner')]})
+        move(mona, 'S1', 'chairs', 6)
+        edit(mona, 'S1', capacity=44)
+        wait_until(lambda: get_area(mona, 'S1')['description'] == 'painted' and get_area(ali, 'S2'), 30, what='user PCs share without admin')
+        # the audit trail is recorded locally with user and PC
+        self.assertTrue(any(r['user'].startswith('Ali') for r in self.clients[1].get('/api/audit?limit=50')['rows']))
+        # 3. one user PC switched off; work continues on the other one
+        U2.stop()
+        edit(ali, 'S2', responsible='Ali')
+        # 4. administrator PC starts again and syncs with the remaining user PC
+        A.start()
+        admin = self.relogin(0)
+        wait_until(lambda: (get_area(admin, 'S2') or {}).get('responsible') == 'Ali', 60, what='admin catches up with pc1')
+        # 5. the last PC returns
+        U2.start()
+        self.relogin(2)
+        self.relogin(1)
+        self.converged()
+        # ---- after convergence
+        for c in self.clients:
+            s1 = get_area(c, 'S1')
+            self.assertEqual(next(i['qty'] for i in s1['inventory'] if i['item'] == 'chairs'), 32)  # 30 - 4 + 6: nothing lost
+            self.assertEqual((s1['description'], s1['capacity']), ('painted', 44))
+            self.assertEqual(get_area(c, 'S2')['responsible'], 'Ali')
+            self.assertEqual(s1['photos'][0]['src'], up['src'])
+        for s in self.servers:  # the photo reached every PC and matches
+            wait_until(lambda: os.path.exists(os.path.join(s.data_dir, 'uploads', 'cas', os.path.basename(up['src']))), 60, what='photo copied')
+            self.assertEqual(open(os.path.join(s.data_dir, 'uploads', 'cas', os.path.basename(up['src'])), 'rb').read(), img)
+        perms = [json.dumps(sorted((u['username'], u['perms'], u['active']) for u in c.get('/api/users')['users']), sort_keys=True) for c in self.clients]
+        self.assertEqual(len(set(perms)), 1, 'user permissions agree')
+        nodes = {r['node_name'] for r in self.clients[0].get('/api/audit?limit=1000')['rows']}
+        self.assertEqual(nodes, {'admin', 'pc1', 'pc2'}, 'history from every PC is visible to the administrator')
+        logins = {r['node_name'] for r in self.clients[0].get('/api/security?type=login&limit=1000')['rows']}
+        self.assertTrue({'pc1', 'pc2'} <= logins)
+        for c in self.clients:
+            self.assertTrue(c.post('/api/devices/verify', {'all': True})['ok'], 'log chains verify')
+        m2 = self.servers[2].client()
+        m2.login('mona', 'Sky-blue7700')
+        for path in ('/api/devices', '/api/security', '/api/activity', '/api/conflicts'):
+            with self.assertRaises(ApiError) as e:
+                m2.get(path)
+            self.assertEqual(e.exception.code, 403)
+
+
 class T01_SingleNode(unittest.TestCase):
     def test_fresh_single_pc(self):
         """1. A fresh installation works alone exactly like before (no devices, indicator hidden)."""

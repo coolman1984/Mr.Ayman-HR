@@ -316,5 +316,40 @@ class NodeSafetyTest(unittest.TestCase):
             shutil.rmtree(d)
 
 
+class ToolsTest(unittest.TestCase):
+    def test_rebuild_gives_identical_data(self):
+        """Disaster recovery: bams.db re-created from the history is exactly the same data."""
+        import subprocess
+        import sys
+        from make_legacy import build
+        d = tempfile.mkdtemp()
+        try:
+            data = os.path.join(d, 'data')
+            build(data)
+            cfg = os.path.join(d, 'config.json')
+            json.dump({'data_dir': data, 'backup_dir': os.path.join(d, 'bk')}, open(cfg, 'w'))
+            env = dict(os.environ, BAMS_CONFIG=cfg)
+            tool = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'server', 'nodectl.py')
+            fp1 = subprocess.run([sys.executable, tool, 'status'], env=env, capture_output=True, text=True).stdout.split('fingerprint:')[1].strip()
+            out = subprocess.run([sys.executable, tool, 'rebuild'], env=env, capture_output=True, text=True)
+            self.assertEqual(out.returncode, 0, out.stderr)
+            fp2 = subprocess.run([sys.executable, tool, 'status'], env=env, capture_output=True, text=True).stdout.split('fingerprint:')[1].strip()
+            self.assertEqual(fp1, fp2)
+            self.assertEqual(subprocess.run([sys.executable, tool, 'verify'], env=env, capture_output=True).returncode, 0)
+        finally:
+            shutil.rmtree(d)
+
+    def test_key_export_protection(self):
+        import nodectl
+        secret = os.urandom(32)
+        box = nodectl.seal(secret, 'a long passphrase 1', {'cluster': 'c'})
+        self.assertEqual(nodectl.unseal(box, 'a long passphrase 1'), secret)
+        with self.assertRaises(ValueError):
+            nodectl.unseal(box, 'a long passphrase 2')
+        box['ct'] = ('00' if box['ct'][:2] != '00' else '11') + box['ct'][2:]
+        with self.assertRaises(ValueError):
+            nodectl.unseal(box, 'a long passphrase 1')
+
+
 if __name__ == '__main__':
     unittest.main()
