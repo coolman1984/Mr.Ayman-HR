@@ -232,11 +232,19 @@ Separate TLS port (`sync_port`, default 8443) served by the same process.
    validation as pull. Push makes one-directional firewalls work.
 7. `GET /sync/file?path=…` with `Range` → attachment bytes.
 
-Receiving rules (identical for pull and push): per origin only `cseq == have+1` is accepted
-(duplicates ignored, gaps deferred); `prev` must equal our head hash; all `deps` must already be
-present (causal delivery); the node must be in the roster; node signature must verify;
+Receiving rules (identical for pull and push, `Journal.receive`): a delivery is processed in
+several passes, so any order inside one delivery works; per origin only `cseq == have+1` is
+accepted (duplicates ignored, gaps wait); `prev` must equal our head hash; all `deps` must already
+be present (causal delivery); the node must be in the roster; the node signature must verify;
 `asig` must verify for `admin`. Same `(origin,cseq)` with a different hash = **fork alert**.
 Everything is idempotent: receiving the same changeset 1 or 100 times changes nothing.
+
+Deterministic refusals (`Journal._check`, identical on every PC, the refused changeset is still
+stored for forensics and keeps the chain going): malformed envelopes, `admin` without a valid
+administrator signature, `account` changes that touch anything but the actor's own password,
+`data` changes that touch users or devices, and changes a removed PC made *after it knew of its
+removal* (its version vector covers the revoking changeset). A removed PC is also refused at the
+transport level and told so.
 
 Peer manager: one worker per peer, every `sync_interval_seconds` (default 5) and immediately
 after a local save; failures back off 5 s → 5 min. "Offline" (connection refused / timeout) is
@@ -263,8 +271,11 @@ replicated). It is weak: a concurrent real change made on another PC that this P
 received wins over it (fields, deletes), inventory is restored as deltas. History is never
 rolled back; the pre-restore safety backup is still taken; a restore can be undone by
 restoring the safety backup. Disaster recovery of damaged files: `python server/nodectl.py
-rebuild` re-creates `bams.db` from the journal; a restored `journal.db` makes the node start a
-new epoch so its sequence numbers are never reused, and peers send back what it lost.
+rebuild` re-creates `bams.db` from the journal (tested: identical fingerprint); a restored
+`journal.db` makes the node start a new epoch so its sequence numbers are never reused, and peers
+send back what it lost. `nodectl.py export-authority / import-authority` moves the administrator
+key (scrypt + HMAC-SHA256 stream + HMAC tag, passphrase ≥ 12 characters) when the administrator PC
+is replaced.
 
 ## 12. Migration (upgrade in place)
 

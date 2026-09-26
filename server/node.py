@@ -18,7 +18,6 @@ import json
 import os
 import platform
 import secrets
-import uuid
 from datetime import datetime
 
 import ed25519
@@ -42,13 +41,26 @@ def write_atomic(path, data, mode=0o600):
 
 
 def machine_fingerprint():
-    """Something that changes when the data folder is copied to another PC."""
+    """Something that changes when the data folder is copied to another PC, but not when the network changes:
+    the Windows installation id (MachineGuid), /etc/machine-id elsewhere, plus the computer name."""
     override = os.environ.get('BAMS_MACHINE_ID')
     if override:
         return override
-    mac = uuid.getnode()
-    mac = '' if (mac >> 40) & 1 else f'{mac:012x}'  # bit set = random value, not a real network card
-    return f'{platform.node().lower()}|{mac}'
+    mid = ''
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r'SOFTWARE\Microsoft\Cryptography', 0,
+                            winreg.KEY_READ | getattr(winreg, 'KEY_WOW64_64KEY', 0)) as k:
+            mid = str(winreg.QueryValueEx(k, 'MachineGuid')[0])
+    except (ImportError, OSError):
+        for p in ('/etc/machine-id', '/var/lib/dbus/machine-id'):
+            try:
+                with open(p, encoding='ascii') as f:
+                    mid = f.read().strip()
+                    break
+            except OSError:
+                pass
+    return f'{platform.node().lower()}|{mid}'
 
 
 class Node:

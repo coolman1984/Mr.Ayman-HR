@@ -451,6 +451,10 @@ class Journal:
         kind, ops = env.get('kind'), env.get('ops')
         if kind not in KINDS or not isinstance(ops, list):
             return 'unknown kind of change'
+        if (not isinstance(env.get('hlc'), int) or isinstance(env.get('hlc'), bool) or env['hlc'] < 0
+                or not all(isinstance(env.get(k), str) for k in ('id', 'ts', 'actor', 'actor_id', 'ip', 'label', 'prev'))
+                or not all(isinstance(op, dict) for op in ops)):
+            return 'malformed change'
         if kind == 'admin':
             pub = self.node.authority_pub
             if not pub or not raw.get('a') or not ed25519.verify(pub, bytes.fromhex(h), _unhex(raw['a'])):
