@@ -16,6 +16,7 @@ import urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 APP = os.path.join(ROOT, 'server', 'app.py')
+sys.path.insert(0, os.path.join(ROOT, 'server'))
 
 
 def free_port():
@@ -215,7 +216,7 @@ class TcpProxy:
                 continue
             with self.lock:
                 self.conns += [c, s]
-            threading.Thread(target=self._pipe, args=(c, s, None), daemon=True).start()
+            threading.Thread(target=self._pipe, args=(c, s, self.cut_after), daemon=True).start()
             threading.Thread(target=self._pipe, args=(s, c, self.cut_after), daemon=True).start()
 
     def _pipe(self, a, b, limit):

@@ -52,6 +52,10 @@ class SyncError(Exception):
     """A problem with another PC that needs attention (wrong certificate, refused, broken history)."""
 
 
+class Revoked(SyncError):
+    """The other PC says the administrator removed this PC."""
+
+
 class Offline(Exception):
     """The other PC cannot be reached right now - completely normal when it is switched off."""
 
@@ -135,7 +139,7 @@ class Connection:
         self.peer_fp = fp
         self.conn = conn
 
-    def request(self, method, path, body=None, raw=False, headers=None):
+    def request(self, method, path, body=None, raw=False, headers=None, sink=None):
         data = b'' if body is None else json.dumps(body, ensure_ascii=False).encode('utf-8')
         h = {'Content-Type': 'application/json', 'Content-Length': str(len(data)), **(headers or {})}
         if self.session:
@@ -147,26 +151,50 @@ class Connection:
             try:
                 self.conn.request(method, path, body=data, headers=h)
                 resp = self.conn.getresponse()
+                if sink is not None and resp.status in (200, 206):
+                    return resp, self._stream(resp, sink)
                 payload = resp.read()
                 break
             except (http.client.RemoteDisconnected, BrokenPipeError, ConnectionResetError) as e:
                 self.close()
                 if attempt or self.session:  # never resend an authenticated request (its sequence number is used up)
                     raise Offline(str(e))
-            except OFFLINE_ERRORS as e:
+            except (http.client.HTTPException, *OFFLINE_ERRORS) as e:  # includes a response cut in the middle
                 self.close()
-                raise Offline(str(e))
+                raise Offline(f'{type(e).__name__}: {e}'[:300])
         self.bytes_out += len(data)
         self.bytes_in += len(payload)
         if resp.status >= 400:
             try:
-                msg = json.loads(payload).get('error') or resp.reason
+                err = json.loads(payload)
             except ValueError:
-                msg = resp.reason
+                err = {}
+            msg = err.get('error') or resp.reason
+            if err.get('revoked'):
+                raise Revoked(msg)
             raise SyncError(f'{resp.status}: {msg}')
         if raw:
             return resp, payload
         return json.loads(payload) if payload else {}
+
+    def _stream(self, resp, sink):
+        """Writes a download to the open file sink as it arrives, so an interrupted transfer keeps what it got."""
+        n = 0
+        try:
+            while True:
+                block = resp.read(65536)
+                if not block:
+                    break
+                sink.write(block)
+                n += len(block)
+        except (http.client.HTTPException, OSError) as e:
+            self.close()
+            raise Offline(f'transfer interrupted after {n} bytes: {e}')
+        finally:
+            sink.flush()
+            os.fsync(sink.fileno())
+            self.bytes_in += n
+        return n
 
     def login(self):
         me = self.svc.node
@@ -237,7 +265,7 @@ class Handler(BaseHTTPRequestHandler):
 
 class TLSServer(ThreadingHTTPServer):
     daemon_threads = True
-    allow_reuse_address = False
+    allow_reuse_address = os.name != 'nt'  # Windows: reuse would let a second copy share the port silently; elsewhere it only skips TIME_WAIT
 
     def __init__(self, addr, svc, ctx):
         self.svc = svc
@@ -425,6 +453,11 @@ class SyncService:
         except Offline as e:
             st.update(state='offline', fails=st.get('fails', 0) + 1, last_error=str(e)[:300], error_kind='offline')
             rep['result'] = 'offline'
+        except Revoked as e:
+            self.journal.alert('revoked', 'The administrator removed this PC from the system. It no longer exchanges data with the other PCs.',
+                               self.node.id, key='revoked|self')
+            st.update(state='error', fails=st.get('fails', 0) + 1, last_error=str(e)[:300], error_kind='revoked')
+            rep['result'] = 'revoked'
         except SyncError as e:
             st.update(state='error', last_seen=now() if c.conn else st.get('last_seen'), fails=st.get('fails', 0) + 1,
                       last_error=str(e)[:500], error_kind='error')
@@ -507,11 +540,14 @@ class SyncService:
                     done += 1
                     with self.lock:
                         self.missing.pop(src, None)
-            except SyncError as e:
+            except (SyncError, Offline) as e:
                 with self.lock:
                     m = self.missing.setdefault(src, {'tries': 0})
                     m['tries'] += 1
                     m['last_error'] = str(e)[:200]
+                self.sync_logger.write({'event': 'file', 'path': src, 'result': 'interrupted', 'error': str(e)[:200]})
+                if isinstance(e, Offline):
+                    break  # the connection is gone; what was received stays in the .part file
         return done
 
     def fetch_file(self, c, src, sha, size):
@@ -525,19 +561,26 @@ class SyncService:
             os.remove(part)
             have = 0
         headers = {'Range': f'bytes={have}-'} if have else {}
-        resp, data = c.request('GET', '/sync/file?path=' + quote(src), raw=True, headers=headers)
-        if resp.status == 204:
-            return False  # that PC does not have it either
-        if have and resp.status != 206:
-            have = 0
-            with open(part, 'wb'):
-                pass
-        with open(part, 'ab' if have else 'wb') as f:
-            f.write(data)
-            f.flush()
-            os.fsync(f.fileno())
+        with open(part, 'ab') as f:
+            try:
+                resp, _ = c.request('GET', '/sync/file?path=' + quote(src), raw=True, headers=headers, sink=f)
+            except Offline:
+                c.close()
+                raise
+            if resp.status == 204:
+                return False  # that PC does not have it either
+            if have and resp.status == 200:  # the other PC ignored the range: start again
+                f.close()
+                with open(part, 'rb') as g:
+                    g.seek(have)
+                    rest = g.read()
+                with open(part, 'wb') as g:
+                    g.write(rest)
+                    g.flush()
+                    os.fsync(g.fileno())
         total = os.path.getsize(part)
         if size is not None and total < size:
+            self.sync_logger.write({'event': 'file', 'path': src, 'result': 'interrupted', 'bytes': total, 'size': size})
             return False  # interrupted - continue next time
         h = hashlib.sha256()
         with open(part, 'rb') as f:
@@ -630,7 +673,7 @@ class SyncService:
         if n.get('status') != 'active':
             self.journal.alert('revoked-pc', f'The removed PC {n.get("name")} ({ip}) tried to synchronise and was refused.', n['id'], 'warning',
                                key=f'revoked-try|{n["id"]}')
-            return 403, {'error': 'This PC was removed from the system by the administrator.'}, 'application/json', {}
+            return 403, {'error': 'This PC was removed from the system by the administrator.', 'revoked': True}, 'application/json', {}
         msg = f'BAMS-SESSION1|{self.node.id}|{n["id"]}|{d.get("challenge")}'.encode()
         try:
             ok = ed25519.verify(bytes.fromhex(n['pub']), msg, bytes.fromhex(str(d.get('sig'))))

@@ -113,7 +113,8 @@ class Journal:
             CREATE TABLE IF NOT EXISTS heads (origin TEXT PRIMARY KEY, node TEXT NOT NULL, cseq INTEGER NOT NULL, hash TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS nodes (
                 id TEXT PRIMARY KEY, name TEXT, pub TEXT, cert_fp TEXT, address TEXT, status TEXT, role TEXT,
-                enrolled_at TEXT, enrolled_by TEXT, revoked_at TEXT, revoked_by TEXT, updated_at TEXT, updated_by TEXT);
+                enrolled_at TEXT, enrolled_by TEXT, revoked_at TEXT, revoked_by TEXT, updated_at TEXT, updated_by TEXT,
+                revoked_change TEXT);
             CREATE TABLE IF NOT EXISTS audit (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, lsn INTEGER, origin TEXT, cseq INTEGER, node TEXT, kind TEXT, ts TEXT,
                 txn TEXT, user TEXT, user_id TEXT, ip TEXT, label TEXT, entity TEXT, entity_id TEXT, area_id TEXT, op TEXT,
@@ -143,6 +144,8 @@ class Journal:
                 confirm TEXT, status TEXT, created_at TEXT, decided_at TEXT, decided_by TEXT, secret TEXT);
             CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
         ''')
+        if 'revoked_change' not in {r[1] for r in self.conn.execute('PRAGMA table_info(nodes)')}:
+            self.conn.execute('ALTER TABLE nodes ADD COLUMN revoked_change TEXT')
 
     # ------------------------------------------------------------ small helpers
     def vv(self):
@@ -296,6 +299,8 @@ class Journal:
                                                              'enrolled_by', 'revoked_at', 'revoked_by')}
             if not c.execute('SELECT 1 FROM nodes WHERE id=?', (op['id'],)).fetchone():
                 c.execute('INSERT INTO nodes (id) VALUES (?)', (op['id'],))
+            if s.get('status') == 'revoked':
+                s['revoked_change'] = f'{env["origin"]}#{env["cseq"]}'  # changes that had seen this are refused (see _consider)
             if s:
                 c.execute(f'UPDATE nodes SET {", ".join(k + "=?" for k in s)}, updated_at=?, updated_by=? WHERE id=?',
                           (*[str(v) if v is not None else None for v in s.values()], env['ts'], env['actor'], op['id']))
@@ -335,12 +340,13 @@ class Journal:
     # ------------------------------------------------------------ receiving from other PCs
     def receive(self, records, via=''):
         """Validates and stores changesets from another PC. Returns (accepted records, deferred count, problems)."""
-        accepted, deferred, problems = [], 0, []
+        accepted, problems = [], []
         with self.lock:
             heads = {o: (h[0], h[1]) for o, h in self.heads.items()}
             roster = {n['id']: n for n in self.roster().values()}
             batch_hash = {}
             blocked = set()
+            pending = []
             for raw in records:
                 try:
                     body = raw['b']
@@ -354,73 +360,91 @@ class Journal:
                     problems.append(f'unreadable change from {via}: {e}')
                     self.alert('bad-data', f'Unreadable change received from {via}: {e}', via)
                     break
-                if origin in blocked:
-                    continue
-                if env.get('v') != VERSION:
-                    deferred += 1
-                    blocked.add(origin)
-                    self.alert('version', f'A change from PC {node} needs a newer version of this program.', node, 'warning', key=f'version|{node}')
-                    continue
-                h = chash(body)
-                have, have_hash = heads.get(origin, (0, ZERO))
-                if cseq <= have:
-                    known = batch_hash.get((origin, cseq)) or self.hash_at(origin, cseq)
-                    if known != h:
-                        blocked.add(origin)
-                        problems.append(f'fork {origin}#{cseq}')
-                        self.alert('fork', f'PC {node} has two different histories (change #{cseq}). Its data folder may have been '
-                                   'copied to another PC or edited.', node, key=f'fork|{origin}')
-                    continue
-                if cseq != have + 1:
-                    deferred += 1
-                    blocked.add(origin)
-                    continue
-                if env.get('prev') != have_hash:
-                    blocked.add(origin)
-                    problems.append(f'chain {origin}#{cseq}')
-                    self.alert('fork', f'The history of PC {node} does not continue the copy stored here (change #{cseq}).', node,
-                               key=f'fork|{origin}')
-                    continue
-                deps = env.get('deps') or {}
-                if not isinstance(deps, dict) or any(heads.get(o, (0,))[0] < c for o, c in deps.items() if o != origin):
-                    deferred += 1
-                    blocked.add(origin)
-                    continue
-                n = roster.get(node)
-                if (not n or not n.get('pub')) and env.get('kind') == 'admin' and self._check(env, raw, h) == 'ok':
-                    # the administrator PC's own first change enrols itself: trust the key it carries
-                    n = next(({'id': node, **op['s']} for op in env['ops'] if isinstance(op, dict) and op.get('e') == 'nodes'
-                              and op.get('id') == node and isinstance(op.get('s'), dict) and op['s'].get('pub')), n)
-                if not n or not n.get('pub'):
-                    deferred += 1
-                    blocked.add(origin)
-                    continue
-                if not ed25519.verify(bytes.fromhex(n['pub']), bytes.fromhex(h), _unhex(raw.get('s'))):
-                    blocked.add(origin)
-                    problems.append(f'signature {origin}#{cseq}')
-                    self.alert('signature', f'A change said to come from PC {n.get("name") or node} has an invalid signature '
-                               f'(received from {via}).', node, key=f'signature|{origin}|{via}')
-                    continue
-                status = self._check(env, raw, h)
-                if status != 'ok':
-                    self.alert('rejected', f'A change from PC {n.get("name") or node} was refused: {status}', node)
-                rec = {'env': env, 'body': body, 'hash': h, 'sig': raw.get('s'), 'asig': raw.get('a'), 'status': 'ok' if status == 'ok' else 'rejected',
-                       'note': None if status == 'ok' else status}
-                accepted.append(rec)
-                heads[origin] = (cseq, h)
-                batch_hash[(origin, cseq)] = h
-                if rec['status'] == 'ok' and env['kind'] == 'admin':
-                    for op in env['ops']:
-                        if op.get('e') == 'nodes' and isinstance(op.get('s'), dict):
-                            roster.setdefault(op['id'], {'id': op['id']}).update(op['s'])
-                if not self.clock.observe(env['hlc']):
-                    self.alert('clock', f'The clock of PC {n.get("name") or node} is more than one hour ahead. Please correct its date '
-                               'and time.', node, 'warning', key=f'clock|{node}')
+                pending.append((raw, env, body, chash(body)))
+            # several passes, so changes that arrive in any order within one delivery are still taken in the right order
+            progress = True
+            while progress and pending:
+                progress, waiting = False, []
+                for item in pending:
+                    verdict = self._consider(item, heads, roster, batch_hash, blocked, accepted, problems, via)
+                    if verdict == 'wait':
+                        waiting.append(item)
+                    elif verdict == 'accept':
+                        progress = True
+                pending = waiting
+            deferred = len(pending) + sum(1 for x in problems if x.startswith('version'))
             if accepted:
                 self._append(accepted, via)
         if accepted:
             self._notify(accepted)
         return accepted, deferred, problems
+
+    def _consider(self, item, heads, roster, batch_hash, blocked, accepted, problems, via):
+        """One received changeset: 'accept', 'drop' (duplicate or refused) or 'wait' (something it needs is missing)."""
+        raw, env, body, h = item
+        origin, cseq, node = env['origin'], env['cseq'], env['node']
+        if origin in blocked:
+            return 'drop'
+        if env.get('v') != VERSION:
+            blocked.add(origin)
+            problems.append(f'version {origin}')
+            self.alert('version', f'A change from PC {node} needs a newer version of this program.', node, 'warning', key=f'version|{node}')
+            return 'drop'
+        have, have_hash = heads.get(origin, (0, ZERO))
+        if cseq <= have:
+            known = batch_hash.get((origin, cseq)) or self.hash_at(origin, cseq)
+            if known != h:
+                blocked.add(origin)
+                problems.append(f'fork {origin}#{cseq}')
+                self.alert('fork', f'PC {node} has two different histories (change #{cseq}). Its data folder may have been '
+                           'copied to another PC or edited.', node, key=f'fork|{origin}')
+            return 'drop'
+        if cseq != have + 1:
+            return 'wait'
+        if env.get('prev') != have_hash:
+            blocked.add(origin)
+            problems.append(f'chain {origin}#{cseq}')
+            self.alert('fork', f'The history of PC {node} does not continue the copy stored here (change #{cseq}).', node, key=f'fork|{origin}')
+            return 'drop'
+        deps = env.get('deps') or {}
+        if not isinstance(deps, dict) or any(not isinstance(c, int) or heads.get(o, (0,))[0] < c for o, c in deps.items() if o != origin):
+            return 'wait'
+        n = roster.get(node)
+        if (not n or not n.get('pub')) and env.get('kind') == 'admin' and self._check(env, raw, h) == 'ok':
+            # the administrator PC's own first change enrols itself: trust the key it carries
+            n = next(({'id': node, **op['s']} for op in env['ops'] if isinstance(op, dict) and op.get('e') == 'nodes'
+                      and op.get('id') == node and isinstance(op.get('s'), dict) and op['s'].get('pub')), n)
+        if not n or not n.get('pub'):
+            return 'wait'
+        if not ed25519.verify(bytes.fromhex(n['pub']), bytes.fromhex(h), _unhex(raw.get('s'))):
+            blocked.add(origin)
+            problems.append(f'signature {origin}#{cseq}')
+            self.alert('signature', f'A change said to come from PC {n.get("name") or node} has an invalid signature '
+                       f'(received from {via}).', node, key=f'signature|{origin}|{via}')
+            return 'drop'
+        status = self._check(env, raw, h)
+        rc = n.get('revoked_change') if n.get('status') == 'revoked' else None
+        if status == 'ok' and rc:
+            r_origin, _, r_cseq = rc.rpartition('#')
+            if deps.get(r_origin, 0) >= int(r_cseq):  # made by a removed PC after it knew it was removed
+                status = 'made by a removed PC after it was removed'
+        if status != 'ok':
+            self.alert('rejected', f'A change from PC {n.get("name") or node} was refused: {status}', node)
+        accepted.append({'env': env, 'body': body, 'hash': h, 'sig': raw.get('s'), 'asig': raw.get('a'),
+                         'status': 'ok' if status == 'ok' else 'rejected', 'note': None if status == 'ok' else status})
+        heads[origin] = (cseq, h)
+        batch_hash[(origin, cseq)] = h
+        if status == 'ok' and env['kind'] == 'admin':
+            for op in env['ops']:
+                if isinstance(op, dict) and op.get('e') == 'nodes' and isinstance(op.get('s'), dict):
+                    r = roster.setdefault(op.get('id'), {'id': op.get('id')})
+                    r.update(op['s'])
+                    if op['s'].get('status') == 'revoked':
+                        r['revoked_change'] = f'{origin}#{cseq}'
+        if isinstance(env.get('hlc'), int) and not self.clock.observe(env['hlc']):
+            self.alert('clock', f'The clock of PC {n.get("name") or node} is more than one hour ahead. Please correct its date '
+                       'and time.', node, 'warning', key=f'clock|{node}')
+        return 'accept'
 
     def _check(self, env, raw, h):
         """Rules every PC applies identically, so all PCs accept or refuse the same changes."""

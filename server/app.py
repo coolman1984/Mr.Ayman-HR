@@ -685,7 +685,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 class Server(ThreadingHTTPServer):
-    allow_reuse_address = False  # on Windows reuse would let a second copy share the port silently
+    allow_reuse_address = os.name != 'nt'  # Windows: reuse would let a second copy share the port silently; elsewhere it only skips TIME_WAIT
     daemon_threads = True
 
 
