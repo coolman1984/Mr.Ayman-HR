@@ -12,5 +12,10 @@
   "session_max_hours": 12,
   "max_failed_logins": 5,
   "lockout_minutes": 15,
-  "min_password_length": 8
+  "min_password_length": 8,
+  "device_name": "",
+  "sync_enabled": true,
+  "sync_port": 8443,
+  "sync_interval_seconds": 5,
+  "peer_addresses": {}
 }
