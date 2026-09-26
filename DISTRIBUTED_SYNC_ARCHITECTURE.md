@@ -186,16 +186,23 @@ The administrator resolves one by choosing a value (a normal change that dominat
   stored as *rejected* (for forensics), never applied, and raise an integrity alert.
   User management is therefore only possible on the administrator PC (any browser can open the
   administrator PC's address). Other PCs show it read-only with a link.
-* **Own password change** works on every PC (`account` changeset): the fold only accepts it for
-  `actor_id == user id` and only the password fields; a concurrent admin reset wins.
+* **Own password change** works on every PC (`account` changeset). Only the password fields of the
+  actor's own account may change, and the change must carry a **proof**: an Ed25519 signature made with a
+  key derived from the *old* password (PBKDF2, 600k rounds, salted with the user id). Its public half
+  (`pw_pub`) was published by the changeset that set the old password; the proof names that changeset and
+  every PC checks that it is the latest password the new change knew about. A PC — even one whose OS was
+  taken over — therefore cannot change somebody else's password (e.g. the administrator's) without knowing
+  it. A concurrent admin reset wins. Accounts from before the upgrade get their key the first time they
+  log in on the administrator PC (until then they change their password there).
 * **Offline login**: user records (including PBKDF2 hashes) are replicated to every PC.
   Sessions, failed-login counters and lockouts are local. Disable/delete/forced logout/unlock
   take effect on each PC when it receives the admin changeset (window = while it is offline).
 * **Node authentication**: each PC has an Ed25519 node key; the roster (admin changesets) pins
   its public key and TLS certificate fingerprint. Revoked PCs cannot open sync sessions.
-* **Enrolment**: short-lived single-use pairing code (contains an invite id, a secret and the
-  administrator PC's certificate fingerprint) + explicit approval by the administrator with a
-  6-digit confirmation code shown on both screens.
+* **Enrolment**: ONE short-lived single-use code typed on the new PC. It contains the administrator
+  PC's address, an 80-bit secret and 64 bits of its certificate fingerprint (39 characters). The new
+  PC proves the secret with an HMAC, recognises the real administrator PC by the fingerprint, and the
+  administrator approves after comparing a 6-digit confirmation number shown on both screens.
 
 **Threat model – protected against:** unknown PCs on the LAN (cannot join or sync), passive
 sniffing of sync traffic (TLS 1.3), active MITM between PCs (pinned certificates), replay of
@@ -204,6 +211,10 @@ administrator/permission changes (authority signatures), ordinary users reading 
 (server-side admin checks), silent edits/deletions of history (hash chains, signatures, copies
 on every PC, periodic verification), accidental folder copies (clone detection), restore
 rolling back audit (journal outside restore).
+
+**Denial of service hardening:** before a PC has a session, request bodies are limited to 64 kB (and not
+read at all for other paths), malformed lengths are refused, open challenges are capped per address,
+wrong pairing codes only raise one alert per address (they do not grow the permanent history).
 
 **Not protected against (documented residual risks):** a person with OS administrator rights on
 a PC can read that PC's data (including password hashes) and can make that PC sign arbitrary
@@ -303,6 +314,30 @@ On the first start of the new version:
 | `journal.db` rolled back / restored | new epoch; peers resend the lost tail |
 | forged admin change | rejected everywhere, alert |
 | tampered history | chain/signature verification fails, alert; peers hold intact copies |
+
+## 13a. Independent review (before the pull request)
+
+Two independent reviews (distributed correctness, security) were run against the finished code. Every
+verified finding was fixed and has a regression test (`tests/test_unit.py::ReviewFindingsTest`, …):
+
+| Finding | Fix |
+|---|---|
+| A local save between receiving and folding a remote change claimed to have "seen" it → divergence | `deps` = the fold markers of the database the change was planned on |
+| One impossible change (e.g. quantity 10^30) could stop folding forever | stricter deterministic validation; every non-environmental error skips that op on every PC; a saved change never reports an error |
+| A row kept alive against a restore's delete disappeared on the next edit | editing such a row writes an explicit "not deleted" |
+| A follower field (inspected-by, notes) could attach to the wrong leader | followers always travel with their leader |
+| Flag-only changes left the cached fingerprint stale | flags count as a change |
+| A journal restored older than the tables | tables rebuilt from the journal, the difference saved again as a new change |
+| Newer program versions' changes were rejected | `schema` in every changeset; newer ones wait until this PC is updated |
+| A pull problem stopped pushing to that peer | push and file copy continue, the problem is reported after |
+| A damaged relay copy looked like a fork | the signature is checked first |
+| Any PC could change another user's (the administrator's) password | password proof (section 8) |
+| Unauthenticated memory exhaustion, challenge lock-out, junk pairing requests in the history | limits in section 8 |
+| Non-administrators saw user-account records in the data changes log | account and PC records are administrator-only |
+
+Accepted and documented: two PCs restoring the *same* backup at the same time (or re-creating the
+same deleted inventory line) apply the quantity difference twice – the result is flagged when it goes
+below zero; up to 10 seconds of *click* activity (not data) can be lost on a power cut.
 
 ## 14. Observability
 

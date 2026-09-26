@@ -21,7 +21,10 @@ A company with only one PC does not need any of this – everything works as bef
 
 ---
 
-## 2. The sync light (top bar, every user)
+## 2. The sync light (top bar, administrators only)
+
+Normal users do not see anything about sharing – they just work. Only if there is a real problem they see
+one short message: **“Please tell the administrator”**. The administrator sees this light:
 
 | Light | Meaning | What to do |
 |---|---|---|
@@ -30,7 +33,7 @@ A company with only one PC does not need any of this – everything works as bef
 | ⚪ **Working on this PC** | The other PCs are switched off or out of reach. Your work is saved here and will be shared later. | Nothing. This is normal when other PCs are off. |
 | 🔴 **Needs attention** | A real problem (wrong PC, damaged history, repeated errors). Your work on this PC is still saved. | Tell the administrator. |
 
-With only one PC the light is not shown.
+With only one PC the light is not shown to anybody.
 
 ---
 
@@ -41,11 +44,12 @@ With only one PC the light is not shown.
 2. Start **start.bat** on the new PC. Windows may ask to allow Python through the firewall: allow it on the
    **private / domain** network (the PCs talk to each other on port **8443**).
 3. The browser opens. Choose **Join an existing system**.
-4. On the **administrator PC** open **Devices & Sync → Add a PC**. It shows the administrator PC's address
-   (e.g. `192.168.1.10:8443`) and a **pairing code**. The code works once and for 15 minutes.
-5. On the new PC type the address, the pairing code and a name for the PC (e.g. “HR Office”), then
-   **Send Join Request**. It shows a **6-digit confirmation number**.
-6. On the administrator PC the request appears under **PCs asking to join** with a confirmation number.
+4. On the **administrator PC** open **Devices & Sync → Add a PC**. It shows one **code**
+   (works once, for 15 minutes).
+5. On the new PC type the code and a name for the PC (e.g. “HR Office”), then press **Join**.
+   It shows a **6-digit number**. (Only if the new PC cannot find the administrator PC by itself it asks for its
+   address, e.g. `192.168.1.10`.)
+6. On the administrator PC the new PC appears under **PCs asking to join** with a number.
    **Approve only if both numbers are the same.**
 7. The new PC copies the user accounts and all the data (a few minutes the first time), then shows the login
    screen. Everybody logs in with their usual user name and password.
@@ -65,11 +69,11 @@ Nobody can join without a code *and* your approval. An unknown PC on the network
 | Switched off / not reachable – *last seen …* | Normal when the PC is off. It catches up when it comes back. |
 | Problem | See the text and **Problems & Alerts**. |
 
-Buttons: **Share Now** (contact all PCs immediately), **Check History** (recalculates the fingerprints of the whole
-history), **Add a PC**, **Edit** (name, address after an IP change), **Remove** (a lost, replaced or retired PC:
+Buttons: **Share Now** (contact all PCs immediately), **Check Records** (checks that no old record was changed or
+deleted), **Add a PC**, **Edit** (name, address after an IP change), **Remove** (a lost, replaced or retired PC:
 it can no longer exchange data; everything it did before stays).
 
-**Conflicts** – things two PCs did at the same time that a person should look at:
+**To decide** – things two PCs did at the same time that a person should look at:
 
 * *Changed on two PCs at the same time* – both values are shown with who, when and on which PC. The one marked
   “shown” is used everywhere. Click **Use this** on the correct value; all PCs follow.
@@ -78,11 +82,11 @@ it can no longer exchange data; everything it did before stays).
 * *Quantity below zero* – items were probably removed on two PCs. Count them and correct the inventory.
 * *Entered twice* – e.g. the same satisfaction result on two PCs. Delete the extra entry.
 
-**Problems & Alerts** – security and integrity messages (wrong certificate, refused changes, history check
+**Warnings** – security and integrity messages (wrong certificate, refused changes, history check
 problems, a removed PC trying to connect, clock of a PC far off, damaged file copies). **Seen** hides a message
 until it happens again.
 
-**Sync History** – when each PC exchanged how much. Full details are in `data/logs/sync-YYYY-MM.jsonl`.
+**Details** – when each PC exchanged how much. Full details are in `data/logs/sync-YYYY-MM.jsonl`.
 
 ---
 
@@ -115,7 +119,8 @@ Entries from before the upgrade are marked “before upgrade”.
 |---|---|
 | Administrator PC switched off | Everybody works and shares data. Users, passwords and permissions can be changed again when it is back. |
 | A user was disabled while a PC was off | That PC applies it as soon as it reconnects (the person is logged out there). |
-| A PC gets a new IP address | Devices & Sync → Edit → Address. |
+| A PC gets a new IP address | Nothing – it tells the others by itself when it connects to them. If a PC is never reached, Devices & Sync → Edit → Address. |
+| A user cannot change their password on their PC (message about the administrator PC) | Only for accounts from before the upgrade: log in once on the administrator PC (or change the password there). |
 | A PC is broken / lost | Devices & Sync → **Remove**. Install a new PC and add it (section 3). |
 | The data folder was copied to another PC | The system asks on that PC: *same computer* (continue) or *copy on a new PC* (the copied data is set aside, the PC joins as a new PC). |
 | The administrator PC is lost for good | Only possible if the **administrator key** was exported (below): run `python server\nodectl.py import-authority <file>` on another PC. Without it user management cannot be changed any more (all other work continues). |

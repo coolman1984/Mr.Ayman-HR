@@ -27,11 +27,19 @@ function syncIndicator(s) {
   const el = $('#syncInd');
   if (!el) return;
   if (!s || s.state === 'single') { el.classList.add('hidden'); return; }
+  if (!can('users.manage')) {  // ordinary users are not bothered with sharing - only a real problem is shown, in one sentence
+    if (s.state !== 'problem') { el.classList.add('hidden'); return; }
+    el.className = 'sync-ind s-problem';
+    el.innerHTML = '<i class="dot"></i><span>Please tell the administrator</span>';
+    el.title = 'Your work is saved on this PC. The administrator needs to look at the connection between the PCs.';
+    el.removeAttribute('href');
+    return;
+  }
   const [label, tip] = SYNC_TEXT[s.state] || SYNC_TEXT.pending;
   el.className = 'sync-ind s-' + s.state;
   el.innerHTML = `<i class="dot"></i><span>${esc(label)}</span>`;
   el.title = tip + (s.files_missing ? ` ${s.files_missing} photo(s)/document(s) are still being copied.` : '');
-  if (can('users.manage')) el.setAttribute('href', '#/devices'); else el.removeAttribute('href');
+  el.setAttribute('href', '#/devices');
   const nav = $('#navSync');
   if (nav) nav.outerHTML = devicesNavBadge();
 }
@@ -53,11 +61,11 @@ const PEER_STATE = {
 const agoTs = ts => ts ? ago(ts) : 'never';
 
 EXTRA_VIEWS.devices = () => {
-  const tabs = [['devices', 'PCs'], ['conflicts', 'Conflicts'], ['problems', 'Problems & Alerts'], ['history', 'Sync History']];
+  const tabs = [['devices', 'PCs'], ['conflicts', 'To decide'], ['problems', 'Warnings'], ['history', 'Details']];
   return `<div class="page-head"><h2>Devices &amp; Sync</h2><span class="muted" id="devSub"></span>
     <div class="actions">
       <button class="btn" data-act="devSyncNow" title="Contact all PCs now">${ic('sync')}Share Now</button>
-      <button class="btn" data-act="devVerify" title="Recalculate the fingerprints of the complete history">${ic('shield')}Check History</button>
+      <button class="btn" data-act="devVerify" title="Checks that no old record was changed or deleted">${ic('shield')}Check Records</button>
       <span id="devAdd"></span>
     </div></div>
   <div class="card mb"><div class="tabs">${tabs.map(([k, l]) => `<button data-act="devTab" data-tab="${k}" class="${DTAB.tab === k ? 'on' : ''}">${l}</button>`).join('')}</div></div>
@@ -91,7 +99,7 @@ function devRequests() {
   const reqs = (DEV.requests || []).filter(r => r.status === 'pending');
   if (!reqs.length) return '';
   return `<div class="card mb attention"><div class="card-h">${ic('plug')}<h3>PCs asking to join</h3></div>
-    <p class="hint">Approve only if the confirmation number is the same as on the new PC's screen.</p>
+    <p class="hint">The new PC shows a number. Approve only if it is the same number as here.</p>
     <table class="tbl"><thead><tr><th>PC name</th><th>Address</th><th>Asked</th><th>Confirmation number</th><th></th></tr></thead><tbody>
     ${reqs.map(r => `<tr><td><b>${esc(r.name)}</b></td><td class="mono">${esc(r.ip)}</td><td>${agoTs(r.created_at)}</td><td class="mono big-code">${esc(r.confirm)}</td>
       <td class="nowrap"><button class="btn sm primary" data-act="devDecide" data-id="${r.id}" data-ok="1">${ic('check')}Approve</button>
@@ -117,14 +125,11 @@ function peerLine(n) {
 function devTable() {
   const admin = DEV.me.role === 'authority';
   return `<div class="card mb"><div class="card-h">${ic('monitor')}<h3>PCs in this system</h3></div>
-    <div class="tbl-wrap"><table class="tbl"><thead><tr><th>PC</th><th>Address</th><th>Status</th><th>Last shared</th><th>Program</th><th>Added</th><th></th></tr></thead><tbody>
+    <div class="tbl-wrap"><table class="tbl"><thead><tr><th>PC</th><th>Status</th><th>Last shared</th><th>Added</th><th></th></tr></thead><tbody>
     ${DEV.nodes.map(n => `<tr class="${n.status === 'revoked' ? 'muted' : ''}">
-      <td><b>${esc(n.name)}</b>${n.authority ? ' <span class="badge b-purple" title="User accounts and permissions are managed here">Administrator PC</span>' : ''}
-        <br><small class="mono muted" title="Device identity">${esc(n.id)}</small></td>
-      <td class="mono">${n.self ? esc((DEV.me.addresses || []).join(', ') + ' · port ' + DEV.me.port) : esc(n.address || '-')}</td>
+      <td><b>${esc(n.name)}</b>${n.authority ? ' <span class="badge b-purple" title="User accounts and permissions are managed here">Administrator PC</span>' : ''}</td>
       <td>${peerLine(n)}</td>
       <td class="nowrap">${n.self ? '-' : agoTs((n.status_now || {}).last_ok)}</td>
-      <td class="nowrap">${n.self ? esc(DEV.me.app) : esc((n.status_now || {}).version || '-')}</td>
       <td class="nowrap">${n.enrolled_at ? fmt(n.enrolled_at.slice(0, 10)) : '-'}</td>
       <td class="nowrap">${admin && n.status === 'active' ? `<button class="btn sm" data-act="devEdit" data-id="${n.id}">${ic('edit')}Edit</button>
         ${n.self ? '' : `<button class="btn sm danger" data-act="devRevoke" data-id="${n.id}">${ic('trash')}Remove</button>`}` : ''}</td></tr>`).join('')}
@@ -133,16 +138,13 @@ function devTable() {
 }
 
 function devThisPC() {
-  const v = DEV.last_verify, m = DEV.me;
+  const v = DEV.last_verify;
   return `<div class="grid2">
-    <div class="card"><div class="card-h">${ic('shield')}<h3>History protection</h3></div>
-      <p>Every change on every PC is stored in a chained, signed history that is copied to all PCs. Editing or deleting old entries is detected.</p>
-      <dl class="kv"><dt>Stored changes</dt><dd>${DEV.journal.changes.toLocaleString()} from ${DEV.journal.origins} PC(s)${DEV.journal.rejected ? ` · <b class="bad-txt">${DEV.journal.rejected} refused</b>` : ''}</dd>
-        <dt>Last check</dt><dd>${v ? `${esc(v.ts.replace('T', ' '))} – ${v.ok ? '<b class="ok-txt">no problems ✓</b>' : `<b class="bad-txt">${v.problemCount} problem(s)</b>`} (${v.checked.toLocaleString()} changes)` : 'not yet'}</dd>
-        <dt>Data fingerprint</dt><dd class="mono" title="Identical on PCs with the same data">${esc(m.fingerprint.slice(0, 16))}…</dd></dl></div>
+    <div class="card"><div class="card-h">${ic('shield')}<h3>Records are protected</h3></div>
+      <p>Every change is kept on all PCs and cannot be changed or deleted later without it being noticed.</p>
+      <p>Last check: ${v ? `${esc(fmt(v.ts.slice(0, 10)))} – ${v.ok ? '<b class="ok-txt">everything in order ✓</b>' : '<b class="bad-txt">problem found – see Warnings</b>'}` : 'not yet (runs by itself)'}</p></div>
     <div class="card"><div class="card-h">${ic('image')}<h3>Photos &amp; documents</h3></div>
-      ${DEV.missing_files.length ? `<p>${DEV.missing_files.length} file(s) are still being copied from other PCs. They appear automatically when a PC that has them is reachable.</p>
-        <ul class="small-list">${DEV.missing_files.slice(0, 8).map(f => `<li class="mono">${esc(f)}</li>`).join('')}</ul>`
+      ${DEV.missing_files.length ? `<p>${DEV.missing_files.length} photo(s)/document(s) are still being copied from the other PCs. They appear by themselves.</p>`
         : '<p class="ok-txt">All photos and documents are on this PC ✓</p>'}</div></div>`;
 }
 
@@ -226,12 +228,10 @@ Object.assign(ACT, {
     let r;
     try { r = await api('POST', '/api/devices/invite', {}); } catch (e) { return toast(e.message, true, 7000); }
     modal('Add a PC', `<ol class="steps">
-        <li>Copy the program folder to the new PC <b>without</b> the <span class="mono">data</span> folder, and start it with <b>start.bat</b>.</li>
-        <li>On the new PC choose <b>Join an existing system</b> and enter:
-          <dl class="kv"><dt>Administrator PC address</dt><dd class="mono">${r.addresses.map(a => esc(a + ':' + r.port)).join('<br>') || esc('this PC\'s IP address:' + r.port)}</dd>
-            <dt>Pairing code</dt><dd><span class="big-code mono">${esc(r.code)}</span></dd></dl></li>
-        <li>Come back here: the PC appears under “PCs asking to join”. Approve it if its confirmation number matches.</li></ol>
-      <p class="hint">The code works once and expires at ${esc(r.expires.replace('T', ' '))}. Nobody can join without your approval.</p>`,
+        <li>On the new PC start the program (<b>start.bat</b>) and choose <b>Join an existing system</b>.</li>
+        <li>Type this code there:<p class="big-code mono code-box">${esc(r.code)}</p></li>
+        <li>Come back here and press <b>Approve</b> when the new PC appears.</li></ol>
+      <p class="hint">The code works once, for 15 minutes. Nobody can join without your approval.</p>`,
     { extra: `<button type="button" class="btn" data-act="copyLink" data-url="${esc(r.code)}">${ic('copy')}Copy code</button>` });
     const poll = setInterval(() => { if (!$('#modal').classList.contains('open')) { clearInterval(poll); rerender(); } }, 1500);
   },
@@ -276,9 +276,11 @@ setInterval(() => {
 }, 5000);
 
 /* ============================== first start: create or join ============================== */
+let SETUP_NAME = '';
 function showSetup(local, st) {
   st = st || {};
   const node = st.node || {};
+  SETUP_NAME = node.name || '';
   if (node.role === 'member') return showReceiving();
   if (node.join) return showJoinWait(node.join);
   if (!local) {
@@ -306,15 +308,15 @@ function showCreate() {
       <button type="button" class="btn" data-act="reloadPage">${ic('arrowLeft')}Back</button>
     </form>`);
 }
-function showJoin() {
+function showJoin(name) {
   authScreen(`<h2>Join an existing system</h2>
-    <p class="muted">Ask the administrator to open <b>Devices &amp; Sync → Add a PC</b> on the administrator PC. It shows the address and a pairing code.</p>
+    <p class="muted">Ask the administrator for the code (on the administrator PC: <b>Devices &amp; Sync → Add a PC</b>).</p>
     <form class="auth-form" data-form="join">
-      <label>Administrator PC address<input name="address" required class="mono" placeholder="e.g. 192.168.1.10:8443"></label>
-      <label>Pairing code<input name="code" required class="mono" autocapitalize="characters" spellcheck="false" placeholder="XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX"></label>
-      <label>Name of this PC<input name="name" required placeholder="e.g. HR Office PC" value=""></label>
+      <label>Code<input name="code" required class="mono" autocapitalize="characters" spellcheck="false" placeholder="XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX"></label>
+      <label>Name of this PC<input name="name" required placeholder="e.g. HR Office PC" value="${esc(name || '')}"></label>
+      <label class="hidden" id="joinAddr">Administrator PC address (only if asked)<input name="address" class="mono" placeholder="e.g. 192.168.1.10"></label>
       <p class="auth-msg" id="authMsg"></p>
-      <button class="btn primary">${ic('plug')}Send Join Request</button>
+      <button class="btn primary">${ic('plug')}Join</button>
       <button type="button" class="btn" data-act="reloadPage">${ic('arrowLeft')}Back</button>
     </form>`);
 }
@@ -322,7 +324,7 @@ let JOIN_POLL;
 function showJoinWait(j) {
   authScreen(`<h2>Waiting for the administrator</h2>
     <p>The request was sent to <b>${esc((j.authority || {}).name || 'the administrator PC')}</b>. Ask the administrator to approve it in <b>Devices &amp; Sync</b>.</p>
-    <p>They must see the same confirmation number:</p><p class="big-code mono" id="joinCode">${esc(j.confirm)}</p>
+    <p>The administrator will see this number on the administrator PC:</p><p class="big-code mono" id="joinCode">${esc(j.confirm)}</p>
     <p class="auth-msg" id="authMsg"></p>
     <button type="button" class="btn" data-act="joinCancel">${ic('x')}Cancel</button>`);
   clearInterval(JOIN_POLL);
@@ -361,7 +363,7 @@ function showMoved(st) {
 }
 Object.assign(ACT, {
   setupCreate: () => showCreate(),
-  setupJoin: () => showJoin(),
+  setupJoin: () => showJoin(SETUP_NAME),
   async joinCancel() { try { await api('POST', '/api/join/cancel', {}); } catch (e) { /* ignore */ } location.reload(); },
   async movedSame() { await api('POST', '/api/node/moved', { choice: 'same' }); location.reload(); },
   async movedNew() {
@@ -378,9 +380,12 @@ document.addEventListener('submit', async e => {
   msg.textContent = '';
   btn.disabled = true;
   try {
-    const r = await api('POST', '/api/join', { address: d.address.trim(), code: d.code.trim(), name: d.name.trim() });
+    const r = await api('POST', '/api/join', { address: (d.address || '').trim(), code: d.code.trim(), name: d.name.trim() });
     showJoinWait(r);
-  } catch (err) { msg.textContent = err.message; }
+  } catch (err) {
+    msg.textContent = err.message;
+    if (/reached|address/.test(err.message)) $('#joinAddr').classList.remove('hidden');  // the code's address did not work: let them type it
+  }
   finally { btn.disabled = false; }
 });
 

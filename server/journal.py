@@ -30,11 +30,13 @@ from datetime import datetime
 import ed25519
 
 ZERO = '0' * 64
-VERSION = 1
+VERSION = 1   # envelope format
+SCHEMA = 2    # business data model; a change made by a newer program version waits until this PC is updated
 DATA_KINDS = ('data', 'restore', 'bootstrap')
 KINDS = DATA_KINDS + ('admin', 'account', 'log')
 PRIORITY = {'restore': 0, 'data': 1, 'bootstrap': 1, 'account': 2, 'admin': 3}
-ACCOUNT_FIELDS = {'pw_hash', 'must_change', 'pw_changed_at'}
+ACCOUNT_FIELDS = {'pw_hash', 'pw_pub', 'must_change', 'pw_changed_at'}
+MAX_DELTA = 10 ** 9
 ADMIN_ENTITIES = {'users', 'nodes', 'userCommands'}
 MAX_CLOCK_AHEAD_MS = 60 * 60 * 1000  # a PC more than 1 hour ahead gets a warning and cannot drag our clock
 
@@ -203,13 +205,16 @@ class Journal:
             self.conn.execute('UPDATE alerts SET acked=1 WHERE key=?', (key,))
 
     # ------------------------------------------------------------ writing our own changesets
-    def build(self, kind, ops, actor='', actor_id='', ip='', label='', authority=False, ts=None):
-        """A new signed changeset of this PC. The caller must hold self.lock until append()."""
-        assert kind in KINDS
+    def build(self, kind, ops, actor='', actor_id='', ip='', label='', authority=False, ts=None, deps=None):
+        """A new signed changeset of this PC. The caller must hold self.lock until append().
+        deps: what this PC had APPLIED when the change was made (the fold markers of the database the change was
+        planned on). Changes received but not folded yet are not included - the new change has not seen them."""
+        assert kind in KINDS, kind
         origin = self.node.replica
         cseq, prev, _ = self.heads.get(origin, (0, ZERO, None))
-        env = {'v': VERSION, 'id': uuid.uuid4().hex, 'origin': origin, 'node': self.node.id, 'cseq': cseq + 1,
-               'hlc': self.clock.now(), 'deps': self.vv(), 'kind': kind, 'ts': ts or now(), 'actor': str(actor or '')[:120],
+        deps = {o: c for o, c in (deps if deps is not None else self.vv()).items() if c}
+        env = {'v': VERSION, 'schema': SCHEMA, 'id': uuid.uuid4().hex, 'origin': origin, 'node': self.node.id, 'cseq': cseq + 1,
+               'hlc': self.clock.now(), 'deps': deps, 'kind': kind, 'ts': ts or now(), 'actor': str(actor or '')[:120],
                'actor_id': str(actor_id or ''), 'ip': str(ip or '')[:60], 'label': str(label or '')[:200], 'ops': ops, 'prev': prev}
         body = canonical(env)
         h = chash(body)
@@ -311,8 +316,9 @@ class Journal:
         base = {'origin': env['origin'], 'cseq': env['cseq'], 'node': env['node']}
         out = []
         if status != 'ok':
-            out.append(('security', {**base, 'ts': env['ts'], 'user': env['actor'], 'ip': env['ip'], 'event': 'change-rejected',
-                                     'target': env['kind'], 'detail': f'Change {env["origin"]}#{env["cseq"]} was rejected: {status}'}))
+            out.append(('security', {**base, 'ts': str(env.get('ts') or ''), 'user': str(env.get('actor') or ''), 'ip': str(env.get('ip') or ''),
+                                     'event': 'change-rejected', 'target': str(env.get('kind')),
+                                     'detail': f'Change {env["origin"]}#{env["cseq"]} was rejected: {status}'}))
             return out
         if env['kind'] == 'log':
             for e in env['ops']:
@@ -356,6 +362,9 @@ class Journal:
                     origin, cseq, node = env['origin'], env['cseq'], env['node']
                     if not isinstance(origin, str) or not isinstance(cseq, int) or not isinstance(node, str) or not origin.startswith(node + '-'):
                         raise ValueError('bad origin')
+                    if (not isinstance(env.get('id'), str) or not isinstance(env.get('kind'), str) or not isinstance(env.get('ops'), list)
+                            or not isinstance(env.get('deps'), dict) or not isinstance(env.get('hlc'), int) or isinstance(env.get('hlc'), bool)):
+                        raise ValueError('incomplete change')
                 except (KeyError, TypeError, ValueError) as e:
                     problems.append(f'unreadable change from {via}: {e}')
                     self.alert('bad-data', f'Unreadable change received from {via}: {e}', via)
@@ -390,10 +399,21 @@ class Journal:
             problems.append(f'version {origin}')
             self.alert('version', f'A change from PC {node} needs a newer version of this program.', node, 'warning', key=f'version|{node}')
             return 'drop'
+        if isinstance(env.get('schema'), int) and env['schema'] > SCHEMA:
+            self.alert('version', f'PC {node} uses a newer version of this program. Please install it on this PC too; its changes wait until then.',
+                       node, 'warning', key=f'version|{node}')
+            return 'wait'
         have, have_hash = heads.get(origin, (0, ZERO))
         if cseq <= have:
             known = batch_hash.get((origin, cseq)) or self.hash_at(origin, cseq)
             if known != h:
+                n = roster.get(node)
+                if not n or not n.get('pub') or not ed25519.verify(bytes.fromhex(n['pub']), bytes.fromhex(h), _unhex(raw.get('s'))):
+                    blocked.add(origin)  # a damaged copy from a relay, not a second history
+                    problems.append(f'signature {origin}#{cseq}')
+                    self.alert('signature', f'A damaged copy of a change of PC {node} was received from {via} and ignored.', node,
+                               'warning', key=f'signature|{origin}|{via}')
+                    return 'drop'
                 blocked.add(origin)
                 problems.append(f'fork {origin}#{cseq}')
                 self.alert('fork', f'PC {node} has two different histories (change #{cseq}). Its data folder may have been '
@@ -410,7 +430,7 @@ class Journal:
         if not isinstance(deps, dict) or any(not isinstance(c, int) or heads.get(o, (0,))[0] < c for o, c in deps.items() if o != origin):
             return 'wait'
         n = roster.get(node)
-        if (not n or not n.get('pub')) and env.get('kind') == 'admin' and self._check(env, raw, h) == 'ok':
+        if (not n or not n.get('pub')) and env.get('kind') == 'admin' and self._check(env, raw, h, accepted) == 'ok':
             # the administrator PC's own first change enrols itself: trust the key it carries
             n = next(({'id': node, **op['s']} for op in env['ops'] if isinstance(op, dict) and op.get('e') == 'nodes'
                       and op.get('id') == node and isinstance(op.get('s'), dict) and op['s'].get('pub')), n)
@@ -422,7 +442,7 @@ class Journal:
             self.alert('signature', f'A change said to come from PC {n.get("name") or node} has an invalid signature '
                        f'(received from {via}).', node, key=f'signature|{origin}|{via}')
             return 'drop'
-        status = self._check(env, raw, h)
+        status = self._check(env, raw, h, accepted)
         rc = n.get('revoked_change') if n.get('status') == 'revoked' else None
         if status == 'ok' and rc:
             r_origin, _, r_cseq = rc.rpartition('#')
@@ -446,8 +466,9 @@ class Journal:
                        'and time.', node, 'warning', key=f'clock|{node}')
         return 'accept'
 
-    def _check(self, env, raw, h):
-        """Rules every PC applies identically, so all PCs accept or refuse the same changes."""
+    def _check(self, env, raw, h, pending=()):
+        """Rules every PC applies identically, so all PCs accept or refuse the same changes.
+        pending: changes accepted earlier in the same delivery (not stored yet)."""
         kind, ops = env.get('kind'), env.get('ops')
         if kind not in KINDS or not isinstance(ops, list):
             return 'unknown kind of change'
@@ -462,17 +483,66 @@ class Journal:
             return 'ok'
         if kind == 'account':
             for op in ops:
-                s = op.get('s') if isinstance(op, dict) else None
+                s = op.get('s')
                 if (op.get('e') != 'users' or op.get('id') != env.get('actor_id') or not isinstance(s, dict) or not s
                         or set(s) - ACCOUNT_FIELDS or s.get('must_change') not in (None, False) or op.get('x') is not None or op.get('n')):
                     return 'a user may only change their own password'
+                why = self._check_password_proof(env, op, pending)
+                if why:
+                    return why
             return 'ok'
         if kind == 'log':
-            return 'ok' if all(isinstance(e, dict) and e.get('t') in ('activity', 'security', 'audit') for e in ops) else 'bad log entry'
+            return 'ok' if all(e.get('t') in ('activity', 'security', 'audit') for e in ops) else 'bad log entry'
         for op in ops:
-            if not isinstance(op, dict) or op.get('e') not in self.business:
+            if op.get('e') not in self.business or not isinstance(op.get('id'), str) or not op['id'] or len(op['id']) > 200:
                 return 'data change touches something that is not business data'
+            if not isinstance(op.get('s', {}), dict) or not isinstance(op.get('n', {}), dict) or op.get('x') not in (None, True, False):
+                return 'malformed change'
+            if any(not isinstance(v, int) or isinstance(v, bool) or abs(v) > MAX_DELTA for v in (op.get('n') or {}).values()):
+                return 'impossible quantity'
+            if 't' in op and (not isinstance(op['t'], int) or isinstance(op['t'], bool) or op['t'] < 0):
+                return 'malformed change'
         return 'ok'
+
+    def _password_setters(self, uid, pending=()):
+        """Every accepted change that set the password of user uid: (origin, cseq, deps, pw_pub)."""
+        out = []
+        with self.lock:
+            rows = [(r['body'], r['status']) for r in self.conn.execute("SELECT body, status FROM changes WHERE kind IN ('admin','account')")]
+        rows += [(p['body'], p['status']) for p in pending if p['env'].get('kind') in ('admin', 'account')]
+        for body, status in rows:
+            if status != 'ok':
+                continue
+            e = json.loads(body)
+            for op in e['ops']:
+                if isinstance(op, dict) and op.get('e') == 'users' and op.get('id') == uid and isinstance(op.get('s'), dict) and 'pw_hash' in op['s']:
+                    out.append((e['origin'], e['cseq'], e.get('deps') or {}, op['s'].get('pw_pub')))
+        return out
+
+    def _check_password_proof(self, env, op, pending):
+        """A user's own password change must be signed with a key only the OLD password gives (its public half was
+        published by the change that set the old password). A PC cannot produce it for somebody else's account."""
+        p, s, uid = op.get('p'), op['s'], op['id']
+        try:
+            o, c = p['from']
+            sig = bytes.fromhex(p['sig'])
+            if not isinstance(o, str) or not isinstance(c, int) or not isinstance(s.get('pw_pub'), str):
+                raise ValueError
+        except (TypeError, KeyError, ValueError):
+            return 'password change without proof of the old password'
+        if not dominates(env['deps'], env['origin'], env['cseq'], o, c):
+            return 'password change refers to an unknown password'
+        setters = self._password_setters(uid, pending)
+        ref = next((x for x in setters if (x[0], x[1]) == (o, c)), None)
+        if not ref or not ref[3]:
+            return 'password change refers to an unknown password'
+        msg = password_proof_message(uid, s.get('pw_hash'), s.get('pw_pub'), [o, c])
+        if not ed25519.verify(bytes.fromhex(ref[3]), msg, sig):
+            return 'proof of the old password is wrong'
+        for o2, c2, deps2, _ in setters:  # the old password must be the latest one this change knew about
+            if (o2, c2) != (o, c) and dominates(env['deps'], env['origin'], env['cseq'], o2, c2) and dominates(deps2, o2, c2, o, c):
+                return 'password change is based on an outdated password'
+        return None
 
     # ------------------------------------------------------------ serving other PCs
     def changes_since(self, have, max_bytes=2_000_000, max_count=2000):
@@ -629,10 +699,12 @@ class Journal:
         return out
 
     # ------------------------------------------------------------ log queries (monitoring)
-    def query(self, table, q='', user='', typ='', area='', frm='', to='', node='', limit=200, offset=0, areas=None):
+    def query(self, table, q='', user='', typ='', area='', frm='', to='', node='', limit=200, offset=0, areas=None, business_only=False):
         cols = {'audit': ['label', 'entity', 'entity_id', 'changes', 'before', 'after'], 'activity': ['action', 'target', 'page', 'detail'],
                 'security': ['target', 'detail', 'user']}[table]
         where, args = [], []
+        if business_only and table == 'audit':  # user accounts and PCs are for administrators only
+            where.append("entity NOT IN ('users', 'nodes', 'userCommands')")
         if areas is not None and table == 'audit':
             where.append(f'area_id IN ({",".join("?" * len(areas)) or "NULL"})')
             args += list(areas)
@@ -681,6 +753,10 @@ class Journal:
             return {'changes': self.conn.execute('SELECT COUNT(*) FROM changes').fetchone()[0],
                     'rejected': self.conn.execute("SELECT COUNT(*) FROM changes WHERE status!='ok'").fetchone()[0],
                     'origins': len(self.heads)}
+
+
+def password_proof_message(uid, pw_hash, pw_pub, frm):
+    return canonical({'v': 1, 'user': uid, 'pw_hash': pw_hash, 'pw_pub': pw_pub, 'from': frm}).encode('utf-8')
 
 
 def env_hash(env):

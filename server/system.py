@@ -25,7 +25,8 @@ from auth import USER_FIELDS, Auth
 from backup import Backups
 from journal import Journal
 from node import Node
-from store import ENTITIES, REPLICATED, Store
+from replica import markers as replica_markers
+from store import ENTITIES, REPLICATED, SPECS, Store
 
 BOOT_CHUNK = 300
 
@@ -89,11 +90,34 @@ class System:
         written = self.node.last_written()
         have = self.journal.vv()
         lost = {r: c for r, c in written.items() if c > have.get(r, 0)}
+        folded = replica_markers(self.store.conn)
+        if any(c > have.get(o, 0) for o, c in folded.items()):
+            self._recover_tables_ahead()
         if lost.get(self.node.replica):
             self.node.new_epoch(f'journal rolled back (had {lost[self.node.replica]}, found {have.get(self.node.replica, 0)})')
             self.journal.alert('rollback', 'This PC\'s change history was older than expected (restored or damaged journal). It continues '
                                'with a new numbering; its missing changes come back from the other PCs if they received them.', self.node.id)
             self.log('Journal rollback detected - new epoch ' + self.node.replica)
+
+    def _recover_tables_ahead(self):
+        """bams.db contains changes the (restored) journal no longer has. Rebuild the tables from the journal and save
+        whatever differs from the old tables as a new change, so nothing visible is lost and every PC receives it."""
+        stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        old = os.path.join(self.data_dir, f'bams.ahead-{stamp}.db')
+        with self.store.lock:
+            self.store.conn.execute('VACUUM INTO ?', (old,))
+            c = self.store.conn
+            c.execute('BEGIN IMMEDIATE')
+            for spec in SPECS.values():
+                c.execute(f'DELETE FROM {spec["table"]}')
+            for t in ('sync_field', 'sync_marker', 'sync_flags'):
+                c.execute(f'DELETE FROM {t}')
+            c.execute('COMMIT')
+        self.store.fold_pending()
+        if self.node.info.get('role') != 'unconfigured':
+            self.store.restore_from(old, 'Recovery', '127.0.0.1', 'Changes kept after the history was restored', kind='data')
+        self.journal.alert('rollback', 'The data of this PC was newer than its history. The data was rebuilt from the history and the '
+                           f'difference saved again as a new change (old file kept as {os.path.basename(old)}).', self.node.id)
 
     # ------------------------------------------------------------ upgrade / first start
     def _upgrade(self, device_name):

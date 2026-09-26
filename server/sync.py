@@ -66,21 +66,25 @@ def confirm_code(joiner_pub_hex, authority_fp_hex):
     return f'{int.from_bytes(h[:8], "big") % 1000000:06d}'
 
 
-def encode_code(invite_id, secret, fp):
-    raw = bytes.fromhex(invite_id) + secret + bytes.fromhex(fp[:12])
+def encode_code(ip, port, secret, fp):
+    """ONE code the person types on the new PC: the administrator PC's address, a one-time secret and the first
+    8 bytes of its certificate fingerprint (so the new PC can recognise the real administrator PC). 80-bit secret and
+    64-bit fingerprint: neither can be guessed or forged in the 15 minutes the code is valid."""
+    raw = socket.inet_aton(ip) + int(port).to_bytes(2, 'big') + secret + bytes.fromhex(fp[:16])
     s = base64.b32encode(raw).decode('ascii').rstrip('=')
     return '-'.join(s[i:i + 4] for i in range(0, len(s), 4))
 
 
 def decode_code(code):
-    s = ''.join(ch for ch in str(code).upper() if ch.isalnum()).replace('0', 'O').replace('1', 'I')
+    """-> (ip, port, secret, fingerprint prefix). Typing mistakes such as 0/O and 1/I are tolerated."""
+    s = ''.join(ch for ch in str(code).upper() if ch.isalnum()).replace('0', 'O').replace('1', 'I').replace('8', 'B')
     try:
         raw = base64.b32decode(s + '=' * (-len(s) % 8))
     except ValueError:
-        raise ValueError('The pairing code is not valid. Check that it was typed completely.')
-    if len(raw) != 20:
-        raise ValueError('The pairing code is not valid. Check that it was typed completely.')
-    return raw[:4].hex(), raw[4:14], raw[14:].hex()
+        raise ValueError('The code is not valid. Check that it was typed completely.')
+    if len(raw) != 24:
+        raise ValueError('The code is not valid. Check that it was typed completely.')
+    return socket.inet_ntoa(raw[:4]), int.from_bytes(raw[4:6], 'big'), raw[6:16], raw[16:].hex()
 
 
 def local_ips():
@@ -241,8 +245,19 @@ class Handler(BaseHTTPRequestHandler):
     def _handle(self, method):
         svc = self.server.svc
         try:
-            n = int(self.headers.get('Content-Length') or 0)
-            if n > 64 * 1048576:
+            raw = self.headers.get('Content-Length') or '0'
+            if not raw.isdigit():
+                return self._send(400, {'error': 'bad length'})
+            n = int(raw)
+            path = self.path.split('?')[0]
+            open_paths = ('/sync/challenge', '/sync/session', '/sync/join', '/sync/join-status')
+            if path in open_paths:
+                limit = 64 * 1024  # nothing large before a PC has proven who it is
+            elif not svc.session_known(self.headers):
+                return self._send(401, {'error': 'not authenticated'})  # the body is not read; the connection is closed
+            else:
+                limit = 64 * 1048576
+            if n > limit:
                 return self._send(413, {'error': 'too large'})
             body = self.rfile.read(n) if n else b''
             code, out, ctype, headers = svc.handle(method, self.path, self.headers, body, self.client_address[0])
@@ -405,6 +420,7 @@ class SyncService:
             st.update(name_seen=info.get('name'), version=info.get('app'), schema=info.get('schema'), protocol=info.get('protocol'),
                       remote_time=info.get('time'))
             server_vv = {}
+            pull_problem = None
             for _ in range(10000):  # pull until nothing is missing
                 r = c.request('POST', '/sync/pull', {'have': self.journal.vv()})
                 server_vv = {o: v for o, v in (r.get('vv') or {}).items()}
@@ -413,7 +429,8 @@ class SyncService:
                     rep['pulled'] += len(acc)
                     rep['deferred'] += deferred
                     if problems:
-                        raise SyncError('Changes from this PC were refused: ' + '; '.join(problems[:3]))
+                        pull_problem = 'Changes from this PC were refused: ' + '; '.join(problems[:3])
+                        break
                     if not acc and deferred:
                         break  # waiting for something we cannot get from this PC yet
                 if not r.get('more'):
@@ -448,6 +465,8 @@ class SyncService:
             else:
                 st['agree'] = None
             rep['files'] = self.fetch_files(c, peer)
+            if pull_problem:
+                raise SyncError(pull_problem)  # everything else was still exchanged
             st.update(state='online', last_seen=now(), last_ok=now(), fails=0, last_error='', error_kind='')
             rep['result'] = 'ok'
         except Offline as e:
@@ -606,10 +625,10 @@ class SyncService:
             ch = secrets.token_hex(16)
             with self.lock:
                 t = time.time()
-                self.challenges = {k: v for k, v in self.challenges.items() if v > t}
-                if len(self.challenges) > 1000:
+                self.challenges = {k: v for k, v in self.challenges.items() if v[0] > t}
+                if len(self.challenges) > 1000 or sum(1 for v in self.challenges.values() if v[1] == ip) >= 20:
                     return 429, {'error': 'busy'}, 'application/json', {}
-                self.challenges[ch] = t + 60
+                self.challenges[ch] = (t + 60, ip)
             return 200, {'challenge': ch, 'node': self.node.id}, 'application/json', {}
         if p == '/sync/session' and method == 'POST':
             return self._session(json.loads(body or b'{}'), ip)
@@ -662,7 +681,7 @@ class SyncService:
     def _session(self, d, ip):
         with self.lock:
             exp = self.challenges.pop(str(d.get('challenge')), None)
-        if not exp or exp < time.time():
+        if not exp or exp[0] < time.time():
             return 401, {'error': 'challenge expired or already used'}, 'application/json', {}
         n = self.journal.roster().get(str(d.get('node')))
         if not n or not n.get('pub'):
@@ -691,6 +710,11 @@ class SyncService:
             st['last_ip'] = ip
         info = {'node': self.node.id, 'name': self.node.name, 'app': APP_VERSION, 'schema': SCHEMA_VERSION, 'protocol': PROTOCOL, 'time': now()}
         return 200, {'session': sid, 'key': key.hex(), 'info': info}, 'application/json', {}
+
+    def session_known(self, headers):
+        with self.lock:
+            s = self.sessions.get(headers.get('X-BAMS-Session') or '')
+            return bool(s) and s['expires'] > time.time()
 
     def _auth(self, method, path, headers, body):
         sid = headers.get('X-BAMS-Session') or ''
@@ -725,23 +749,24 @@ class SyncService:
             self.journal.conn.execute("DELETE FROM invites WHERE expires_at < ? OR used_at IS NOT NULL", (now(),))
             self.journal.conn.execute('INSERT INTO invites (id, secret_hash, created_at, expires_at, created_by) VALUES (?,?,?,?,?)',
                                       (iid, secret.hex(), now(), exp, actor))
-        self.auth.log(actor, '', 'pairing-code', iid, f'Pairing code created, valid until {exp}')
-        return {'code': encode_code(iid, secret, self.node.cert_fp), 'expires': exp, 'addresses': [f'{ip}' for ip in local_ips()],
-                'port': self.port}
+        self.auth.log(actor, '', 'pairing-code', iid, f'Code to add a PC created, valid until {exp}')
+        ips = local_ips()
+        return {'code': encode_code(ips[0] if ips else '0.0.0.0', self.port, secret, self.node.cert_fp), 'expires': exp,
+                'addresses': ips, 'port': self.port}
 
     def _join(self, d, ip):
-        iid = str(d.get('invite') or '')
+        fields = {k: str(d.get(k) or '') for k in ('node', 'name', 'pub', 'cert_fp', 'port')}
+        given = str(d.get('mac') or '')
         with self.journal.lock:
-            inv = self.journal.conn.execute('SELECT * FROM invites WHERE id=?', (iid,)).fetchone()
-        fields = {k: str(d.get(k) or '') for k in ('invite', 'node', 'name', 'pub', 'cert_fp', 'port')}
-        if not inv or inv['used_at'] or inv['expires_at'] < now():
-            self.auth.log('(new PC)', ip, 'pairing-refused', fields['name'], 'Unknown, used or expired pairing code')
-            return 403, {'error': 'The pairing code is wrong, was already used or has expired. Create a new one on the administrator PC.'}, \
+            invites = self.journal.conn.execute('SELECT * FROM invites WHERE used_at IS NULL AND expires_at >= ?', (now(),)).fetchall()
+        inv = next((i for i in invites if hmac.compare_digest(
+            hmac.new(bytes.fromhex(i['secret_hash']), canonical(fields).encode(), hashlib.sha256).hexdigest(), given)), None)
+        if not inv:
+            self.journal.alert('pairing', f'A PC at {ip} tried to join with a wrong, used or expired code.', '', 'warning', key=f'pairing|{ip}')
+            time.sleep(0.5)  # slows down guessing
+            return 403, {'error': 'The code is wrong, was already used or has expired. Ask the administrator for a new code.'}, \
                 'application/json', {}
-        expect = hmac.new(bytes.fromhex(inv['secret_hash']), canonical(fields).encode(), hashlib.sha256).hexdigest()
-        if not hmac.compare_digest(expect, str(d.get('mac') or '')):
-            self.auth.log('(new PC)', ip, 'pairing-refused', fields['name'], 'Pairing code proof invalid')
-            return 403, {'error': 'The pairing code is wrong.'}, 'application/json', {}
+        iid = inv['id']
         try:
             ok = len(bytes.fromhex(fields['pub'])) == 32 and len(bytes.fromhex(fields['cert_fp'])) == 32 and len(fields['node']) == 12
         except ValueError:
@@ -823,22 +848,25 @@ class SyncService:
 
     # ------------------------------------------------------------ pairing: new PC side
     def join(self, address, code, device_name):
+        """address is optional: normally it is inside the code."""
         if self.node.role != 'unconfigured' or self.auth.has_users():
             raise ValueError('This PC is already set up.')
-        iid, secret, fp_prefix = decode_code(code)
-        host, _, port = str(address).strip().rpartition(':')
-        if not host or not port.isdigit():
-            host, port = str(address).strip(), str(self.port)
+        host, port, secret, fp_prefix = decode_code(code)
+        if address and str(address).strip():
+            h, _, p = str(address).strip().rpartition(':')
+            host, port = (h, int(p)) if h and p.isdigit() else (str(address).strip(), port)
+        if host == '0.0.0.0':
+            raise ValueError('The administrator PC has no network address in the code. Type its address below.')
         if device_name:
             self.node.set_name(device_name)
         c = Connection(self, host, int(port), fp_prefix, None, timeout=15)
         try:
-            fields = {'invite': iid, 'node': self.node.id, 'name': self.node.name, 'pub': self.node.pub.hex(), 'cert_fp': self.node.cert_fp,
-                      'port': str(self.port)}
+            fields = {'node': self.node.id, 'name': self.node.name, 'pub': self.node.pub.hex(), 'cert_fp': self.node.cert_fp, 'port': str(self.port)}
             r = c.request('POST', '/sync/join', {**fields, 'mac': hmac.new(secret, canonical(fields).encode(), hashlib.sha256).hexdigest()})
             fp = c.peer_fp
         except Offline:
-            raise ValueError(f'The administrator PC at {host}:{port} cannot be reached. Check the address and that the system is running there.')
+            raise ValueError('The administrator PC cannot be reached. Check that it is switched on, that the system runs there, and that '
+                             'both PCs are on the company network.')
         except SyncError as e:
             raise ValueError(str(e).split(': ', 1)[-1])
         finally:
@@ -854,7 +882,7 @@ class SyncService:
         j = self.journal.meta('join')
         if not j:
             return {'status': 'none'}
-        if self.node.role == 'member':
+        if self.node.role == 'member' or not j.get('secret'):
             return {'status': 'approved', 'confirm': j['confirm'], 'authority': j['authority'], 'sync': self.summary()}
         host, _, port = j['address'].rpartition(':')
         c = Connection(self, host, int(port), j['fp'], None, timeout=10)
@@ -868,6 +896,7 @@ class SyncService:
             c.close()
         if r.get('status') == 'approved':
             self.node.join(r['cluster'], r['authority_pub'], r['authority_node'])
+            self.journal.set_meta('join', {**j, 'secret': None})
             self.journal.set_meta('bootstrap_peer', {'node': r['authority_node'], 'name': r.get('authority_name'), 'address': j['address'],
                                                      'fp': j['fp']})
             self.store.mark_initialized()
@@ -923,7 +952,7 @@ class SyncService:
     def _housekeeping(self):
         last_verify = 0
         while not self.stop:
-            time.sleep(30)
+            time.sleep(10)
             try:
                 self.journal.flush_activity()
                 if time.time() - last_verify > 6 * 3600:

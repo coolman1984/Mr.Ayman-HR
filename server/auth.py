@@ -39,8 +39,9 @@ import threading
 import uuid
 from datetime import datetime, timedelta
 
+import ed25519
 import replica
-from journal import PRIORITY
+from journal import PRIORITY, password_proof_message
 
 # (group, [(permission, label)]) - the order is the order shown on the user screen
 PERMISSIONS = [
@@ -148,7 +149,7 @@ class NotAuthority(Forbidden):
 
 # replicated user fields (everything else in the users table is local to this PC)
 T, J, B = 'text', 'json', 'bool'
-USER_FIELDS = [('username', T), ('full_name', T), ('title', T), ('pw_hash', T), ('perms', J), ('areas', J), ('role', T),
+USER_FIELDS = [('username', T), ('full_name', T), ('title', T), ('pw_hash', T), ('pw_pub', T), ('perms', J), ('areas', J), ('role', T),
                ('active', B), ('deleted', B), ('must_change', B), ('pw_changed_at', T), ('notes', T), ('created_at', T),
                ('created_by', T), ('updated_at', T), ('updated_by', T)]
 USER_FIELD_NAMES = {f for f, _ in USER_FIELDS}
@@ -176,6 +177,16 @@ def hash_password(pw):
     salt = secrets.token_bytes(16)
     dk = hashlib.pbkdf2_hmac('sha256', pw.encode('utf-8'), salt, ITERATIONS)
     return f'pbkdf2_sha256${ITERATIONS}${salt.hex()}${dk.hex()}'
+
+
+def account_seed(pw, uid):
+    """Private key that only the password gives. Its public half (pw_pub) is published with every new password, so any
+    PC can check that a password change was made by somebody who knew the old password."""
+    return hashlib.pbkdf2_hmac('sha256', pw.encode('utf-8'), b'BAMS-ACCOUNT1|' + uid.encode('utf-8'), ITERATIONS)
+
+
+def account_pub(pw, uid):
+    return ed25519.public_key(account_seed(pw, uid)).hex()
 
 
 def verify_password(pw, stored):
@@ -227,6 +238,8 @@ class Auth:
                 id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, user TEXT, ip TEXT, event TEXT, target TEXT, detail TEXT);
             CREATE INDEX IF NOT EXISTS ix_security_ts ON security_log(ts);
         ''')
+        if 'pw_pub' not in {r[1] for r in self.conn.execute('PRAGMA table_info(users)')}:
+            self.conn.execute('ALTER TABLE users ADD COLUMN pw_pub TEXT')
         replica.install(self.conn)
         self.journal = None
         self.node = None
@@ -274,7 +287,7 @@ class Auth:
                 with self.journal.lock:
                     rec = self.journal.build(kind, ops, actor=actor['display'] if isinstance(actor, dict) else actor,
                                              actor_id=actor['id'] if isinstance(actor, dict) else '', ip=ip, label=label,
-                                             authority=kind == 'admin')
+                                             authority=kind == 'admin', deps=replica.markers(c))
                     before = len(self.folder.problems)
                     self.folder.fold(rec['env'], 'ok')
                     if len(self.folder.problems) != before:
@@ -289,7 +302,10 @@ class Auth:
                     pass
                 if not appended:
                     raise
-                self.fold_pending()
+                try:
+                    self.fold_pending()
+                except Exception as e:  # noqa: BLE001 - it is saved in the journal and applied again at the next start
+                    self.journal.alert('fold', f'A saved account change could not be applied yet ({e}).', '', 'warning')
         self.journal._notify([rec])
         return rec
 
@@ -388,7 +404,8 @@ class Auth:
         ts = now()
         uid = uuid.uuid4().hex
         me = self.node
-        row = {'username': username, 'full_name': full_name, 'title': 'System Administrator', 'pw_hash': h, 'perms': list(ALL),
+        row = {'username': username, 'full_name': full_name, 'title': 'System Administrator', 'pw_hash': h,
+               'pw_pub': account_pub(password, uid), 'perms': list(ALL),
                'areas': None, 'role': 'Administrator', 'active': True, 'deleted': False, 'must_change': False, 'pw_changed_at': ts,
                'notes': '', 'created_at': ts, 'created_by': 'First setup', 'updated_at': ts, 'updated_by': 'First setup'}
         ops = [{'e': 'nodes', 'id': me.id, 'op': 'insert', 'noaudit': True,
@@ -437,6 +454,12 @@ class Auth:
             self.conn.execute('UPDATE users SET failed=0, locked_until=NULL, last_login=?, last_ip=? WHERE id=?', (ts, ip, u['id']))
             self.conn.execute('INSERT INTO sessions VALUES (?,?,?,?,?,?)', (_token_hash(token), u['id'], ts, ts, ip, (agent or '')[:300]))
         self.log(u['display'], ip, 'login', username, agent[:300] if agent else '')
+        if not u.get('pw_pub') and self.node is not None and self.node.is_authority:
+            try:  # account from before the multi-PC version: publish its password key, so it can change its password on any PC
+                self._write('System', ip, 'Password key of ' + username, [{'e': 'users', 'id': u['id'], 'op': 'update', 'noaudit': True,
+                                                                          's': {'pw_hash': u['pw_hash'], 'pw_pub': account_pub(password, u['id'])}}])
+            except Exception as e:  # noqa: BLE001 - logging in must not fail because of this
+                print('password key not published:', e)
         return token, self.get(u['id'])
 
     def session(self, token, ip, touch=True):
@@ -491,9 +514,26 @@ class Auth:
             raise AuthError('The new password must be different from the current one.')
         self.check_password(new, u['username'], u['full_name'])
         ts = now()
-        self._write(u, ip, 'Changed own password', [{'e': 'users', 'id': u['id'], 'op': 'update',
-                                                     's': {'pw_hash': hash_password(new), 'must_change': False, 'pw_changed_at': ts},
-                                                     'c': {'pw_hash': ['', ''], 'must_change': [bool(u['must_change']), False]}}], kind='account')
+        uid = u['id']
+        new_hash, new_pub, old_seed = hash_password(new), account_pub(new, uid), account_seed(old, uid)
+        s = {'pw_hash': new_hash, 'pw_pub': new_pub, 'must_change': False, 'pw_changed_at': ts}
+        op = {'e': 'users', 'id': uid, 'op': 'update', 's': s, 'c': {'pw_hash': ['', ''], 'must_change': [bool(u['must_change']), False]}}
+        with self.lock:
+            rows = self.conn.execute("SELECT fld, origin, cseq, prio, hlc, val FROM sync_field WHERE tbl='users' AND rid=? AND fld IN ('pw_hash','pw_pub')",
+                                     (uid,)).fetchall()
+        setters = [r for r in rows if r['fld'] == 'pw_hash']
+        win = max(setters, key=lambda r: (r['prio'], r['hlc'], r['origin'], r['cseq'])) if setters else None
+        pub = next((json.loads(r['val']) for r in rows if win and r['fld'] == 'pw_pub' and (r['origin'], r['cseq']) == (win['origin'], win['cseq'])), None)
+        if pub and pub == ed25519.public_key(old_seed).hex():
+            frm = [win['origin'], win['cseq']]
+            op['p'] = {'from': frm, 'sig': ed25519.sign(old_seed, password_proof_message(uid, new_hash, new_pub, frm)).hex()}
+            kind = 'account'
+        elif self.node.is_authority:
+            kind = 'admin'  # password from before the upgrade: the administrator PC confirms it with its own key
+        else:
+            raise AuthError('For security, please change your password once on the administrator PC (your password dates from '
+                            'before the multi-PC version). After that you can change it on any PC.')
+        self._write(u, ip, 'Changed own password', [op], kind=kind)
         n = self._kill(u['id'], keep_token=token)
         self.log(u['display'], ip, 'password-changed', u['username'], f'Changed own password; {n} other session(s) logged out')
 
@@ -562,7 +602,7 @@ class Auth:
             password = d.get('password') or ''
             self.check_password(password, username, full_name)
             res['uid'] = new_id = uuid.uuid4().hex
-            row = {**new_row, 'pw_hash': hash_password(password), 'deleted': False, 'pw_changed_at': ts, 'created_at': ts,
+            row = {**new_row, 'pw_hash': hash_password(password), 'pw_pub': account_pub(password, new_id), 'deleted': False, 'pw_changed_at': ts, 'created_at': ts,
                    'created_by': actor['display']}
             res['old'] = None
             return [{'e': 'users', 'id': new_id, 'op': 'insert', 's': row, 'r': {'id': new_id, **row}}]
@@ -600,7 +640,8 @@ class Auth:
         self.check_password(password, u['username'], u['full_name'])
         ts = now()
         self._write(actor, ip, 'Reset password of ' + u['username'], [
-            {'e': 'users', 'id': uid, 'op': 'update', 's': {'pw_hash': hash_password(password), 'must_change': True, 'pw_changed_at': ts,
+            {'e': 'users', 'id': uid, 'op': 'update', 's': {'pw_hash': hash_password(password), 'pw_pub': account_pub(password, uid),
+                                                              'must_change': True, 'pw_changed_at': ts,
                                                               'updated_at': ts, 'updated_by': actor['display']},
              'c': {'pw_hash': ['', ''], 'must_change': [bool(u['must_change']), True]}},
             {'e': 'userCommands', 'id': uuid.uuid4().hex, 'op': 'insert', 'noaudit': True, 's': {'cmd': 'unlock', 'user': uid}}])
@@ -707,7 +748,9 @@ class UserFolder:
                 try:
                     self._op(env, op)
                     self.conn.execute('RELEASE op')
-                except (TypeError, ValueError, KeyError, AttributeError, IndexError, sqlite3.IntegrityError) as e:
+                except replica.ENVIRONMENTAL:
+                    raise
+                except Exception as e:  # noqa: BLE001 - deterministic, see replica.ENVIRONMENTAL
                     self.conn.execute('ROLLBACK TO op')
                     self.conn.execute('RELEASE op')
                     self.problems.append(f'{env["origin"]}#{env["cseq"]} op {i}: {e}')

@@ -131,7 +131,9 @@ class JournalRulesTest(unittest.TestCase):
             perms = self.b.journal.build('account', [{'e': 'users', 'id': 'me', 'op': 'update', 's': {'perms': ['users.manage']}}], actor_id='me')
             self.b.journal.append_local(perms)
         acc, _, _ = self.c.deliver(self.b, self.a)
-        self.assertEqual([r['status'] for r in acc], ['rejected', 'ok', 'rejected'])
+        # without a proof signed with the old password's key nothing is accepted - not even for one's own account
+        self.assertEqual([r['status'] for r in acc], ['rejected', 'rejected', 'rejected'])
+        self.assertIn('proof', acc[1]['note'])
 
     def test_data_change_cannot_touch_accounts(self):
         with self.b.journal.lock:
@@ -257,6 +259,91 @@ class FoldRulesTest(unittest.TestCase):
             self.put(self.a, 'areas', 'v', v['ver'], name='v3')
 
 
+class ReviewFindingsTest(unittest.TestCase):
+    """Regression tests for the independent review findings."""
+
+    def setUp(self):
+        self.c = Cluster(3)
+        self.a, self.b, self.x = self.c.peers
+
+    def tearDown(self):
+        self.c.close()
+
+    def area(self, peer, aid):
+        return next((x for x in peer.state()['areas'] if x['id'] == aid), None)
+
+    def put(self, peer, aid, ver=None, **row):
+        return peer.commit('t', [{'e': 'areas', 'id': aid, 'op': 'put', 'ver': ver, 'row': {'name': aid, **row}}])
+
+    def test_local_save_between_receive_and_fold(self):
+        """A change received (journal) but not yet folded must not count as 'seen' by a local save."""
+        self.put(self.a, 'r')
+        self.c.converge()
+        ra, rb = self.area(self.a, 'r'), self.area(self.b, 'r')
+        self.put(self.a, 'r', ra['ver'], lastInspection='2026-02-01', nextInspection='2026-03-01')
+        recs, _ = self.a.journal.changes_since(self.b.journal.vv())
+        self.b.journal.receive(recs, 'a')              # arrives, not folded yet
+        self.put(self.b, 'r', rb['ver'], lastInspection='2026-09-01', nextInspection='2026-10-01')
+        self.b.store.fold_pending()
+        self.c.converge()
+        fps = self.c.fingerprints()
+        self.assertEqual(len(set(fps)), 1)
+        for p in self.c.peers:
+            self.assertEqual(self.area(p, 'r')['lastInspection'], '2026-09-01')
+            self.assertIn(('r', 'conflict'), {(k['id'], k['kind']) for k in p.store.conflicts()})
+
+    def test_impossible_change_is_refused_everywhere_and_sync_continues(self):
+        with self.b.journal.lock:
+            rec = self.b.journal.build('data', [{'e': 'inventory', 'id': 'q', 'op': 'insert', 's': {'item': 'x'}, 'n': {'qty': 10 ** 30}}])
+            self.b.journal.append_local(rec)
+        self.put(self.b, 'after-bad')
+        self.c.converge()
+        for p in self.c.peers:
+            self.assertIsNotNone(self.area(p, 'after-bad'))
+        self.assertEqual(self.a.journal.conn.execute("SELECT status FROM changes WHERE id=?", (rec['env']['id'],)).fetchone()[0], 'rejected')
+
+    def test_follower_fields_travel_with_leader(self):
+        self.put(self.a, 'f', inspectedBy='Ann', lastInspection='2026-01-01')
+        self.c.converge()
+        fa, fb = self.area(self.a, 'f'), self.area(self.b, 'f')
+        self.put(self.a, 'f', fa['ver'], inspectedBy='Ann', lastInspection='2026-09-20')   # inspectedBy unchanged
+        self.put(self.b, 'f', fb['ver'], inspectedBy='Bob', lastInspection='2026-09-10')
+        self.c.converge()
+        for p in self.c.peers:
+            x = self.area(p, 'f')
+            self.assertEqual((x['lastInspection'], x['inspectedBy']), ('2026-09-20', 'Ann'))
+
+    def test_row_kept_after_weak_restore_delete_does_not_vanish_on_edit(self):
+        import sqlite3 as sq
+        self.put(self.a, 'w')
+        self.c.converge()
+        # a backup without 'w' is restored on A while B edits 'w'
+        bk = os.path.join(self.c.root, 'bk.db')
+        sq.connect(bk).execute('CREATE TABLE areas (id TEXT, deleted INTEGER, name TEXT)').connection.commit()
+        wb = self.area(self.b, 'w')
+        self.a.store.restore_from(bk, 'u', 'ip', 'restore')
+        self.put(self.b, 'w', wb['ver'], description='edited on B')
+        self.c.converge()
+        self.assertIsNotNone(self.area(self.a, 'w'))
+        w = self.area(self.x, 'w')
+        self.put(self.x, 'w', w['ver'], description='edited later on X')
+        self.c.converge()
+        for p in self.c.peers:
+            self.assertEqual(self.area(p, 'w')['description'], 'edited later on X')
+
+    def test_fingerprint_cache_follows_flag_changes(self):
+        self.put(self.a, 'g')
+        self.c.converge()
+        ga, gb = self.area(self.a, 'g'), self.area(self.b, 'g')
+        self.put(self.a, 'g', ga['ver'], description='A')
+        self.put(self.b, 'g', gb['ver'], description='B')
+        self.c.converge()
+        for p in self.c.peers:
+            cached = p.store.fingerprint()
+            p.store._fp = (None, None)
+            self.assertEqual(cached, p.store.fingerprint())
+
+
 class NodeSafetyTest(unittest.TestCase):
     def test_copied_folder_detected(self):
         d = tempfile.mkdtemp()
@@ -288,6 +375,9 @@ class NodeSafetyTest(unittest.TestCase):
             s = System(d, {}, os.path.join(d, 'uploads'), os.path.join(d, 'bk'), log=lambda m: None)
             self.assertNotEqual(s.node.replica, replica)
             self.assertTrue(any(a['kind'] == 'rollback' for a in s.journal.alerts()))
+            # 'b' was only in the tables, not in the restored journal: it is kept and saved again as a new change
+            self.assertIn('b', {a['id'] for a in s.store.state()['areas']})
+            self.assertTrue(any('"b"' in r[0] for r in s.journal.conn.execute("SELECT body FROM changes WHERE kind='data'")))
             s.store.commit('u', 'ip', 'c', [{'e': 'areas', 'id': 'c', 'op': 'put', 'row': {'name': 'c'}}])
             self.assertTrue(s.journal.verify(True)['ok'])
             s.close()

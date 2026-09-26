@@ -121,7 +121,7 @@ def cmd_rebuild():
 
 def cmd_reset_admin():
     s = open_system()
-    from auth import ALL, hash_password, now
+    from auth import ALL, account_pub, hash_password, now
     import uuid
     if not s.node.is_authority:
         if s.node.role == 'member':
@@ -142,7 +142,7 @@ def cmd_reset_admin():
         u = admins[0]
         name = u['username']
         ops = [{'e': 'users', 'id': u['id'], 'op': 'update', 'c': {'pw_hash': ['', '']},
-                's': {'pw_hash': hash_password(pw), 'must_change': True, 'active': True, 'pw_changed_at': ts, 'updated_at': ts, 'updated_by': 'reset-admin'}},
+                's': {'pw_hash': hash_password(pw), 'pw_pub': account_pub(pw, u['id']), 'must_change': True, 'active': True, 'pw_changed_at': ts, 'updated_at': ts, 'updated_by': 'reset-admin'}},
                {'e': 'userCommands', 'id': uuid.uuid4().hex, 'op': 'insert', 'noaudit': True, 's': {'cmd': 'unlock', 'user': u['id']}},
                {'e': 'userCommands', 'id': uuid.uuid4().hex, 'op': 'insert', 'noaudit': True, 's': {'cmd': 'logout', 'user': u['id']}}]
     else:
@@ -150,7 +150,8 @@ def cmd_reset_admin():
         while a.conn.execute('SELECT 1 FROM users WHERE username=?', (name,)).fetchone():
             name += '1'
         uid = uuid.uuid4().hex
-        row = {'username': name, 'full_name': 'Administrator', 'title': 'System Administrator', 'pw_hash': hash_password(pw), 'perms': list(ALL),
+        row = {'username': name, 'full_name': 'Administrator', 'title': 'System Administrator', 'pw_hash': hash_password(pw),
+               'pw_pub': account_pub(pw, uid), 'perms': list(ALL),
                'areas': None, 'role': 'Administrator', 'active': True, 'deleted': False, 'must_change': True, 'pw_changed_at': ts, 'notes': '',
                'created_at': ts, 'created_by': 'reset-admin', 'updated_at': ts, 'updated_by': 'reset-admin'}
         ops = [{'e': 'users', 'id': uid, 'op': 'insert', 's': row, 'r': {'id': uid, **row}}]

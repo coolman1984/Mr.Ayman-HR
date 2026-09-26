@@ -308,7 +308,8 @@ class Store:
         rec, appended = None, False
         try:
             with self.journal.lock:
-                rec = self.journal.build(kind, rops, actor=user, actor_id=user_id, ip=ip, label=label)
+                # deps = what is FOLDED here (the state the change was planned on), not what the journal has received
+                rec = self.journal.build(kind, rops, actor=user, actor_id=user_id, ip=ip, label=label, deps=replica.markers(c))
                 before = len(self.folder.problems)
                 self.folder.fold(rec['env'], 'ok')
                 if len(self.folder.problems) != before:
@@ -324,7 +325,10 @@ class Store:
                 pass
             if not appended:
                 raise
-            self.fold_pending()  # the change is safely in the journal - apply it again from there
+            try:
+                self.fold_pending()  # the change is safely in the journal - apply it again from there
+            except Exception as e:  # noqa: BLE001 - it is saved; it will be applied at the next start at the latest
+                self.journal.alert('fold', f'A saved change could not be shown yet ({e}); it is applied again automatically.', '', 'warning')
         self.journal._notify([rec])
         return rec
 
@@ -389,8 +393,13 @@ class Store:
             if not changes and not touch:
                 return None, None
             s = {k: after.get(k) for k in list(changes) + touch if k in names and k not in counters}
+            for f, rule in RESOLVERS.get(entity, {}).items():  # a follower always travels with its leader
+                if rule.startswith('follow:') and rule[7:] in s and f not in s:
+                    s[f] = after.get(f)
             n = {k: (after.get(k) or 0) - (b.get(k) or 0) for k in changes if k in counters}
             rop = {'e': entity, 'id': rid, 'op': 'update', 's': s, 'a': area, 'c': changes}
+            if c.execute("SELECT 1 FROM sync_field WHERE tbl=? AND rid=? AND fld='_del' AND val LIKE '[1,%' LIMIT 1", (table, rid)).fetchone():
+                rop['x'] = False  # visible only because a restore's delete lost against another PC: editing it keeps it for good
             if n:
                 rop['n'] = n
             if not changes:
@@ -452,7 +461,7 @@ class Store:
                 c.execute('ROLLBACK')
                 raise
 
-    def restore_from(self, path, user, ip, label, user_id=''):
+    def restore_from(self, path, user, ip, label, user_id='', kind='restore'):
         """Brings the data back to the state of a backup file WITHOUT rolling back history: the differences
         become one 'restore' changeset. It is weak: real changes made at the same time on other PCs win over it."""
         src = sqlite3.connect(f'file:{path}?mode=ro', uri=True)
@@ -468,8 +477,8 @@ class Store:
                         for r in src.execute(f'SELECT * FROM {table}'):
                             if not ('deleted' in cols and r['deleted']):
                                 d = {'id': r['id']}
-                                for js, col, kind, _ in fields:
-                                    v = _out(kind, r[col]) if col in cols else None
+                                for js, col, ftype, _ in fields:
+                                    v = _out(ftype, r[col]) if col in cols else None
                                     if v is not None:
                                         d[js] = v
                                 backup[r['id']] = d
@@ -483,7 +492,7 @@ class Store:
             src.close()
         if not ops:
             return {'txn': None, 'changes': 0, 'version': self.version()}
-        return self.commit(user, ip, label, ops, force=True, user_id=user_id, kind='restore')
+        return self.commit(user, ip, label, ops, force=True, user_id=user_id, kind=kind)
 
     def mark_initialized(self):
         with self.lock:
@@ -546,10 +555,11 @@ class Store:
     def log_activity(self, user, ip, events):
         self.journal.log_activity(user, ip, events[:500])
 
-    def query_log(self, kind, q='', user='', typ='', area='', frm='', to='', limit=200, offset=0, areas=None, node=''):
+    def query_log(self, kind, q='', user='', typ='', area='', frm='', to='', limit=200, offset=0, areas=None, node='', admin=True):
         if kind == 'activity':
             self.journal.flush_activity()
-        return self.journal.query('audit' if kind == 'audit' else 'activity', q, user, typ, area, frm, to, node, limit, offset, areas)
+        return self.journal.query('audit' if kind == 'audit' else 'activity', q, user, typ, area, frm, to, node, limit, offset, areas,
+                                  business_only=not admin)
 
     # ------------------------------------------------------------ conflicts and convergence
     def conflicts(self):

@@ -321,7 +321,9 @@ class T03_Cluster(Base):
             with self.assertRaises(ApiError) as e:
                 v.post(path, {'id': self.servers[2].node_id})
             self.assertEqual(e.exception.code, 403, path)
-        v.get('/api/audit')  # the data-changes log stays available with logs.view
+        rows = v.get('/api/audit?limit=1000')['rows']  # the data-changes log stays available with logs.view ...
+        self.assertFalse([r for r in rows if r['entity'] in ('users', 'nodes')], '... but without user accounts')
+        self.assertTrue([r for r in self.ac.get('/api/audit?limit=1000')['rows'] if r['entity'] == 'users'])
 
     def test_f_unknown_pc_and_replay(self):
         """27-28. A PC that is not enrolled cannot open a session; a replayed authenticated request is refused."""
@@ -366,6 +368,36 @@ class T03_Cluster(Base):
         bad = syncmod.Connection(svc, '127.0.0.1', self.A.sync_port, 'ab' * 32)
         with self.assertRaises(syncmod.SyncError):
             bad.login()
+
+    def test_f2_bad_requests_to_the_sync_port(self):
+        """Oversized or malformed requests from strangers are refused before anything is read into memory."""
+        import socket
+        import ssl
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        ctx.check_hostname, ctx.verify_mode = False, ssl.CERT_NONE
+
+        def status(req):
+            s = ctx.wrap_socket(socket.create_connection(('127.0.0.1', self.A.sync_port), timeout=10))
+            s.sendall(req)
+            line = s.recv(100).split(b'\r\n')[0]
+            s.close()
+            return int(line.split()[1])
+        self.assertEqual(status(b'POST /sync/join HTTP/1.1\r\nHost: x\r\nContent-Length: -1\r\n\r\n'), 400)
+        self.assertEqual(status(b'POST /sync/join HTTP/1.1\r\nHost: x\r\nContent-Length: 300000000\r\n\r\n'), 413)
+        self.assertEqual(status(b'POST /sync/push HTTP/1.1\r\nHost: x\r\nContent-Length: 50000000\r\n\r\n'), 401)
+
+    def test_f3_own_password_change_on_any_pc(self):
+        """A user changes their own password on pc1; it works on every PC (proven with the old password's key)."""
+        c1 = self.servers[1].client()
+        c1.login('viewer', 'Look-only77')
+        c1.post('/api/auth/password', {'old': 'Look-only77', 'new': 'Fresh-start88'})
+        self.converged()
+        c2 = self.servers[2].client()
+        c2.login('viewer', 'Fresh-start88')
+        with self.assertRaises(ApiError):
+            self.servers[0].client().login('viewer', 'Look-only77')
+        rows = self.ac.get('/api/security?type=change-rejected&limit=50')['rows']
+        self.assertEqual(rows, [], 'the change was accepted everywhere')
 
     def test_g_revoke(self):
         """Removing a PC: it cannot sync any more; its earlier work stays."""

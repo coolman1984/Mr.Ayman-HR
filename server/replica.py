@@ -16,8 +16,13 @@ Folding is exactly-once per changeset: sync_marker holds, per origin, the highes
 change number already folded, and is updated in the same transaction as the rows.
 """
 import json
+import sqlite3
 
 from journal import PRIORITY, canonical, dominates
+
+# errors that depend on this PC (disk full, locked file) - the change is folded again later; every other error of
+# one change is the same on every PC, so that change is skipped the same way everywhere
+ENVIRONMENTAL = (sqlite3.OperationalError, MemoryError)
 
 META = ('_del', '_ins', '_upd')
 
@@ -151,9 +156,15 @@ class Registers:
         return out
 
     def set_flags(self, tbl, rid, flags):
+        """Returns True when the flags of the row changed."""
+        new = {k: canonical(v) for k, v in flags.items()}
+        old = {r[0]: r[1] for r in self.conn.execute('SELECT kind, detail FROM sync_flags WHERE tbl=? AND rid=?', (tbl, rid))}
+        if old == new:
+            return False
         self.conn.execute('DELETE FROM sync_flags WHERE tbl=? AND rid=?', (tbl, rid))
-        for k, v in flags.items():
-            self.conn.execute('INSERT INTO sync_flags VALUES (?,?,?,?)', (tbl, rid, k, canonical(v)))
+        for k, v in new.items():
+            self.conn.execute('INSERT INTO sync_flags VALUES (?,?,?,?)', (tbl, rid, k, v))
+        return True
 
 
 class BusinessFolder:
@@ -179,7 +190,9 @@ class BusinessFolder:
                 try:
                     changed |= self._op(env, op)
                     self.conn.execute('RELEASE op')
-                except (TypeError, ValueError, KeyError, AttributeError, IndexError) as e:
+                except ENVIRONMENTAL:
+                    raise
+                except Exception as e:  # noqa: BLE001
                     # the same change fails the same way on every PC, so skipping it keeps everybody equal
                     self.conn.execute('ROLLBACK TO op')
                     self.conn.execute('RELEASE op')
@@ -216,7 +229,7 @@ class BusinessFolder:
                 col = next(c for j, c, _ in spec['fields'] if j == js)
                 self.conn.execute(f'UPDATE {tbl} SET {col}=COALESCE({col},0)+?, ver=ver+1 WHERE id=?', (delta, rid))
                 changed = True
-        self.refresh_flags(op['e'], rid)
+        changed |= self.refresh_flags(op['e'], rid)
         return changed
 
     def materialize(self, entity, rid):
@@ -260,4 +273,4 @@ class BusinessFolder:
             for js, col, _ in spec['fields']:
                 if js in spec['counters']:
                     counters[js] = row[col] if row else None
-        self.reg.set_flags(tbl, rid, self.reg.flags(groups, win, self.reg.deleted(groups, win), counters))
+        return self.reg.set_flags(tbl, rid, self.reg.flags(groups, win, self.reg.deleted(groups, win), counters))

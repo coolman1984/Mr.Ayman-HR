@@ -265,7 +265,10 @@ class Handler(BaseHTTPRequestHandler):
         return {'Set-Cookie': f'{COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0'}
 
     def body(self, limit=20 * 1048576):
-        n = int(self.headers.get('Content-Length') or 0)
+        raw = self.headers.get('Content-Length') or '0'
+        if not raw.isdigit():
+            raise BadRequest('Invalid request length')
+        n = int(raw)
         if n > limit:
             raise BadRequest(f'Request too large ({n // 1048576} MB)')
         self._read = True
@@ -385,7 +388,8 @@ class Handler(BaseHTTPRequestHandler):
             node = qs.get('node', '') if is_admin(self.u) else ''
             return self.send(200, STORE.query_log('audit' if p == '/api/audit' else 'activity', qs.get('q', ''), qs.get('user', ''),
                                                   qs.get('type', ''), qs.get('area', ''), qs.get('from', ''), qs.get('to', ''),
-                                                  min(1000, int(qs.get('limit', 200))), int(qs.get('offset', 0)), self.u['areas'], node))
+                                                  min(1000, int(qs.get('limit', 200))), int(qs.get('offset', 0)), self.u['areas'], node,
+                                                  admin=is_admin(self.u)))
         if p == '/api/security':
             self.need('logs.security')
             self.need_admin()

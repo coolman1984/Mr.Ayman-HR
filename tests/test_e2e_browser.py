@@ -65,10 +65,14 @@ class BrowserFlow(unittest.TestCase):
             # ---- second PC: join
             b.goto(self.B.base)
             b.get_by_text('Join an existing system').click()
-            b.fill('input[name=address]', self.A.sync_address)
             b.fill('input[name=code]', code)
             b.fill('input[name=name]', 'Store PC')
-            b.get_by_role('button', name='Send Join Request').click()
+            b.get_by_role('button', name='Join').click()
+            # the address inside the code is this test machine's network address, which the test servers do not use:
+            # the screen then asks for the address (in a normal office the code alone is enough)
+            b.wait_for_selector('#joinAddr:not(.hidden)', timeout=20000)
+            b.fill('input[name=address]', self.A.sync_address)
+            b.get_by_role('button', name='Join').click()
             b.wait_for_selector('#joinCode')
             confirm = b.locator('#joinCode').inner_text().strip()
             self.shot(b, '03-join-waiting')
@@ -99,11 +103,13 @@ class BrowserFlow(unittest.TestCase):
             nav = s.locator('#sidebar').inner_text()
             self.assertNotIn('Users', nav)
             self.assertNotIn('Devices', nav)
+            self.assertTrue(s.locator('#syncInd').is_hidden(), 'ordinary users are not shown the sync light')
             s.goto(self.B.base + '/#/devices')
             s.wait_for_selector('text=No access')
             code = s.evaluate("() => fetch('/api/devices').then(r => r.status)")
             self.assertEqual(code, 403, 'the monitoring API itself refuses ordinary users')
             self.shot(s, '06-viewer-no-access')
+            s.close()  # (a page left open would log "connection refused" while the test switches PCs off)
             # ---- a change on the second PC appears on the first; both lights green
             b.evaluate("""() => fetch('/api/commit', {method: 'POST', headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({label: 'Add break area', ops: [{e: 'areas', id: 'e2e1', op: 'put', row: {name: 'Canteen East', location: 'Admin', status: 'Good'}}]})})""")
@@ -135,7 +141,7 @@ class BrowserFlow(unittest.TestCase):
             self.errors.clear()
             # the conflict page, the logs with PC column
             a.goto(self.A.base + '/#/devices')
-            a.get_by_role('button', name='Conflicts').click()
+            a.get_by_role('button', name='To decide').click()
             a.wait_for_selector('text=No conflicts')
             a.goto(self.A.base + '/#/logs')
             a.wait_for_selector('.log-tbl td:has-text("Canteen East")', timeout=20000)
@@ -166,9 +172,9 @@ class BrowserFlow(unittest.TestCase):
             self.B.set_cfg(peer_addresses={}, sync_port=port)
             self.B.start()
             a.goto(self.A.base + '/#/devices')
-            a.get_by_role('button', name='Conflicts').click()
+            a.get_by_role('button', name='To decide').click()
             try:
-                wait_until(lambda: (a.get_by_role('button', name='Conflicts').click(), a.wait_for_timeout(1500), a.locator('.card.conflict').count())[2], 60, 1, what='conflict shown')
+                wait_until(lambda: (a.get_by_role('button', name='To decide').click(), a.wait_for_timeout(1500), a.locator('.card.conflict').count())[2], 60, 1, what='conflict shown')
             except AssertionError:
                 self.shot(a, '12-conflict-missing')
                 raise AssertionError(f'conflict not shown; console: {self.errors}; api: ' + str(a.evaluate("() => fetch('/api/conflicts').then(r => r.text())")))
