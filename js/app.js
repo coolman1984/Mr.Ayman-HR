@@ -20,12 +20,17 @@ const me = () => ME ? ME.full_name : '';
 const can = (...perms) => !!ME && perms.some(p => ME.perms.includes(p));
 const allAreas = () => !!ME && ME.areas == null;
 const LOG_TABS = [['audit', 'Data Changes', 'logs.view'], ['activity', 'User Activity & Errors', 'logs.activity'], ['security', 'Logins & Security', 'logs.security']];
+/* activity and security logs are forensic data: only administrators (users.manage) may open them - the server checks this too */
+const canLogTab = t => can(t[2]) && (t[0] === 'audit' || can('users.manage'));
 const canSettingsPage = () => can('settings.view', 'backups.manage', 'backups.restore', 'trash.restore', 'data.import');
 /* route -> permission(s) needed to open it */
 const PAGE_PERMS = {
   dashboard: ['dashboard.view'], areas: ['areas.view'], area: ['areas.view'], equipment: ['equipment.view'], transactions: ['transactions.view'],
-  maintenance: ['maintenance.view'], reports: ['reports.view'], logs: ['logs.view', 'logs.activity', 'logs.security'], users: ['users.manage']
+  maintenance: ['maintenance.view'], reports: ['reports.view'], logs: ['logs.view', 'users.manage'], users: ['users.manage'],
+  devices: ['users.manage']
 };
+/* pages added by other scripts (js/devices.js): route -> function(route) returning HTML */
+const EXTRA_VIEWS = {};
 const canPage = top => top === 'settings' ? canSettingsPage() : top === 'account' ? true : can(...(PAGE_PERMS[top] || ['dashboard.view']));
 const firstPage = () => ['dashboard', 'areas', 'maintenance', 'equipment', 'transactions', 'reports', 'logs', 'users', 'settings'].find(canPage) || 'account';
 
@@ -471,6 +476,7 @@ function renderShell(route) {
       ${link('#/reports', 'report', 'Reports', top === 'reports')}
       ${link('#/logs', 'activity', 'Activity Log', top === 'logs')}
       ${link('#/users', 'users', 'Users &amp; Permissions', top === 'users')}
+      ${link('#/devices', 'sync', 'Devices &amp; Sync', top === 'devices', typeof devicesNavBadge === 'function' ? devicesNavBadge() : '')}
       ${link('#/settings', 'settings', 'Settings', top === 'settings')}
     </div>
     <div class="side-foot"><b>Better Break Areas</b>for a better workplace.</div>`;
@@ -500,6 +506,7 @@ function render() {
   else if (top === 'users') v.innerHTML = viewUsers();
   else if (top === 'account') v.innerHTML = viewAccount();
   else if (top === 'dashboard') v.innerHTML = viewDashboard();
+  else if (EXTRA_VIEWS[top]) v.innerHTML = EXTRA_VIEWS[top](route);
   else v.innerHTML = viewNoAccess();
   $$('[data-results]', v).forEach(el => RESULTS[el.dataset.results](el));
   $$('[data-async]', v).forEach(el => ASYNC[el.dataset.async](el).catch(err => {
@@ -571,7 +578,7 @@ function satLine(points, { h = 230, compact = false } = {}) {
 const F = {
   dash: { q: '', status: '' }, areas: { q: '', loc: '', status: '', active: '' }, tx: { q: '', area: '', item: '', action: '', from: '', to: '' },
   hist: { item: '', action: '' }, photoTab: 'All', sat: { loc: '', month: '' },
-  log: { tab: 'audit', q: '', user: '', type: '', from: '', to: '' }
+  log: { tab: 'audit', q: '', user: '', type: '', node: '', from: '', to: '' }
 };
 
 function viewWelcome() {
@@ -1546,13 +1553,16 @@ const SECURITY_EVENTS = [['login', 'Logged in'], ['logout', 'Logged out'], ['log
   ['account-locked', 'Account locked'], ['session-expired', 'Logged out automatically'], ['password-changed', 'Changed own password'],
   ['password-change-failed', 'Password change failed'], ['password-reset', 'Password reset by admin'], ['user-created', 'User created'],
   ['user-changed', 'User / permissions changed'], ['user-disabled', 'User disabled'], ['user-deleted', 'User deleted'], ['user-unlocked', 'User unlocked'],
-  ['forced-logout', 'Logged out by admin'], ['access-denied', 'Access denied'], ['backup-restored', 'Backup restored'], ['setup', 'First setup'], ['admin-reset', 'Admin password reset on server']];
+  ['forced-logout', 'Logged out by admin'], ['access-denied', 'Access denied'], ['backup-restored', 'Backup restored'], ['setup', 'First setup'], ['admin-reset', 'Admin password reset on server'],
+  ['pairing-code', 'Pairing code created'], ['pairing-request', 'PC asked to join'], ['pairing-refused', 'Join refused'], ['pairing-rejected', 'Join rejected'],
+  ['node-enrolled', 'PC added'], ['node-revoked', 'PC removed'], ['node-changed', 'PC changed'], ['node-confirmed', 'PC confirmed'],
+  ['integrity-check', 'History check'], ['conflict-resolved', 'Conflict resolved'], ['change-rejected', 'Change refused']];
 const SEC_LABEL = Object.fromEntries(SECURITY_EVENTS);
 const SEC_BAD = /failed|blocked|locked|denied|reset|deleted|disabled/;
 let LOGDATA = { rows: [], total: 0, users: [] };
 
 function viewLogs() {
-  const tabs = LOG_TABS.filter(t => can(t[2]));
+  const tabs = LOG_TABS.filter(canLogTab);
   if (!tabs.some(t => t[0] === F.log.tab)) F.log = { ...F.log, tab: tabs[0][0], type: '', area: '' };
   const f = F.log, audit = f.tab === 'audit';
   const types = audit ? Object.entries(OP_BADGE).map(([k, [l]]) => [k, l]) : f.tab === 'security' ? SECURITY_EVENTS : ACTIVITY_TYPES;
@@ -1565,6 +1575,7 @@ function viewLogs() {
       <select data-logf="user"><option value="">All users</option>${options(LOGDATA.users, f.user)}</select>
       <select data-logf="type"><option value="">All types</option>${options(types, f.type)}</select>
       ${audit ? `<select data-logf="area"><option value="">All break areas</option>${options(DB.areas.map(a => [a.id, a.name]), f.area)}</select>` : ''}
+      ${ME.admin && (LOGDATA.nodes || []).length > 1 ? `<select data-logf="node"><option value="">All PCs</option>${options(LOGDATA.nodes.map(n => [n.id, n.name]), f.node)}</select>` : ''}
       <label class="fld" style="flex-direction:row;align-items:center">From<input type="date" data-logf="from" value="${f.from}"></label>
       <label class="fld" style="flex-direction:row;align-items:center">To<input type="date" data-logf="to" value="${f.to}"></label>
       <button class="btn sm" data-act="logClear">Clear</button>
@@ -1573,9 +1584,11 @@ function viewLogs() {
   </div>`;
 }
 const logQuery = (offset = 0, limit = 200) => {
-  const f = F.log, p = new URLSearchParams({ q: f.q, user: f.user, type: f.type, area: f.tab === 'audit' ? f.area || '' : '', from: f.from, to: f.to, offset, limit });
+  const f = F.log, p = new URLSearchParams({ q: f.q, user: f.user, type: f.type, area: f.tab === 'audit' ? f.area || '' : '', node: f.node || '', from: f.from, to: f.to, offset, limit });
   return api('GET', `/api/${f.tab}?${p}`);
 };
+/* which PC (and address) an entry comes from; entries made before the multi-PC upgrade are marked */
+const pcCell = r => `${r.node_name ? `<b class="pc-name">${esc(r.node_name)}</b><br>` : ''}${esc(r.ip || '')}${r.kind === 'imported' ? '<br><small>before upgrade</small>' : ''}`;
 const short = (v, n = 60) => { v = v == null ? '' : typeof v === 'object' ? JSON.stringify(v) : String(v); return v.length > n ? v.slice(0, n) + '…' : v; };
 function auditDetail(r) {
   const parse = s => { try { return JSON.parse(s || 'null'); } catch (e) { return null; } };
@@ -1590,19 +1603,19 @@ function logRowsHTML(rows) {
   if (F.log.tab === 'audit') return rows.map(r => {
     const [l, c] = OP_BADGE[r.op] || [r.op, 'b-gray'];
     const a = area(r.area_id);
-    return `<tr><td class="nowrap">${esc(r.ts.replace('T', ' '))}</td><td>${esc(r.user)}</td><td class="muted">${esc(r.ip)}</td><td class="wrap">${esc(r.label)}</td>
+    return `<tr><td class="nowrap">${esc(r.ts.replace('T', ' '))}</td><td>${esc(r.user)}</td><td class="muted">${pcCell(r)}</td><td class="wrap">${esc(r.label)}</td>
       <td>${esc(ENTITY_NAME[r.entity] || r.entity)}${a ? `<br><a class="link" href="#/area/${a.id}">${esc(a.name)}</a>` : ''}</td><td><span class="badge ${c}">${l}</span></td><td class="wrap log-detail">${auditDetail(r)}</td></tr>`;
   }).join('');
   if (F.log.tab === 'security') return rows.map(r => `<tr class="${SEC_BAD.test(r.event) ? 'err' : ''}"><td class="nowrap">${esc(r.ts.replace('T', ' '))}</td><td>${esc(r.user)}</td>
-    <td class="muted">${esc(r.ip)}</td><td><span class="badge ${SEC_BAD.test(r.event) ? 'b-red' : r.event === 'login' ? 'b-green' : 'b-gray'}">${esc(SEC_LABEL[r.event] || r.event)}</span></td>
+    <td class="muted">${pcCell(r)}</td><td><span class="badge ${SEC_BAD.test(r.event) ? 'b-red' : r.event === 'login' ? 'b-green' : 'b-gray'}">${esc(SEC_LABEL[r.event] || r.event)}</span></td>
     <td class="wrap">${esc(r.target)}</td><td class="wrap log-detail">${esc(r.detail)}</td></tr>`).join('');
-  return rows.map(r => `<tr class="${/error|failed|denied/.test(r.type) ? 'err' : ''}"><td class="nowrap">${esc(r.ts.replace('T', ' '))}</td><td>${esc(r.user)}</td><td class="muted">${esc(r.ip)}</td>
+  return rows.map(r => `<tr class="${/error|failed|denied/.test(r.type) ? 'err' : ''}"><td class="nowrap">${esc(r.ts.replace('T', ' '))}</td><td>${esc(r.user)}</td><td class="muted">${pcCell(r)}</td>
     <td><span class="badge ${/error|failed|denied/.test(r.type) ? 'b-red' : r.type === 'save' ? 'b-green' : 'b-gray'}">${esc(r.type)}</span></td><td class="wrap">${esc(r.action)}</td><td class="wrap">${esc(r.target)}</td>
     <td class="muted">${esc(r.page)}</td><td class="wrap log-detail" title="${esc(r.detail)}">${esc(short(r.detail, 120))}</td></tr>`).join('');
 }
 function logTableHTML() {
   const audit = F.log.tab === 'audit';
-  const head = audit ? ['Time', 'User', 'PC (IP)', 'Action', 'Record', 'Change', 'Details']
+  const head = audit ? ['Time', 'User', 'PC / IP', 'Action', 'Record', 'Change', 'Details']
     : F.log.tab === 'security' ? ['Time', 'User', 'PC (IP)', 'Event', 'Account / Target', 'Details'] : ['Time', 'User', 'PC (IP)', 'Type', 'Action', 'Target', 'Page', 'Detail'];
   return `<div class="tbl-wrap"><table class="tbl log-tbl"><thead><tr>${head.map(h => `<th>${h}</th>`).join('')}</tr></thead>
     <tbody>${logRowsHTML(LOGDATA.rows) || `<tr><td colspan="${head.length}" class="empty">No records match the filters</td></tr>`}</tbody></table></div>
@@ -1617,6 +1630,7 @@ const ASYNC = {
     const c = $('#logCount'); if (c) c.textContent = LOGDATA.total.toLocaleString() + ' records';
     const us = $('[data-logf=user]');
     if (us) us.innerHTML = `<option value="">All users</option>${options(LOGDATA.users, F.log.user)}`;
+    if (ME.admin && (LOGDATA.nodes || []).length > 1 && !$('[data-logf=node]')) rerender();
   },
   async serverInfo(el) {
     const i = await api('GET', '/api/info');
@@ -1633,11 +1647,12 @@ const ASYNC = {
   },
   async backups(el) {
     const list = await api('GET', '/api/backups');
-    const kind = { auto: 'Automatic', startup: 'Server start', manual: 'Manual', 'pre-import': 'Before import', 'pre-restore': 'Before restore' };
+    const kind = { auto: 'Automatic', startup: 'Server start', manual: 'Manual', 'pre-import': 'Before import', 'pre-restore': 'Before restore', 'pre-upgrade': 'Before upgrade' };
     el.innerHTML = list.length ? `<div class="tbl-wrap scroll"><table class="tbl"><thead><tr><th>Date &amp; Time</th><th>Type</th><th class="num">Size</th><th></th></tr></thead><tbody>
       ${list.map(b => `<tr><td>${esc(b.time.replace('T', ' '))}</td><td>${esc(kind[b.kind] || b.kind)}</td><td class="num">${fileSize(b.size)}</td>
         <td>${can('backups.restore') ? `<button class="btn sm" data-act="backupRestore" data-name="${esc(b.name)}" data-time="${esc(b.time)}">${ic('restore')}Restore</button>` : ''}</td></tr>`).join('')}
-      </tbody></table></div><p class="hint">${list.length} backups. Restoring first saves the current data as a new backup, so a restore can always be undone.</p>`
+      </tbody></table></div><p class="hint">${list.length} backups. Restoring first saves the current data as a new backup, so a restore can always be undone.
+      A restore never deletes history, logs or user accounts, and it is shared with the other PCs.</p>`
       : '<p class="empty">No backups yet – click "Backup Now".</p>';
   },
   async trash(el) {
@@ -1673,22 +1688,7 @@ function showLogin(msg = '') {
     </form>
     <p class="hint">Forgot your password? Ask the system administrator to set a new one.</p>`);
 }
-function showSetup(local) {
-  authScreen(local ? `<h2>Create the administrator account</h2>
-    <p class="muted">This is the first start. The administrator can add users, choose what each one may see and do, and review everything they did.</p>
-    <form class="auth-form" data-form="setup">
-      <label>Full name<input name="full_name" required autocomplete="name" placeholder="e.g. Ayman Essam"></label>
-      <label>User name<input name="username" required autocomplete="username" autocapitalize="none" spellcheck="false" placeholder="e.g. ayman"></label>
-      <label>Password<input name="password" type="password" required autocomplete="new-password"></label>
-      <label>Repeat password<input name="password2" type="password" required autocomplete="new-password"></label>
-      <p class="hint">${pwRules()}</p>
-      <p class="auth-msg" id="authMsg"></p>
-      <button class="btn primary">${ic('check')}Create Administrator</button>
-    </form>`
-    : `<h2>System not set up yet</h2><p class="muted">The administrator account must first be created <b>on the server PC itself</b>
-      (the PC running start.bat) by opening <b>http://localhost:${esc(location.port || '80')}/</b> there.</p>
-      <button class="btn" data-act="reloadPage">${ic('restore')}Try again</button>`);
-}
+/* showSetup(): first start of a PC - see js/devices.js (create the administrator or join another PC) */
 async function afterLogin(user) {
   ME = user;
   document.body.classList.remove('locked');
@@ -1768,6 +1768,7 @@ function viewUsers() {
   return `<div class="page-head"><h2>Users &amp; Permissions</h2><span class="muted" id="userCount"></span>
     <div class="actions">${can('logs.security') ? `<button class="btn" data-act="securityLog">${ic('activity')}Logins &amp; Security Log</button>` : ''}
       <button class="btn primary" data-act="userEdit">${ic('plus')}Add User</button></div></div>
+  <div id="usersRO"></div>
   <div class="card"><div data-async="users"><p class="muted">Loading…</p></div></div>
   <p class="hint">Every user logs in with a personal user name and password. Everything each user does is recorded in the Activity Log with their name.
     Disable or delete an account as soon as the person leaves – their history stays in the logs.</p>`;
@@ -1862,6 +1863,8 @@ function userEdit(uid) {
 ASYNC.users = async el => {
   USERS = await api('GET', '/api/users');
   el.innerHTML = userRowsHTML();
+  const ro = $('#usersRO');
+  if (ro) ro.innerHTML = USERS.authority ? '' : `<p class="err-box info">${ic('alert')} ${esc(USERS.authorityHint)}</p>`;
   const c = $('#userCount'); if (c) c.textContent = USERS.users.length + ' users · ' + USERS.users.filter(u => u.online).length + ' online now';
 };
 async function userAction(action, uid, confirmText, done) {
@@ -2087,20 +2090,20 @@ const ACT = {
     catch (e) { toast('Backup failed: ' + e.message, true, 8000); }
   },
   async backupRestore(d) {
-    if (!confirm(`Restore the backup from ${d.time.replace('T', ' ')}?\n\nALL data will go back to that moment for every user. The current data is saved as a new backup first, so you can undo this.`)) return;
+    if (!confirm(`Restore the backup from ${d.time.replace('T', ' ')}?\n\nThe data goes back to that moment for every user and on every PC. The current data is saved as a new backup first, so you can undo this.\n\nNothing is erased: the restore is saved as one new change in the history, and changes that another PC made meanwhile and this PC has not received yet are kept.`)) return;
     try {
       const r = await api('POST', '/api/backups/restore', { name: d.name });
       await load(); rerender();
-      toast('Backup restored. Previous data saved as ' + r.safety, false, 8000);
+      toast(`Backup restored (${r.changes} records brought back). Previous data saved as ${r.safety}`, false, 8000);
     } catch (e) { toast('Restore failed: ' + e.message, true, 8000); }
   },
   async trashRestore(d) {
     try { await api('POST', '/api/trash/restore', { txn: d.txn }); await load(); rerender(); toast('Records restored'); }
     catch (e) { toast('Restore failed: ' + e.message, true, 8000); }
   },
-  logTab: d => { F.log = { tab: d.tab, q: '', user: '', type: '', area: '', from: '', to: '' }; rerender(); },
+  logTab: d => { F.log = { tab: d.tab, q: '', user: '', type: '', area: '', node: '', from: '', to: '' }; rerender(); },
   logRefresh: () => rerender(),
-  logClear: () => { F.log = { tab: F.log.tab, q: '', user: '', type: '', area: '', from: '', to: '' }; rerender(); },
+  logClear: () => { F.log = { tab: F.log.tab, q: '', user: '', type: '', area: '', node: '', from: '', to: '' }; rerender(); },
   async logMore(d, el) {
     el.disabled = true;
     try {
@@ -2118,12 +2121,12 @@ const ACT = {
         if (rows.length >= r.total || !r.rows.length) break;
       }
     } catch (e) { return toast('Export failed: ' + e.message, true); }
-    if (audit) exportXLSX('data_changes_log', ['Time', 'User', 'IP', 'Action', 'Table', 'Record ID', 'Break Area', 'Operation', 'Changes / Record'],
-      rows.map(r => [r.ts, r.user, r.ip, r.label, ENTITY_NAME[r.entity] || r.entity, r.entity_id, (area(r.area_id) || {}).name || r.area_id || '', (OP_BADGE[r.op] || [r.op])[0], r.op === 'update' ? r.changes : r.after || r.before]), 'Data Changes');
-    else if (F.log.tab === 'security') exportXLSX('security_log', ['Time', 'User', 'IP', 'Event', 'Account / Target', 'Details'],
-      rows.map(r => [r.ts, r.user, r.ip, SEC_LABEL[r.event] || r.event, r.target, r.detail]), 'Logins & Security');
-    else exportXLSX('user_activity_log', ['Time', 'User', 'IP', 'Type', 'Action', 'Target', 'Page', 'Detail'],
-      rows.map(r => [r.ts, r.user, r.ip, r.type, r.action, r.target, r.page, r.detail]), 'User Activity');
+    if (audit) exportXLSX('data_changes_log', ['Time', 'User', 'PC', 'IP', 'Action', 'Table', 'Record ID', 'Break Area', 'Operation', 'Changes / Record'],
+      rows.map(r => [r.ts, r.user, r.node_name || '', r.ip, r.label, ENTITY_NAME[r.entity] || r.entity, r.entity_id, (area(r.area_id) || {}).name || r.area_id || '', (OP_BADGE[r.op] || [r.op])[0], r.op === 'update' ? r.changes : r.after || r.before]), 'Data Changes');
+    else if (F.log.tab === 'security') exportXLSX('security_log', ['Time', 'User', 'PC', 'IP', 'Event', 'Account / Target', 'Details'],
+      rows.map(r => [r.ts, r.user, r.node_name || '', r.ip, SEC_LABEL[r.event] || r.event, r.target, r.detail]), 'Logins & Security');
+    else exportXLSX('user_activity_log', ['Time', 'User', 'PC', 'IP', 'Type', 'Action', 'Target', 'Page', 'Detail'],
+      rows.map(r => [r.ts, r.user, r.node_name || '', r.ip, r.type, r.action, r.target, r.page, r.detail]), 'User Activity');
   }
 };
 
@@ -2216,7 +2219,8 @@ setInterval(async () => {
   const ae = document.activeElement;
   if (ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName) && ae.closest('#view')) return;
   try {
-    const { version, me: mv } = await api('GET', '/api/version');
+    const { version, me: mv, sync } = await api('GET', '/api/version');
+    if (typeof syncIndicator === 'function') syncIndicator(sync);
     if (mv !== ME.ver) { // the administrator changed this account - apply the new permissions right away
       ME = await api('GET', '/api/me');
       if (ME.must_change) return start();
@@ -2250,6 +2254,7 @@ async function start() {
   }
   if (!canPage(parseRoute()[0])) history.replaceState(null, '', '#/' + firstPage());
   render();
+  if (typeof refreshSync === 'function') refreshSync();
   track('session', 'open', navigator.userAgent);
   try {
     const info = await api('GET', '/api/info');
@@ -2263,8 +2268,9 @@ async function start() {
 async function boot() {
   let st;
   try { st = await api('GET', '/api/auth/status'); } catch (e) { return serverDown(e); }
-  if (!st.hasUsers) return showSetup(st.local);
+  if (st.node && st.node.moved) return showMoved(st);
+  if (!st.hasUsers) return showSetup(st.local, st);
   if (!st.me) return showLogin();
   await afterLogin(st.me);
 }
-boot();
+/* boot() is started at the end of js/devices.js, after all scripts are loaded */
