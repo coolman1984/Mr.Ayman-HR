@@ -359,19 +359,27 @@ class SyncService:
 
     # ------------------------------------------------------------ peers
     def peers(self):
-        """The other active PCs, with the address and certificate fingerprint to use."""
+        """The other active PCs, with the address and certificate fingerprint to use.
+        Address: config override > the address the PC last connected to us from (authenticated, so a new IP from
+        DHCP is followed automatically) with its known port > the address in the device list / from pairing."""
         out = {}
         if self.node.moved or self.node.role == 'unconfigured':
             return out
-        for n in self.journal.roster().values():
+        roster = self.journal.roster()
+        boot = self.journal.meta('bootstrap_peer') or {}
+        for n in roster.values():
             if n['id'] == self.node.id or n.get('status') != 'active' or not n.get('cert_fp'):
                 continue
-            addr = self.overrides.get(n['id']) or n.get('address') or ''
+            base = n.get('address') or (boot.get('address') if boot.get('node') == n['id'] else '') or ''
+            addr = self.overrides.get(n['id'])
+            if not addr and base:
+                seen = (self.status.get(n['id']) or {}).get('last_ip')
+                host, _, port = base.rpartition(':')
+                addr = f'{seen}:{port}' if seen and port.isdigit() else base
             if addr:
                 out[n['id']] = {'id': n['id'], 'name': n.get('name') or n['id'], 'address': addr, 'fp': n['cert_fp']}
-        boot = self.journal.meta('bootstrap_peer')
-        if boot and boot['node'] not in out and boot['node'] != self.node.id:
-            r = self.journal.roster().get(boot['node'])
+        if boot and boot.get('node') not in out and boot.get('node') != self.node.id:
+            r = roster.get(boot['node'])
             if not r or r.get('status') == 'active':
                 out[boot['node']] = {'id': boot['node'], 'name': boot.get('name') or boot['node'],
                                      'address': self.overrides.get(boot['node']) or boot['address'], 'fp': boot['fp']}
@@ -707,7 +715,11 @@ class SyncService:
             self.sessions = {k: v for k, v in self.sessions.items() if v['expires'] > t}
             self.sessions[sid] = {'node': n['id'], 'key': key, 'seq': 0, 'expires': t + 600}
             st = self.status.setdefault(n['id'], {'state': 'unknown', 'fails': 0})
+            moved = st.get('last_ip') not in (None, ip)
             st['last_ip'] = ip
+        if moved:
+            self.save_status(n['id'])
+            self.kick()
         info = {'node': self.node.id, 'name': self.node.name, 'app': APP_VERSION, 'schema': SCHEMA_VERSION, 'protocol': PROTOCOL, 'time': now()}
         return 200, {'session': sid, 'key': key.hex(), 'info': info}, 'application/json', {}
 

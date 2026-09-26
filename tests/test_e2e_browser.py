@@ -138,6 +138,8 @@ class BrowserFlow(unittest.TestCase):
             b2.wait_for_selector('text=Break Area 01', timeout=30000)
             wait_until(lambda: 'All PCs up to date' in a.evaluate("() => fetch('/api/version').then(r => r.json()).then(v => SYNC_TEXT[v.sync.state][0])"), 60,
                        what='reconnected')
+            b.close()
+            b2.close()  # (pages on the store PC would log "connection refused" while it is switched off below)
             self.errors.clear()
             # the conflict page, the logs with PC column
             a.goto(self.A.base + '/#/devices')
@@ -168,6 +170,7 @@ class BrowserFlow(unittest.TestCase):
             b3.get_by_role('button', name='Log In').click()
             b3.wait_for_selector('text=Break Area 01', timeout=30000)
             self.assertEqual(b3.evaluate(edit, 'Opened on Tuesday'), 200)
+            b3.close()
             self.B.stop()
             self.B.set_cfg(peer_addresses={}, sync_port=port)
             self.B.start()

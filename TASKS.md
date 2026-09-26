@@ -14,7 +14,8 @@ Branch: `claude/distributed-offline-first-sync-cg26d2`.
 - [x] 6. Upgrade migration, backups incl. journal, compensating restore, disaster rebuild (`nodectl.py`), clone detection
 - [x] 7. UI: Devices & Sync, sync light, conflicts, monitoring (PC column), join wizard, read-only users on member PCs
 - [x] 8. Tests (below) + browser end-to-end
-- [ ] 9. Independent reviews (correctness, security), fixes, PR
+- [x] 9. Independent reviews (correctness, security) – all verified findings fixed with regression tests (see DISTRIBUTED_SYNC_ARCHITECTURE.md §13a)
+- [x] 10. Simpler screens for non-technical users: sync light only for administrators, one code to add a PC, plain wording, automatic IP follow-up
 
 ## How to run the tests
 
@@ -64,4 +65,5 @@ python3 -m unittest test_e2e_browser                  # needs Playwright + Chrom
 | – | randomized deterministic convergence (6 fixed seeds, partitions, duplicate / reordered / truncated delivery) | `test_convergence` | pass |
 | – | forged administrator change, own-password-only rule, data changes touching accounts | `test_unit.JournalRulesTest` | pass |
 | – | acceptance story (definition of success) | `T00_DefinitionOfSuccess` | pass |
+| – | review regressions: save between receive and fold, impossible change, followers, weak restore delete, fingerprint cache, password proof, pre-auth limits, account records hidden | `test_unit.ReviewFindingsTest`, `T03_Cluster.test_f2`, `test_f3`, `test_e` | pass |
 | – | browser: setup, pairing through the screens, login on 2nd PC, viewer has no access (UI + API 403), live change, sync light green/offline, logs with PC, conflict shown and resolved in UI, no console errors | `test_e2e_browser` | pass |

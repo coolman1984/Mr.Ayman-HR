@@ -229,7 +229,7 @@ Object.assign(ACT, {
     try { r = await api('POST', '/api/devices/invite', {}); } catch (e) { return toast(e.message, true, 7000); }
     modal('Add a PC', `<ol class="steps">
         <li>On the new PC start the program (<b>start.bat</b>) and choose <b>Join an existing system</b>.</li>
-        <li>Type this code there:<p class="big-code mono code-box">${esc(r.code)}</p></li>
+        <li>Type this code there:<p class="big-code mono code-box">${r.code.split('-').reduce((o, g, i) => o + (i && i % 5 === 0 ? '<br>' : i ? ' ' : '') + esc(g), '')}</p></li>
         <li>Come back here and press <b>Approve</b> when the new PC appears.</li></ol>
       <p class="hint">The code works once, for 15 minutes. Nobody can join without your approval.</p>`,
     { extra: `<button type="button" class="btn" data-act="copyLink" data-url="${esc(r.code)}">${ic('copy')}Copy code</button>` });
