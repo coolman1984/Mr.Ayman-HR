@@ -80,6 +80,11 @@ RESOLVERS = {
 }
 SPECS = {e: {'table': t, 'fields': [(js, col, kind) for js, col, kind, _ in f], 'counters': COUNTERS.get(e, set()),
              'resolvers': RESOLVERS.get(e, {})} for e, (t, _, f) in ENTITIES.items()}
+# manifest of uploaded files (photos, documents, logo): path -> SHA-256 and size, replicated so every PC can
+# fetch and verify the files it is missing
+FILES = ('attachments', [('sha256', 'sha256', T), ('size', 'size_bytes', I), ('type', 'mime', T)])
+SPECS['files'] = {'table': FILES[0], 'fields': FILES[1], 'counters': set(), 'resolvers': {}}
+REPLICATED = set(SPECS)
 
 
 class Conflict(Exception):
@@ -166,7 +171,7 @@ class Store:
     def _migrate(self, conn):
         meta = 'id TEXT PRIMARY KEY, ver INTEGER NOT NULL DEFAULT 1, created_at TEXT, created_by TEXT, updated_at TEXT, updated_by TEXT, ' \
                'deleted INTEGER NOT NULL DEFAULT 0, deleted_at TEXT, deleted_by TEXT, deleted_txn TEXT'
-        for table, _, fields in ENTITIES.values():
+        for table, _, fields in [*ENTITIES.values(), (FILES[0], '', [(a, b, c, '') for a, b, c in FILES[1]])]:
             conn.execute(f'CREATE TABLE IF NOT EXISTS {table} ({meta})')
             have = {r[1] for r in conn.execute(f'PRAGMA table_info({table})')}
             for _, col, kind, _ in fields:
@@ -268,7 +273,6 @@ class Store:
             raise BadRequest('Nothing to save')
         if self.journal is None:
             raise RuntimeError('The change journal is not ready')
-        rec, appended = None, False
         with self.lock:
             c = self.conn
             c.execute('BEGIN IMMEDIATE')
@@ -282,33 +286,55 @@ class Store:
                         rops.append(r)
                 if guard:
                     guard(audit, force)
-                if not rops:
-                    c.execute('ROLLBACK')
-                    return {'txn': None, 'version': self.version(), 'changes': 0}
-                with self.journal.lock:
-                    rec = self.journal.build(kind, rops, actor=user, actor_id=user_id, ip=ip, label=label)
-                    before = len(self.folder.problems)
-                    self.folder.fold(rec['env'], 'ok')
-                    if len(self.folder.problems) != before:
-                        raise BadRequest('This change could not be saved: ' + self.folder.problems[-1])
-                    self._bump(c)
-                    self.journal.append_local(rec)
-                    appended = True
-                c.execute('COMMIT')
             except Exception:
-                try:
-                    c.execute('ROLLBACK')
-                except sqlite3.OperationalError:
-                    pass
-                if not appended:
-                    raise
-                self.fold_pending()  # the change is safely in the journal - apply it again from there
+                c.execute('ROLLBACK')
+                raise
+            if not rops:
+                c.execute('ROLLBACK')
+                return {'txn': None, 'version': self.version(), 'changes': 0}
+            rec = self._save(rops, user, ip, label, user_id, kind)
             version = self.version()
-        self.journal._notify([rec])
         env = rec['env']
         self._audit_file([{'ts': env['ts'], 'txn': env['id'], 'node': env['node'], 'user': user, 'ip': ip, 'label': label,
                            **{k: a[k] for k in ('entity', 'id', 'op', 'changes')}} for a in audit])
         return {'txn': env['id'], 'version': version, 'changes': len(audit)}
+
+    def _save(self, rops, user, ip, label, user_id='', kind='data', begin=False):
+        """Turns journal ops into one changeset: fold into the tables, append to the journal, commit.
+        Called with the store lock held and (unless begin) a transaction already open."""
+        c = self.conn
+        if begin:
+            c.execute('BEGIN IMMEDIATE')
+        rec, appended = None, False
+        try:
+            with self.journal.lock:
+                rec = self.journal.build(kind, rops, actor=user, actor_id=user_id, ip=ip, label=label)
+                before = len(self.folder.problems)
+                self.folder.fold(rec['env'], 'ok')
+                if len(self.folder.problems) != before:
+                    raise BadRequest('This change could not be saved: ' + self.folder.problems[-1])
+                self._bump(c)
+                self.journal.append_local(rec)
+                appended = True
+            c.execute('COMMIT')
+        except Exception:
+            try:
+                c.execute('ROLLBACK')
+            except sqlite3.OperationalError:
+                pass
+            if not appended:
+                raise
+            self.fold_pending()  # the change is safely in the journal - apply it again from there
+        self.journal._notify([rec])
+        return rec
+
+    def record_file(self, path, sha256, size, mime, user, ip, user_id=''):
+        """Adds an uploaded file to the replicated manifest so the other PCs fetch and verify it."""
+        with self.lock:
+            if self.file_info(path):
+                return
+            self._save([{'e': 'files', 'id': path, 'op': 'insert', 'x': False, 'noaudit': True,
+                         's': {'sha256': sha256, 'size': size, 'type': mime}}], user, ip, 'Uploaded file', user_id, begin=True)
 
     def _bump(self, c):
         c.execute("UPDATE meta SET value=CAST(value AS INTEGER)+1 WHERE key='data_version'")
@@ -406,6 +432,25 @@ class Store:
                     c.execute('ROLLBACK')
                     raise
                 total += len(items)
+
+    def fold_upgrade(self):
+        """First fold after the upgrade, in ONE transaction: the bootstrap changesets re-create every row with the
+        same values; quantities are counters, so they are first set to 0 and then re-added from the journal."""
+        with self.lock:
+            c = self.conn
+            c.execute('BEGIN IMMEDIATE')
+            try:
+                for e, spec in SPECS.items():
+                    for js, col, _ in spec['fields']:
+                        if js in spec['counters']:
+                            c.execute(f'UPDATE {spec["table"]} SET {col}=0')
+                for env, status in self.journal.iter_after(replica.markers(c)):
+                    self.folder.fold(env, status)
+                self._bump(c)
+                c.execute('COMMIT')
+            except Exception:
+                c.execute('ROLLBACK')
+                raise
 
     def restore_from(self, path, user, ip, label, user_id=''):
         """Brings the data back to the state of a backup file WITHOUT rolling back history: the differences
@@ -509,7 +554,7 @@ class Store:
     # ------------------------------------------------------------ conflicts and convergence
     def conflicts(self):
         """Everything two PCs did at the same time that a person should look at. Identical on every PC."""
-        titles = {spec['table']: (e, ENTITIES[e][1]) for e, spec in SPECS.items()}
+        titles = {spec['table']: (e, ENTITIES[e][1] if e in ENTITIES else 'Files') for e, spec in SPECS.items()}
         out = []
         with self.lock:
             flags = self.conn.execute('SELECT * FROM sync_flags ORDER BY tbl, rid, kind').fetchall()
@@ -537,8 +582,8 @@ class Store:
             if self._fp[0] == v:
                 return self._fp[1]
             h = hashlib.sha256()
-            for e in sorted(ENTITIES):
-                table = ENTITIES[e][0]
+            for e in sorted(SPECS):
+                table = SPECS[e]['table']
                 for r in self.conn.execute(f'SELECT * FROM {table} ORDER BY id'):
                     d = dict(r)
                     d.pop('ver', None)
@@ -547,6 +592,25 @@ class Store:
                 h.update(canonical(['flag', *r]).encode('utf-8'))
             self._fp = (v, h.hexdigest())
             return self._fp[1]
+
+    # ------------------------------------------------------------ attachments
+    def file_info(self, path):
+        with self.lock:
+            r = self.conn.execute('SELECT sha256, size_bytes FROM attachments WHERE id=?', (path,)).fetchone()
+        return {'sha256': r[0], 'size': r[1]} if r else None
+
+    def referenced_files(self):
+        """Every uploaded file the current data (and the recycle bin) refers to."""
+        out = set()
+        with self.lock:
+            for sql in ('SELECT src FROM photos', 'SELECT thumb FROM photos', 'SELECT src FROM documents', 'SELECT id FROM attachments',
+                        "SELECT value FROM settings WHERE id='logoImage'"):
+                for (v,) in self.conn.execute(sql):
+                    if isinstance(v, str):
+                        v = v.strip('"')
+                        if v.startswith('/files/'):
+                            out.add(v)
+        return out
 
     # ------------------------------------------------------------ export
     def export_sheets(self):

@@ -315,6 +315,9 @@ class Journal:
                     out.append(('security', {**base, **{k: e.get(k) for k in ('ts', 'user', 'ip', 'event', 'target', 'detail')}}))
                 elif e.get('t') == 'activity':
                     out.append(('activity', {**base, **{k: e.get(k) for k in ('ts', 'user', 'ip', 'type', 'action', 'target', 'page', 'detail')}}))
+                elif e.get('t') == 'audit':  # data changes saved before the upgrade to the multi-PC version
+                    out.append(('audit', {**base, 'kind': 'imported', **{k: e.get(k) for k in (
+                        'ts', 'txn', 'user', 'ip', 'label', 'entity', 'entity_id', 'area_id', 'op', 'changes', 'before', 'after')}, 'user_id': ''}))
             return out
         for op in env['ops']:
             if not isinstance(op, dict) or op.get('noaudit'):
@@ -437,7 +440,7 @@ class Journal:
                     return 'a user may only change their own password'
             return 'ok'
         if kind == 'log':
-            return 'ok' if all(isinstance(e, dict) and e.get('t') in ('activity', 'security') for e in ops) else 'bad log entry'
+            return 'ok' if all(isinstance(e, dict) and e.get('t') in ('activity', 'security', 'audit') for e in ops) else 'bad log entry'
         for op in ops:
             if not isinstance(op, dict) or op.get('e') not in self.business:
                 return 'data change touches something that is not business data'

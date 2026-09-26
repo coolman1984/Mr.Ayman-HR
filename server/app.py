@@ -5,6 +5,7 @@ Start it with start.bat; every PC on the network can then open the address
 printed in the console window. Everybody must log in; what each user may see and
 do is set by the administrator (Users page) and checked here for every request.
 """
+import hashlib
 import json
 import logging
 import logging.handlers
@@ -25,9 +26,10 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)  # the portable (embedded) Python does not add the script folder itself
 
 import xlsx  # noqa: E402
-from auth import ALL, PERMISSIONS, ROLES, Auth, AuthError, Forbidden  # noqa: E402
-from backup import Backups  # noqa: E402
-from store import BadRequest, Conflict, Store, now  # noqa: E402
+from auth import ALL, PERMISSIONS, ROLES, AuthError, Forbidden  # noqa: E402
+from store import BadRequest, Conflict, now  # noqa: E402
+from sync import SyncService  # noqa: E402
+from system import System  # noqa: E402
 
 ROOT = os.path.dirname(HERE)
 CONFIG_PATH = os.environ.get('BAMS_CONFIG') or os.path.join(ROOT, 'config.json')
@@ -46,6 +48,11 @@ DEFAULT_CONFIG = {
     'max_failed_logins': 5,
     'lockout_minutes': 15,
     'min_password_length': 8,
+    'device_name': '',
+    'sync_enabled': True,
+    'sync_port': 8443,
+    'sync_interval_seconds': 5,
+    'peer_addresses': {},
 }
 STATIC = {'/': 'index.html', '/index.html': 'index.html'}
 STATIC_DIRS = ('/css/', '/js/', '/lib/')
@@ -91,10 +98,12 @@ def say(msg):
     print(f'[{datetime.now():%H:%M:%S}] {msg}', flush=True)
 
 
-STORE = Store(DATA_DIR)
-AUTH = Auth(DATA_DIR, CFG)
-BACKUPS = Backups(STORE, UPLOADS, resolve(CFG['backup_dir']), [resolve(d) for d in CFG['extra_backup_dirs']],
-                  CFG['keep_auto_backups'], CFG['backup_interval_hours'], log=say, auth=AUTH)
+SYSTEM = System(DATA_DIR, CFG, UPLOADS, resolve(CFG['backup_dir']), [resolve(d) for d in CFG['extra_backup_dirs']], log=say)
+STORE, AUTH, BACKUPS, JOURNAL, NODE = SYSTEM.store, SYSTEM.auth, SYSTEM.backups, SYSTEM.journal, SYSTEM.node
+SYNC = SyncService(SYSTEM, CFG, UPLOADS, log=say)
+PLACEHOLDER = (b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 200"><rect width="320" height="200" fill="#eef1f5"/>'
+               b'<text x="160" y="96" font-family="Segoe UI,Arial" font-size="15" text-anchor="middle" fill="#6b7785">Photo is being copied</text>'
+               b'<text x="160" y="118" font-family="Segoe UI,Arial" font-size="12" text-anchor="middle" fill="#8a95a3">from another PC\u2026</text></svg>')
 COOKIE = 'bams_sid'
 LOCAL_IPS = ('127.0.0.1', '::1', '::ffff:127.0.0.1')
 CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; "
@@ -177,6 +186,11 @@ def lan_urls(port):
 
 class NotLoggedIn(Exception):
     pass
+
+
+def is_admin(u):
+    """Administrator = may manage users. Monitoring, devices and conflicts need this, checked on every request."""
+    return bool(u) and 'users.manage' in u['perms']
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -311,7 +325,17 @@ class Handler(BaseHTTPRequestHandler):
     def me(self):
         u = self.u
         return {**AUTH.public(u), 'display': u['display'], 'permissions': PERMISSIONS, 'roles': ROLES,
-                'sessionIdleMinutes': CFG['session_idle_minutes'], 'minPasswordLength': AUTH.min_len}
+                'sessionIdleMinutes': CFG['session_idle_minutes'], 'minPasswordLength': AUTH.min_len, 'admin': is_admin(u),
+                'node': {'id': NODE.id, 'name': NODE.name, 'role': NODE.role, 'authority': NODE.is_authority}}
+
+    def need_admin(self):
+        if not is_admin(self.u):
+            raise Forbidden('Only an administrator can open this.')
+
+    def node_status(self):
+        j = JOURNAL.meta('join')
+        return {'role': NODE.role, 'name': NODE.name, 'id': NODE.id, 'moved': NODE.moved,
+                'join': {'confirm': j['confirm'], 'authority': j.get('authority')} if j and NODE.role == 'unconfigured' else None}
 
     def _get(self):
         url = urlparse(self.path)
@@ -323,7 +347,12 @@ class Handler(BaseHTTPRequestHandler):
         if p == '/api/auth/status':
             u = AUTH.session(self.token, self.ip, touch=False)
             self.u = u
-            return self.send(200, {'hasUsers': AUTH.has_users(), 'local': self.ip in LOCAL_IPS, 'me': self.me() if u else None})
+            return self.send(200, {'hasUsers': AUTH.has_users(), 'local': self.ip in LOCAL_IPS, 'me': self.me() if u else None,
+                                   'node': self.node_status()})
+        if p == '/api/join/status':
+            if self.ip not in LOCAL_IPS or AUTH.has_users() and NODE.role != 'member':
+                raise Forbidden('Only on this PC itself.')
+            return self.send(200, {**SYNC.join_progress(), 'hasUsers': AUTH.has_users()})
 
         self.login_required(touch=p != '/api/version')
         if p == '/api/me':
@@ -331,7 +360,8 @@ class Handler(BaseHTTPRequestHandler):
         if p == '/api/state':
             return self.send(200, STORE.state(self.u['areas'], self.can('surveys.view')))
         if p == '/api/version':
-            return self.send(200, {'version': STORE.version(), 'me': self.u['ver'], 'mustChange': bool(self.u['must_change'])})
+            return self.send(200, {'version': STORE.version(), 'me': self.u['ver'], 'mustChange': bool(self.u['must_change']),
+                                   'sync': SYNC.summary()})
         if p == '/api/info':
             urls = lan_urls(CFG['port'])
             if not self.can('settings.view'):
@@ -350,16 +380,32 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(200, STORE.trash())
         if p in ('/api/audit', '/api/activity'):
             self.need('logs.view' if p == '/api/audit' else 'logs.activity')
+            if p == '/api/activity':
+                self.need_admin()  # what other people clicked is forensic data: administrators only
+            node = qs.get('node', '') if is_admin(self.u) else ''
             return self.send(200, STORE.query_log('audit' if p == '/api/audit' else 'activity', qs.get('q', ''), qs.get('user', ''),
                                                   qs.get('type', ''), qs.get('area', ''), qs.get('from', ''), qs.get('to', ''),
-                                                  min(1000, int(qs.get('limit', 200))), int(qs.get('offset', 0)), self.u['areas']))
+                                                  min(1000, int(qs.get('limit', 200))), int(qs.get('offset', 0)), self.u['areas'], node))
         if p == '/api/security':
             self.need('logs.security')
+            self.need_admin()
             return self.send(200, AUTH.query_log(qs.get('q', ''), qs.get('user', ''), qs.get('type', ''), qs.get('from', ''), qs.get('to', ''),
-                                                 min(1000, int(qs.get('limit', 200))), int(qs.get('offset', 0))))
+                                                 min(1000, int(qs.get('limit', 200))), int(qs.get('offset', 0)), qs.get('node', '')))
+        if p == '/api/devices':
+            self.need_admin()
+            return self.send(200, SYNC.overview())
+        if p == '/api/devices/log':
+            self.need_admin()
+            with JOURNAL.lock:
+                rows = [dict(r) for r in JOURNAL.conn.execute('SELECT * FROM sync_log ORDER BY id DESC LIMIT ?', (min(1000, int(qs.get('limit', 300))),))]
+            return self.send(200, rows)
+        if p == '/api/conflicts':
+            self.need_admin()
+            return self.send(200, self.conflict_list())
         if p == '/api/users':
             self.need('users.manage')
-            return self.send(200, {'users': AUTH.list_users(), 'permissions': PERMISSIONS, 'roles': ROLES})
+            return self.send(200, {'users': AUTH.list_users(), 'permissions': PERMISSIONS, 'roles': ROLES, 'authority': NODE.is_authority,
+                                   'authorityHint': '' if NODE.is_authority else AUTH.authority_hint()})
         if p == '/api/export.xlsx':
             self.need('report.full')
             if self.u['areas'] is not None:
@@ -371,7 +417,7 @@ class Handler(BaseHTTPRequestHandler):
         if p.startswith('/files/'):
             if os.path.splitext(p)[1].lower() not in IMAGE_EXT:
                 self.need('files.download')
-            return self.serve_file(UPLOADS, p[len('/files/'):], upload=True)
+            return self.serve_file(UPLOADS, p[len('/files/'):], upload=True, src=p)
         self.send(404, {'error': 'Not found'})
 
     def _post(self):
@@ -392,6 +438,33 @@ class Handler(BaseHTTPRequestHandler):
             self.u = u
             say(f'Login: {u["display"]} ({self.ip})')
             return self.send(200, self.me(), headers=self.set_session(token))
+        if p == '/api/join':
+            if self.ip not in LOCAL_IPS or AUTH.has_users() or NODE.role != 'unconfigured':
+                raise Forbidden('Joining is only possible on a new, not yet set up PC, on the PC itself.')
+            d = self.json_body()
+            try:
+                return self.send(200, SYNC.join(d.get('address'), d.get('code'), d.get('name')))
+            except ValueError as e:
+                raise BadRequest(str(e))
+        if p == '/api/join/cancel':
+            if self.ip not in LOCAL_IPS or NODE.role != 'unconfigured':
+                raise Forbidden('Not possible.')
+            JOURNAL.set_meta('join', None)
+            return self.send(200, {'ok': True})
+        if p == '/api/node/moved':
+            if self.ip not in LOCAL_IPS or not NODE.moved:
+                raise Forbidden('Only on this PC itself.')
+            choice = self.json_body().get('choice')
+            if choice == 'same':
+                NODE.confirm_same_machine()
+                AUTH.log('This PC', self.ip, 'node-confirmed', NODE.name, 'Confirmed on this PC: same computer as before (name or network card changed)')
+                SYNC.kick()
+                return self.send(200, {'ok': True})
+            if choice == 'new':
+                with open(os.path.join(NODE.dir, 'RESET_REQUESTED'), 'w') as f:
+                    f.write(now())
+                return self.send(200, {'ok': True, 'restart': True})
+            raise BadRequest('Choose same or new')
         if p == '/api/auth/setup':
             if self.ip not in LOCAL_IPS:
                 raise Forbidden('The first administrator account can only be created on the server PC itself.')
@@ -419,6 +492,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(200, {'ok': True})
         if self.u['must_change']:
             raise Forbidden('Please change your temporary password first.')
+        if NODE.moved:
+            raise Forbidden('This PC needs a decision first: its data folder seems to come from another PC. Open the system on this PC itself.')
         if p == '/api/commit':
             d = self.json_body()
             label = str(d.get('label') or 'Change')[:200]
@@ -427,7 +502,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.need('data.import')
                 if STORE.counts().get('Break Areas'):
                     BACKUPS.create('pre-import')
-            res = STORE.commit(self.user, self.ip, label, d.get('ops'), force, guard=commit_guard(self.u))
+            res = STORE.commit(self.user, self.ip, label, d.get('ops'), force, guard=commit_guard(self.u), user_id=self.u['id'])
             log.info('COMMIT %s (%s) "%s" %s changes', self.user, self.ip, label, res['changes'])
             return self.send(200, res)
         if p == '/api/first-run':
@@ -454,16 +529,49 @@ class Handler(BaseHTTPRequestHandler):
         if p == '/api/backups/restore':
             self.need('backups.restore')
             d = self.json_body()
-            safety = BACKUPS.restore(d.get('name'))
+            safety, res = BACKUPS.restore(d.get('name'), self.user, self.ip, self.u['id'])
             STORE.log_activity(self.user, self.ip, [{'type': 'restore', 'action': 'Restored backup', 'target': d.get('name'),
-                                                      'detail': 'Safety backup of the data before restore: ' + safety}])
-            AUTH.log(self.user, self.ip, 'backup-restored', d.get('name'), 'Safety backup before restore: ' + safety)
-            say(f'Backup {d.get("name")} restored by {self.user} ({self.ip}); previous data saved as {safety}')
-            return self.send(200, {'ok': True, 'safety': safety})
+                                                      'detail': f'{res["changes"]} records brought back; safety backup before restore: {safety}'}])
+            AUTH.log(self.user, self.ip, 'backup-restored', d.get('name'), f'{res["changes"]} records changed back; safety backup: {safety}')
+            say(f'Backup {d.get("name")} restored by {self.user} ({self.ip}); {res["changes"]} records; previous data saved as {safety}')
+            return self.send(200, {'ok': True, 'safety': safety, 'changes': res['changes']})
         if p == '/api/trash/restore':
             self.need('trash.restore')
             d = self.json_body()
             return self.send(200, STORE.restore_txn(self.user, self.ip, str(d.get('txn'))))
+        if p.startswith('/api/devices/'):
+            self.need_admin()
+            d = self.json_body()
+            action = p[len('/api/devices/'):]
+            try:
+                if action == 'invite':
+                    return self.send(200, SYNC.create_invite(self.user))
+                if action == 'decide':
+                    SYNC.decide(str(d.get('id')), bool(d.get('approve')), self.u)
+                elif action == 'update':
+                    SYNC.update_node(str(d.get('id')), self.u, name=d.get('name'), address=d.get('address'))
+                elif action == 'revoke':
+                    SYNC.update_node(str(d.get('id')), self.u, revoke=True)
+                elif action == 'sync-now':
+                    for st in SYNC.status.values():
+                        st['fails'] = 0
+                    SYNC.kick()
+                elif action == 'verify':
+                    rep = JOURNAL.verify(all_signatures=bool(d.get('all')))
+                    AUTH.log(self.user, self.ip, 'integrity-check', 'history', 'OK' if rep['ok'] else f'{rep["problemCount"]} problem(s)')
+                    return self.send(200, rep)
+                elif action == 'ack':
+                    JOURNAL.ack_alert(str(d.get('key')))
+                else:
+                    return self.send(404, {'error': 'Not found'})
+            except PermissionError as e:
+                raise Forbidden(str(e))
+            except ValueError as e:
+                raise BadRequest(str(e))
+            return self.send(200, {'ok': True})
+        if p == '/api/conflicts/resolve':
+            self.need_admin()
+            return self.send(200, self.resolve_conflict(self.json_body()))
         if p.startswith('/api/users/'):
             self.need('users.manage')
             d = self.json_body()
@@ -484,6 +592,53 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(200, {'ok': True})
         self.send(404, {'error': 'Not found'})
 
+    # ------------------------------------------------------------ conflicts
+    def conflict_list(self):
+        out = STORE.conflicts()
+        who = {}
+        for c in out:
+            if c['kind'] == 'conflict':
+                for fld, entries in c['detail'].items():
+                    for e in entries:
+                        k = (e['origin'], e['cseq'])
+                        if k not in who:
+                            who[k] = JOURNAL.describe(*k)
+                        e['by'] = who[k]
+            elif c['kind'] == 'deleted-edit':
+                c['delete_by'] = JOURNAL.describe(*c['detail']['delete'])
+                c['edits_by'] = [JOURNAL.describe(*x) for x in c['detail']['edits'][:10]]
+        return out
+
+    def resolve_conflict(self, d):
+        """The administrator decides: one value for a field, keep a record deleted, or bring it back."""
+        from store import ENTITIES
+        entity, rid, action = d.get('entity'), str(d.get('id') or ''), d.get('action')
+        if entity not in ENTITIES:
+            raise BadRequest('Unknown record type')
+        table = ENTITIES[entity][0]
+        with STORE.lock:
+            r = STORE.conn.execute(f'SELECT * FROM {table} WHERE id=?', (rid,)).fetchone()
+        if not r:
+            raise BadRequest('Record not found')
+        row = STORE._row_js(entity, r)
+        ver = row.pop('ver')
+        if action == 'value':
+            field = d.get('field')
+            row[field] = d.get('value')
+            op = {'e': entity, 'id': rid, 'op': 'put', 'row': row, 'ver': ver, 'resolve': [field]}
+            label = f'Conflict resolved: {field}'
+        elif action == 'keep-deleted':
+            op = {'e': entity, 'id': rid, 'op': 'del', 'resolve': True}
+            label = 'Conflict resolved: keep deleted'
+        elif action == 'restore':
+            op = {'e': entity, 'id': rid, 'op': 'put', 'row': row}
+            label = 'Conflict resolved: record restored'
+        else:
+            raise BadRequest('Unknown action')
+        res = STORE.commit(self.user, self.ip, label, [op], force=action != 'value', user_id=self.u['id'])
+        AUTH.log(self.user, self.ip, 'conflict-resolved', f'{entity} {rid}', label)
+        return res
+
     # ------------------------------------------------------------ files
     def upload(self, name):
         ext = os.path.splitext(name)[1].lower()
@@ -492,21 +647,31 @@ class Handler(BaseHTTPRequestHandler):
         data = self.body(int(CFG['max_upload_mb']) * 1048576)
         if not data:
             raise BadRequest('Empty file')
-        sub = datetime.now().strftime('%Y-%m')
-        os.makedirs(os.path.join(UPLOADS, sub), exist_ok=True)
-        fname = uuid.uuid4().hex[:16] + ext
-        path = os.path.join(UPLOADS, sub, fname)
-        with open(path, 'wb') as f:
-            f.write(data)
-            f.flush()
-            os.fsync(f.fileno())
-        log.info('UPLOAD %s (%s) %s -> %s/%s %d bytes', self.user, self.ip, name, sub, fname, len(data))
-        self.send(200, {'src': f'/files/{sub}/{fname}', 'size': len(data)})
+        # content-addressed: the name is the SHA-256 of the content, so the same file is stored once and every PC can check its copy
+        sha = hashlib.sha256(data).hexdigest()
+        os.makedirs(os.path.join(UPLOADS, 'cas'), exist_ok=True)
+        path = os.path.join(UPLOADS, 'cas', sha + ext)
+        if not os.path.exists(path):
+            tmp = os.path.join(UPLOADS, 'cas', f'.{sha}.{uuid.uuid4().hex[:8]}.tmp')
+            with open(tmp, 'wb') as f:
+                f.write(data)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, path)
+        src = f'/files/cas/{sha}{ext}'
+        STORE.record_file(src, sha, len(data), mimetypes.guess_type(path)[0] or '', self.user, self.ip, self.u['id'])
+        log.info('UPLOAD %s (%s) %s -> %s %d bytes', self.user, self.ip, name, src, len(data))
+        self.send(200, {'src': src, 'size': len(data)})
 
-    def serve_file(self, base, rel, upload=False):
+    def serve_file(self, base, rel, upload=False, src=None):
         base = os.path.realpath(base)
         path = os.path.realpath(os.path.join(base, unquote(rel)))
         if not path.startswith(base + os.sep) or not os.path.isfile(path):
+            if upload and src and STORE.file_info(unquote(src)) and os.path.splitext(path)[1].lower() in IMAGE_EXT:
+                # known file that has not been copied from another PC yet - never cached
+                return self.send(200, PLACEHOLDER, 'image/svg+xml', {'Cache-Control': 'no-store'})
+            if upload and src and STORE.file_info(unquote(src)):
+                return self.send(404, {'error': 'This file is still being copied from another PC. Try again in a minute.'})
             return self.send(404, {'error': 'File not found'})
         ext = os.path.splitext(path)[1].lower()
         if upload and ext not in UPLOAD_EXT:
@@ -539,12 +704,14 @@ def main():
     except Exception as e:
         say('Startup backup failed: ' + str(e))
     BACKUPS.start()
+    SYNC.start()
 
     print('=' * 64)
     print(' Break Area Management System is running')
     print(f' This PC:        http://localhost:{port}/')
     for u in lan_urls(port):
         print(f' Other PCs:      {u}')
+    print(f' This PC:        "{NODE.name}" ({NODE.role}, id {NODE.id}), sync port {SYNC.port}')
     print(f' Data folder:    {DATA_DIR}')
     print(f' Backups folder: {BACKUPS.dir}')
     if not AUTH.has_users():
@@ -560,6 +727,8 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
+        SYNC.shutdown()
+        JOURNAL.flush_activity()
         say('Server stopped')
 
 

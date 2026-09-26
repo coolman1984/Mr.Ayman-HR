@@ -17,7 +17,14 @@ Management cheat sheets):
     user's permissions is written to the security log (auth.db and a monthly
     JSON-lines file in data/logs that is never overwritten).
 
-Run  python server/auth.py reset-admin  on the server PC to regain access when the
+Several PCs: user accounts are replicated to every PC so people can log in even when
+the administrator PC is switched off. Only the administrator PC holds the key that signs
+account and permission changes (journal.py, kind "admin"); every PC checks that
+signature, so no other PC can invent users or permissions. A user's own password change
+is allowed on every PC (kind "account", only that user's password fields). Sessions,
+failed-login counters and lockouts stay on the PC where they happen.
+
+Run  python server/auth.py reset-admin  on the administrator PC to regain access when the
 administrator password is lost.
 """
 import hashlib
@@ -31,6 +38,9 @@ import sys
 import threading
 import uuid
 from datetime import datetime, timedelta
+
+import replica
+from journal import PRIORITY
 
 # (group, [(permission, label)]) - the order is the order shown on the user screen
 PERMISSIONS = [
@@ -90,8 +100,8 @@ PERMISSIONS = [
     ]),
     ('Logs & Monitoring', [
         ('logs.view', 'Data changes log (who changed what)'),
-        ('logs.activity', 'User activity and errors log'),
-        ('logs.security', 'Logins and security log'),
+        ('logs.activity', 'User activity and errors log (only together with "Manage users")'),
+        ('logs.security', 'Logins and security log (only together with "Manage users")'),
     ]),
     ('Administration', [
         ('settings.view', 'Settings page and server information'),
@@ -105,7 +115,7 @@ PERMISSIONS = [
 ]
 ALL = [p for _, ps in PERMISSIONS for p, _ in ps]
 PAGES = ['dashboard.view', 'areas.view', 'equipment.view', 'transactions.view', 'maintenance.view', 'surveys.view']
-_admin_only = {'users.manage', 'backups.restore', 'data.import', 'logs.security'}
+_admin_only = {'users.manage', 'backups.restore', 'data.import', 'logs.security', 'logs.activity'}
 ROLES = {
     'Administrator': ALL,
     'Manager': [p for p in ALL if p not in _admin_only],
@@ -130,6 +140,28 @@ class AuthError(Exception):
 
 class Forbidden(Exception):
     """The user is logged in but is not allowed to do this (HTTP 403)."""
+
+
+class NotAuthority(Forbidden):
+    """User and permission changes can only be made on the administrator PC."""
+
+
+# replicated user fields (everything else in the users table is local to this PC)
+T, J, B = 'text', 'json', 'bool'
+USER_FIELDS = [('username', T), ('full_name', T), ('title', T), ('pw_hash', T), ('perms', J), ('areas', J), ('role', T),
+               ('active', B), ('deleted', B), ('must_change', B), ('pw_changed_at', T), ('notes', T), ('created_at', T),
+               ('created_by', T), ('updated_at', T), ('updated_by', T)]
+USER_FIELD_NAMES = {f for f, _ in USER_FIELDS}
+
+
+def _col(kind, v):
+    if kind == B:
+        return 1 if v else 0
+    if kind == J:
+        return None if v is None else json.dumps(v)
+    return v
+
+
 
 
 def now():
@@ -195,6 +227,82 @@ class Auth:
                 id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, user TEXT, ip TEXT, event TEXT, target TEXT, detail TEXT);
             CREATE INDEX IF NOT EXISTS ix_security_ts ON security_log(ts);
         ''')
+        replica.install(self.conn)
+        self.journal = None
+        self.node = None
+        self.folder = None
+
+    def attach(self, journal, node):
+        self.journal = journal
+        self.node = node
+        self.folder = UserFolder(self, journal.deps_of)
+
+    def fold_pending(self):
+        """Applies account changes from the journal that are not yet in the users table."""
+        total = 0
+        while True:
+            with self.lock:
+                items = self.journal.iter_after(replica.markers(self.conn), 2000)
+                if not items:
+                    return total
+                c = self.conn
+                c.execute('BEGIN IMMEDIATE')
+                try:
+                    for env, status in items:
+                        self.folder.fold(env, status)
+                    c.execute('COMMIT')
+                except Exception:
+                    c.execute('ROLLBACK')
+                    raise
+                total += len(items)
+
+    def _write(self, actor, ip, label, ops, kind='admin', check=None):
+        """Saves account changes as one changeset (admin: signed with the administrator key).
+        check(conn) runs inside the transaction first and may raise to cancel everything."""
+        if self.journal is None:
+            raise AuthError('The system is still starting. Try again in a moment.')
+        if kind == 'admin' and not self.node.is_authority:
+            raise NotAuthority(self.authority_hint())
+        rec, appended = None, False
+        with self.lock:
+            c = self.conn
+            c.execute('BEGIN IMMEDIATE')
+            try:
+                extra = check(c) if check else None
+                if extra:
+                    ops = ops + extra
+                with self.journal.lock:
+                    rec = self.journal.build(kind, ops, actor=actor['display'] if isinstance(actor, dict) else actor,
+                                             actor_id=actor['id'] if isinstance(actor, dict) else '', ip=ip, label=label,
+                                             authority=kind == 'admin')
+                    before = len(self.folder.problems)
+                    self.folder.fold(rec['env'], 'ok')
+                    if len(self.folder.problems) != before:
+                        raise AuthError('This change could not be saved: ' + self.folder.problems[-1])
+                    self.journal.append_local(rec)
+                    appended = True
+                c.execute('COMMIT')
+            except Exception:
+                try:
+                    c.execute('ROLLBACK')
+                except sqlite3.OperationalError:
+                    pass
+                if not appended:
+                    raise
+                self.fold_pending()
+        self.journal._notify([rec])
+        return rec
+
+    def authority_hint(self):
+        name = ''
+        if self.journal and self.node and self.node.info.get('authority_node'):
+            n = self.journal.roster().get(self.node.info['authority_node']) or {}
+            name = n.get('name') or ''
+            addr = (n.get('address') or '').split(':')[0]
+            if addr:
+                name += f' ({addr})'
+        return ('User accounts and permissions can only be changed on the administrator PC' + (f' "{name}"' if name else '') +
+                '. Open the system on that PC (or its address in the browser) to make this change.')
 
     # ------------------------------------------------------------ helpers
     @staticmethod
@@ -240,6 +348,11 @@ class Auth:
         path = os.path.join(self.log_dir, f'security-{datetime.now():%Y-%m}.jsonl')
         with open(path, 'a', encoding='utf-8') as f:
             f.write(json.dumps(dict(zip(('ts', 'user', 'ip', 'event', 'target', 'detail'), row)), ensure_ascii=False) + '\n')
+        if self.journal is not None and self.node is not None and self.node.exists:
+            try:
+                self.journal.log_security(row[1], row[2], row[3], row[4], row[5], ts=ts)
+            except Exception as e:  # the local copy above is kept in any case
+                print('security log could not be added to the journal:', e)
 
     def check_password(self, pw, username='', full_name=''):
         pw = pw or ''
@@ -258,28 +371,36 @@ class Auth:
 
     # ------------------------------------------------------------ first setup
     def setup(self, username, full_name, password, ip):
+        """First administrator of a new system: this PC becomes the administrator PC."""
         username, full_name = (username or '').strip(), (full_name or '').strip()
         if not USERNAME_RE.match(username):
             raise AuthError('User name: 3-32 letters, numbers, dot, dash or underscore (no spaces).')
         if not full_name:
             raise AuthError('Enter the full name.')
         self.check_password(password, username, full_name)
+        if self.has_users():
+            raise AuthError('The administrator account already exists. Please log in.')
+        if self.node.role == 'member':
+            raise AuthError('This PC belongs to another administrator PC. Wait until its user accounts have arrived.')
+        if self.node.role == 'unconfigured':
+            self.node.become_authority()
         h = hash_password(password)
-        with self.lock:
-            c = self.conn
-            c.execute('BEGIN IMMEDIATE')
-            try:
-                if c.execute('SELECT COUNT(*) FROM users').fetchone()[0]:
-                    raise AuthError('The administrator account already exists. Please log in.')
-                ts = now()
-                c.execute('INSERT INTO users (id,username,full_name,title,pw_hash,perms,role,must_change,pw_changed_at,created_at,created_by,updated_at,updated_by) '
-                          'VALUES (?,?,?,?,?,?,?,0,?,?,?,?,?)',
-                          (uuid.uuid4().hex, username, full_name, 'System Administrator', h, json.dumps(ALL), 'Administrator', ts, ts, 'First setup', ts, 'First setup'))
-                c.execute('COMMIT')
-            except Exception:
-                c.execute('ROLLBACK')
-                raise
-        self.log(f'{full_name} ({username})', ip, 'setup', username, 'First administrator account created on the server PC')
+        ts = now()
+        uid = uuid.uuid4().hex
+        me = self.node
+        row = {'username': username, 'full_name': full_name, 'title': 'System Administrator', 'pw_hash': h, 'perms': list(ALL),
+               'areas': None, 'role': 'Administrator', 'active': True, 'deleted': False, 'must_change': False, 'pw_changed_at': ts,
+               'notes': '', 'created_at': ts, 'created_by': 'First setup', 'updated_at': ts, 'updated_by': 'First setup'}
+        ops = [{'e': 'nodes', 'id': me.id, 'op': 'insert', 'noaudit': True,
+                's': {'name': me.name, 'pub': me.pub.hex(), 'cert_fp': me.cert_fp, 'status': 'active', 'role': 'authority', 'address': '',
+                      'enrolled_at': ts, 'enrolled_by': 'First setup'}},
+               {'e': 'users', 'id': uid, 'op': 'insert', 's': row, 'r': {'id': uid, **row}}]
+
+        def check(c):
+            if c.execute('SELECT COUNT(*) FROM users').fetchone()[0]:
+                raise AuthError('The administrator account already exists. Please log in.')
+        self._write(f'{full_name} ({username})', ip, 'First administrator account', ops, check=check)
+        self.log(f'{full_name} ({username})', ip, 'setup', username, 'First administrator account created on this PC (it is now the administrator PC)')
 
     # ------------------------------------------------------------ login / sessions
     def login(self, username, password, ip, agent=''):
@@ -369,8 +490,10 @@ class Auth:
         if old == new:
             raise AuthError('The new password must be different from the current one.')
         self.check_password(new, u['username'], u['full_name'])
-        with self.lock:
-            self.conn.execute('UPDATE users SET pw_hash=?, must_change=0, pw_changed_at=?, ver=ver+1 WHERE id=?', (hash_password(new), now(), u['id']))
+        ts = now()
+        self._write(u, ip, 'Changed own password', [{'e': 'users', 'id': u['id'], 'op': 'update',
+                                                     's': {'pw_hash': hash_password(new), 'must_change': False, 'pw_changed_at': ts},
+                                                     'c': {'pw_hash': ['', ''], 'must_change': [bool(u['must_change']), False]}}], kind='account')
         n = self._kill(u['id'], keep_token=token)
         self.log(u['display'], ip, 'password-changed', u['username'], f'Changed own password; {n} other session(s) logged out')
 
@@ -409,43 +532,45 @@ class Auth:
             raise AuthError('Enter the full name.')
         if not USERNAME_RE.match(username):
             raise AuthError('User name: 3-32 letters, numbers, dot, dash or underscore (no spaces).')
+        if not self.node.is_authority:
+            raise NotAuthority(self.authority_hint())
         ts = now()
-        with self.lock:
-            c = self.conn
-            c.execute('BEGIN IMMEDIATE')
-            try:
-                dup = c.execute('SELECT id, deleted FROM users WHERE username=?', (username,)).fetchone()
-                if dup and dup['id'] != uid:
-                    raise AuthError(f'The user name "{username}" is already used' + (' by a deleted user.' if dup['deleted'] else '.'))
-                if uid:
-                    old = self._user(c.execute('SELECT * FROM users WHERE id=? AND deleted=0', (uid,)).fetchone())
-                    if not old:
-                        raise AuthError('This user no longer exists.')
-                    if int(d.get('ver') or 0) != old['ver']:
-                        raise AuthError(f'{old["display"]} was changed by {old["updated_by"]} at {old["updated_at"]}. Close and open it again.')
-                    if uid == actor['id'] and (not active or 'users.manage' not in perms):
-                        raise AuthError('You cannot disable yourself or remove your own right to manage users.')
-                    if (not active or 'users.manage' not in perms) and 'users.manage' in old['perms'] and not self._admins(c, exclude=uid):
-                        raise AuthError('At least one active user must keep the right to manage users.')
-                    c.execute('UPDATE users SET username=?, full_name=?, title=?, perms=?, areas=?, role=?, active=?, must_change=?, notes=?, '
-                              'updated_at=?, updated_by=?, ver=ver+1 WHERE id=?',
-                              (username, full_name, title, json.dumps(perms), json.dumps(areas) if areas is not None else None, role,
-                               int(active), int(must_change), notes, ts, actor['display'], uid))
-                    new = self._user(c.execute('SELECT * FROM users WHERE id=?', (uid,)).fetchone())
-                else:
-                    password = d.get('password') or ''
-                    self.check_password(password, username, full_name)
-                    uid = uuid.uuid4().hex
-                    c.execute('INSERT INTO users (id,username,full_name,title,pw_hash,perms,areas,role,active,must_change,notes,pw_changed_at,'
-                              'created_at,created_by,updated_at,updated_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
-                              (uid, username, full_name, title, hash_password(password), json.dumps(perms),
-                               json.dumps(areas) if areas is not None else None, role, int(active), int(must_change), notes, ts,
-                               ts, actor['display'], ts, actor['display']))
-                    old, new = None, self._user(c.execute('SELECT * FROM users WHERE id=?', (uid,)).fetchone())
-                c.execute('COMMIT')
-            except Exception:
-                c.execute('ROLLBACK')
-                raise
+        res = {}
+        new_row = {'username': username, 'full_name': full_name, 'title': title, 'perms': perms, 'areas': areas, 'role': role,
+                   'active': active, 'must_change': must_change, 'notes': notes, 'updated_at': ts, 'updated_by': actor['display']}
+
+        def check(c):
+            dup = c.execute('SELECT id, deleted FROM users WHERE username=?', (username,)).fetchone()
+            if dup and dup['id'] != uid:
+                raise AuthError(f'The user name "{username}" is already used' + (' by a deleted user.' if dup['deleted'] else '.'))
+            if uid:
+                old = self._user(c.execute('SELECT * FROM users WHERE id=? AND deleted=0', (uid,)).fetchone())
+                if not old:
+                    raise AuthError('This user no longer exists.')
+                if int(d.get('ver') or 0) != old['ver']:
+                    raise AuthError(f'{old["display"]} was changed by {old["updated_by"]} at {old["updated_at"]}. Close and open it again.')
+                if uid == actor['id'] and (not active or 'users.manage' not in perms):
+                    raise AuthError('You cannot disable yourself or remove your own right to manage users.')
+                if (not active or 'users.manage' not in perms) and 'users.manage' in old['perms'] and not self._admins(c, exclude=uid):
+                    raise AuthError('At least one active user must keep the right to manage users.')
+                cur = {'username': old['username'], 'full_name': old['full_name'], 'title': old['title'], 'perms': sorted(old['perms']),
+                       'areas': old['areas'], 'role': old['role'], 'active': bool(old['active']), 'must_change': bool(old['must_change']),
+                       'notes': old['notes']}
+                changes = {f: [cur[f], v] for f, v in new_row.items() if f not in ('updated_at', 'updated_by') and cur.get(f) != v}
+                res['old'] = old
+                return [{'e': 'users', 'id': uid, 'op': 'update', 's': new_row, 'c': changes}]
+            password = d.get('password') or ''
+            self.check_password(password, username, full_name)
+            res['uid'] = new_id = uuid.uuid4().hex
+            row = {**new_row, 'pw_hash': hash_password(password), 'deleted': False, 'pw_changed_at': ts, 'created_at': ts,
+                   'created_by': actor['display']}
+            res['old'] = None
+            return [{'e': 'users', 'id': new_id, 'op': 'insert', 's': row, 'r': {'id': new_id, **row}}]
+
+        self._write(actor, ip, ('Change user ' if uid else 'Create user ') + username, [], check=check)
+        old = res['old']
+        uid = uid or res['uid']
+        new = self.get(uid) or self._user(self.conn.execute('SELECT * FROM users WHERE id=?', (uid,)).fetchone())
         if old is None:
             self.log(actor['display'], ip, 'user-created', new['display'],
                      f'Role: {role}; active: {active}; areas: {"all" if areas is None else len(areas)}; permissions: {", ".join(perms) or "none"}')
@@ -465,8 +590,7 @@ class Auth:
             if ch:
                 self.log(actor['display'], ip, 'user-changed', new['display'], '; '.join(ch))
             if old['active'] and not new['active']:
-                n = self._kill(uid)
-                self.log(actor['display'], ip, 'user-disabled', new['display'], f'{n} open session(s) logged out')
+                self.log(actor['display'], ip, 'user-disabled', new['display'], 'All open sessions on every PC are ended')
         return self.public(new)
 
     def reset_password(self, actor, ip, uid, password):
@@ -474,45 +598,67 @@ class Auth:
         if not u:
             raise AuthError('This user no longer exists.')
         self.check_password(password, u['username'], u['full_name'])
+        ts = now()
+        self._write(actor, ip, 'Reset password of ' + u['username'], [
+            {'e': 'users', 'id': uid, 'op': 'update', 's': {'pw_hash': hash_password(password), 'must_change': True, 'pw_changed_at': ts,
+                                                              'updated_at': ts, 'updated_by': actor['display']},
+             'c': {'pw_hash': ['', ''], 'must_change': [bool(u['must_change']), True]}},
+            {'e': 'userCommands', 'id': uuid.uuid4().hex, 'op': 'insert', 'noaudit': True, 's': {'cmd': 'unlock', 'user': uid}}])
+        self.log(actor['display'], ip, 'password-reset', u['display'], 'Temporary password set by the administrator; must be changed at next '
+                 'login; logged out on every PC')
+
+    def _command(self, actor, ip, uid, cmd, label):
+        """Unlock / log out: on the administrator PC for every PC, elsewhere for this PC only."""
+        if self.node.is_authority:
+            self._write(actor, ip, label, [{'e': 'userCommands', 'id': uuid.uuid4().hex, 'op': 'insert', 'noaudit': True,
+                                            's': {'cmd': cmd, 'user': uid}}])
+            return 'every PC'
         with self.lock:
-            self.conn.execute('UPDATE users SET pw_hash=?, must_change=1, failed=0, locked_until=NULL, pw_changed_at=?, updated_at=?, updated_by=?, ver=ver+1 WHERE id=?',
-                              (hash_password(password), now(), now(), actor['display'], uid))
-        n = self._kill(uid)
-        self.log(actor['display'], ip, 'password-reset', u['display'], f'Temporary password set by the administrator; must be changed at next login; {n} session(s) logged out')
+            if cmd == 'unlock':
+                self.conn.execute('UPDATE users SET failed=0, locked_until=NULL WHERE id=?', (uid,))
+            else:
+                self._kill(uid)
+        return 'this PC only (the administrator PC is needed for all PCs)'
 
     def unlock(self, actor, ip, uid):
         u = self.get(uid)
         if not u:
             raise AuthError('This user no longer exists.')
-        with self.lock:
-            self.conn.execute('UPDATE users SET failed=0, locked_until=NULL WHERE id=?', (uid,))
-        self.log(actor['display'], ip, 'user-unlocked', u['display'])
+        where = self._command(actor, ip, uid, 'unlock', 'Unlock ' + u['username'])
+        self.log(actor['display'], ip, 'user-unlocked', u['display'], 'Unlocked on ' + where)
 
     def force_logout(self, actor, ip, uid):
         u = self.get(uid)
         if not u:
             raise AuthError('This user no longer exists.')
         n = self._kill(uid)
-        self.log(actor['display'], ip, 'forced-logout', u['display'], f'{n} session(s) ended by the administrator')
+        where = self._command(actor, ip, uid, 'logout', 'Log out ' + u['username'])
+        self.log(actor['display'], ip, 'forced-logout', u['display'], f'Sessions ended by the administrator on {where} ({n} here)')
         return n
 
     def delete_user(self, actor, ip, uid):
         """Soft delete: the account disappears and can never log in again, but its name stays in all logs."""
         if uid == actor['id']:
             raise AuthError('You cannot delete your own account.')
-        with self.lock:
-            c = self.conn
+        res = {}
+
+        def check(c):
             u = self._user(c.execute('SELECT * FROM users WHERE id=? AND deleted=0', (uid,)).fetchone())
             if not u:
                 raise AuthError('This user no longer exists.')
             if 'users.manage' in u['perms'] and u['active'] and not self._admins(c, exclude=uid):
                 raise AuthError('At least one active user must keep the right to manage users.')
-            c.execute('UPDATE users SET deleted=1, active=0, updated_at=?, updated_by=?, ver=ver+1 WHERE id=?', (now(), actor['display'], uid))
-        self._kill(uid)
-        self.log(actor['display'], ip, 'user-deleted', u['display'], 'Account deleted (kept in the logs; the user name stays reserved)')
+            res['u'] = u
+            ts = now()
+            return [{'e': 'users', 'id': uid, 'op': 'delete', 's': {'deleted': True, 'active': False, 'updated_at': ts, 'updated_by': actor['display']},
+                     'b': {'username': u['username'], 'full_name': u['full_name']}}]
+        self._write(actor, ip, 'Delete user', [], check=check)
+        self.log(actor['display'], ip, 'user-deleted', res['u']['display'], 'Account deleted on every PC (kept in the logs; the user name stays reserved)')
 
     # ------------------------------------------------------------ log / backup
-    def query_log(self, q='', user='', event='', frm='', to='', limit=200, offset=0):
+    def query_log(self, q='', user='', event='', frm='', to='', limit=200, offset=0, node=''):
+        if self.journal is not None:
+            return self.journal.query('security', q, user, event, '', frm, to, node, limit, offset)
         where, args = [], []
         if q:
             where.append('(target LIKE ? OR detail LIKE ? OR user LIKE ?)')
@@ -539,6 +685,70 @@ class Auth:
                 self.conn.backup(target)
             finally:
                 target.close()
+
+
+class UserFolder:
+    """Folds admin/account changesets into the users table (see replica.py for the register rules)."""
+
+    def __init__(self, auth, deps_of):
+        self.auth = auth
+        self.conn = auth.conn
+        self.reg = replica.Registers(auth.conn, deps_of)
+        self.problems = []
+
+    def fold(self, env, status):
+        mk = self.conn.execute('SELECT cseq FROM sync_marker WHERE origin=?', (env['origin'],)).fetchone()
+        if mk and mk[0] >= env['cseq']:
+            return
+        self.reg.current = env
+        if status == 'ok' and env['kind'] in ('admin', 'account'):
+            for i, op in enumerate(env['ops']):
+                self.conn.execute('SAVEPOINT op')
+                try:
+                    self._op(env, op)
+                    self.conn.execute('RELEASE op')
+                except (TypeError, ValueError, KeyError, AttributeError, IndexError, sqlite3.IntegrityError) as e:
+                    self.conn.execute('ROLLBACK TO op')
+                    self.conn.execute('RELEASE op')
+                    self.problems.append(f'{env["origin"]}#{env["cseq"]} op {i}: {e}')
+        self.reg.current = None
+        replica.set_marker(self.conn, env['origin'], env['cseq'])
+
+    def _op(self, env, op):
+        e, uid = op.get('e'), op.get('id')
+        if e == 'users':
+            if not isinstance(uid, str) or not uid:
+                raise ValueError('bad user id')
+            for f, v in sorted((op.get('s') or {}).items()):
+                if f in USER_FIELD_NAMES:
+                    self.reg.write('users', uid, f, env, PRIORITY[env['kind']], env['hlc'], v)
+            self.materialize(uid, env)
+        elif e == 'userCommands':
+            s = op.get('s') or {}
+            if s.get('cmd') == 'unlock':
+                self.conn.execute('UPDATE users SET failed=0, locked_until=NULL WHERE id=?', (s.get('user'),))
+            elif s.get('cmd') == 'logout':
+                self.conn.execute('DELETE FROM sessions WHERE user_id=?', (s.get('user'),))
+
+    def materialize(self, uid, env):
+        win = self.reg.resolve(self.reg.entries('users', uid), {})
+        vals = {f: _col(k, win[f].value) if f in win else None for f, k in USER_FIELDS}
+        cur = self.conn.execute('SELECT * FROM users WHERE id=?', (uid,)).fetchone()
+        if cur is None:
+            if not vals['username'] or not vals['full_name'] or not vals['pw_hash']:
+                return  # a password change for an account this PC does not know (cannot happen with causal delivery)
+            vals = {k: v for k, v in vals.items() if v is not None}
+            self.conn.execute(f'INSERT INTO users (id, {", ".join(vals)}) VALUES (?, {", ".join("?" * len(vals))})', (uid, *vals.values()))
+            return
+        vals = {k: v for k, v in vals.items() if v is not None or k in ('areas',)}
+        if all(cur[k] == v for k, v in vals.items()):
+            return
+        self.conn.execute(f'UPDATE users SET {", ".join(k + "=?" for k in vals)}, ver=ver+1 WHERE id=?', (*vals.values(), uid))
+        mine = env['kind'] == 'account' and env['node'] == (self.auth.node.id if self.auth.node else None)
+        if vals.get('pw_hash') != cur['pw_hash'] and not mine:
+            self.conn.execute('DELETE FROM sessions WHERE user_id=?', (uid,))  # password changed elsewhere: log out here
+        if not vals.get('active', 1) or vals.get('deleted'):
+            self.conn.execute('DELETE FROM sessions WHERE user_id=?', (uid,))
 
 
 def _reset_admin():

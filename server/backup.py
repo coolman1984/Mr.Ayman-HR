@@ -9,8 +9,15 @@
   * The user accounts (auth.db) are copied next to each backup as auth_<time>.db.
     A restore never touches them, so it cannot bring back a deleted user or an
     old password.
-  * Only automatic backups are pruned (oldest first); manual, pre-import and
-    pre-restore backups are kept forever.
+  * The change journal (journal.db: the history of every PC, the logs) is copied
+    next to each backup as journal_<time>.db, for disaster recovery only.
+  * Only automatic backups are pruned (oldest first); manual, pre-import,
+    pre-restore and pre-upgrade backups are kept forever.
+
+Restoring never rolls anything back: the differences between the current data and
+the backup are saved as one new "restore" change (Store.restore_from). History,
+logs and user accounts stay; the other PCs receive the restored data; changes that
+another PC made at the same time and this PC had not received yet are kept.
 """
 import os
 import re
@@ -28,6 +35,7 @@ class Backups:
     def __init__(self, store, uploads_dir, backup_dir, extra_dirs=(), keep_auto=200, interval_hours=6, log=print, auth=None):
         self.store = store
         self.auth = auth
+        self.journal = None
         self.uploads_dir = uploads_dir
         self.dir = backup_dir
         self.extra = [d for d in extra_dirs if d]
@@ -64,6 +72,15 @@ class Backups:
         if self.auth:
             auth_copy = os.path.join(self.dir, 'db', 'auth' + name[4:])
             self.auth.backup_to(auth_copy)
+        journal_copy = None
+        if self.journal:
+            journal_copy = os.path.join(self.dir, 'db', 'journal' + name[4:])
+            with self.journal.lock:
+                target = sqlite3.connect(journal_copy)
+                try:
+                    self.journal.conn.backup(target)
+                finally:
+                    target.close()
         self._mirror_uploads(os.path.join(self.dir, 'uploads'))
         self.last_version, self.last_time = version, time.time()
 
@@ -72,8 +89,9 @@ class Backups:
             try:
                 os.makedirs(os.path.join(extra, 'db'), exist_ok=True)
                 shutil.copy2(dest, os.path.join(extra, 'db', name))
-                if auth_copy:
-                    shutil.copy2(auth_copy, os.path.join(extra, 'db', os.path.basename(auth_copy)))
+                for copy in (auth_copy, journal_copy):
+                    if copy:
+                        shutil.copy2(copy, os.path.join(extra, 'db', os.path.basename(copy)))
                 self._mirror_uploads(os.path.join(extra, 'uploads'))
             except OSError as e:
                 errors.append(f'{extra}: {e}')
@@ -97,7 +115,7 @@ class Backups:
     def _prune(self):
         autos = [b for b in self.list() if b['kind'] in AUTO_KINDS]
         for b in autos[self.keep_auto:]:
-            for n in (b['name'], 'auth' + b['name'][4:]):
+            for n in (b['name'], 'auth' + b['name'][4:], 'journal' + b['name'][4:]):
                 try:
                     os.remove(os.path.join(self.dir, 'db', n))
                 except OSError:
@@ -114,24 +132,24 @@ class Backups:
                             'time': datetime.strptime(n[5:20], '%Y%m%d_%H%M%S').isoformat(timespec='seconds')})
         return sorted(out, key=lambda b: b['name'], reverse=True)
 
-    def restore(self, name):
+    def restore(self, name, user='', ip='', user_id=''):
+        """Brings the data back to the backup by saving the differences as a new change (see module doc).
+        Returns (name of the safety backup taken first, result of the restore change)."""
         if not NAME_RE.match(name or ''):
             raise ValueError('Unknown backup')
         src_path = os.path.join(self.dir, 'db', name)
         if not os.path.exists(src_path):
             raise ValueError('Backup file not found')
-        src = sqlite3.connect(src_path)
+        src = sqlite3.connect(f'file:{src_path}?mode=ro', uri=True)
         try:
             if src.execute('PRAGMA integrity_check').fetchone()[0] != 'ok':
                 raise ValueError('That backup file is damaged - choose another one')
-            safety = self.create('pre-restore')
-            with self.store.lock:
-                src.backup(self.store.conn)
-                self.store.conn.execute("UPDATE meta SET value=CAST(value AS INTEGER)+1000000 WHERE key='data_version'")
         finally:
             src.close()
-        self.store.reopen()
-        return safety
+        safety = self.create('pre-restore')
+        when = datetime.strptime(name[5:20], '%Y%m%d_%H%M%S').strftime('%Y-%m-%d %H:%M')
+        res = self.store.restore_from(src_path, user, ip, f'Restore backup of {when} ({name})', user_id)
+        return safety, res
 
     # ------------------------------------------------------------ scheduler
     def start(self):

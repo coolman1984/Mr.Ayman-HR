@@ -240,6 +240,7 @@ class BusinessFolder:
                     updated_at=upd.value[0] if upd else None, updated_by=upd.value[1] if upd else None)
         cur = self.conn.execute(f'SELECT * FROM {tbl} WHERE id=?', (rid,)).fetchone()
         if cur is None:
+            vals.update({col: 0 for js, col, _ in spec['fields'] if js in spec['counters']})
             cols = list(vals)
             self.conn.execute(f'INSERT INTO {tbl} (id, ver, {", ".join(cols)}) VALUES (?, 1, {", ".join("?" * len(cols))})', (rid, *vals.values()))
             return True
