@@ -1220,5 +1220,45 @@ class T37_AdminSafety(unittest.TestCase):
         self.assertNotIn('User Activity Log', sheets(rc))
 
 
+class T38_OpenJoin(unittest.TestCase):
+    """Version 2.4 (owner's request): a new PC joins with the administrator PC's address only - no code, no approval -
+    gets the accounts and all data, and shares changes both ways. The administrator PC answers the network search."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.A = Server('main').start()
+        cls.ac = make_authority(cls.A)
+        cls.ac.post('/api/commit', {'label': 'data', 'ops': [area_op('J1', 'Joined One')]})
+        cls.B = Server('newpc').start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.A.cleanup()
+        cls.B.cleanup()
+
+    def test_join_with_address_only(self):
+        import ssl, http.client
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        ctx.check_hostname, ctx.verify_mode = False, ssl.CERT_NONE
+        h = http.client.HTTPSConnection('127.0.0.1', self.A.sync_port, timeout=10, context=ctx)
+        h.request('POST', '/sync/hello', body=b'{}', headers={'Content-Type': 'application/json', 'Content-Length': '2'})
+        hello = json.loads(h.getresponse().read())
+        h.close()
+        self.assertTrue(hello['authority'])
+        bc = self.B.client()
+        r = bc.post('/api/join', {'address': self.A.sync_address, 'code': '', 'name': 'Store PC'})
+        self.assertEqual(r['status'], 'approved')
+        wait_until(lambda: self.B.status()['hasUsers'], 60, what='accounts on the new PC')
+        bc = self.B.client()
+        bc.login(*ADMIN)
+        wait_until(lambda: any(a['id'] == 'J1' for a in bc.get('/api/state')['areas']), 60, what='data on the new PC')
+        bc.post('/api/commit', {'label': 'from new pc', 'ops': [area_op('J2', 'Made On New PC')]})
+        wait_until(lambda: any(a['id'] == 'J2' for a in self.ac.get('/api/state')['areas']), 60, what='change back on the main PC')
+        names = [n['name'] for n in self.ac.get('/api/devices')['nodes']]
+        self.assertIn('Store PC', names)
+        with self.assertRaises(ApiError):  # a set-up PC cannot join again
+            bc.post('/api/join', {'address': self.A.sync_address, 'code': '', 'name': 'Again'})
+
+
 if __name__ == '__main__':
     unittest.main()

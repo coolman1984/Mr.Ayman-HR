@@ -95,16 +95,23 @@ Kept up to date with every change (rule in `CLAUDE.md`). New idea → new card i
 - 🇪🇬 **بالعربي:** لو الأدمن مسافر أو جهازه مقفول، ممكن تدي نسخة من مفتاحه لجهاز تاني تثق فيه، وترجع تسحبها منه في
   أي وقت. الجهاز اللي اتشال بيمسح نسخته أول ما يرجع للشبكة، حتى لو كان مقفول وقت الشيل.
 
-### 2.3 Pairing a new PC like Bluetooth
-- **Problem:** how does a new PC join safely without IT knowledge?
-- **Idea:** a one-time code (15 minutes) + the same 6-digit number shown on both screens.
-- **How:** admin clicks "Add a PC" → code; new PC types it → both show a number; admin approves only if equal.
-- **Where:** `create_invite`, join flow in `server/sync.py`, screens in `js/devices.js`.
-- 🇪🇬 **بالعربي:** إضافة جهاز جديد بتتم بكود بيشتغل مرة واحدة، ورقم من 6 أرقام بيبان على الشاشتين. الأدمن يوافق
-  بس لو الرقمين متطابقين، زي بالظبط إقران البلوتوث.
+### 2.3 Adding a new PC: two levels of safety
+- **Problem:** how does a new PC join without IT knowledge?
+- **Idea A – safe (2.0–2.3):** a one-time code (15 minutes) + the same 6-digit number shown on both screens, the
+  administrator approves only if equal – like Bluetooth pairing.
+- **Idea B – easiest (2.4, used now, small trusted team):** the new PC searches the network for the administrator PC
+  (asks every address of its network "are you the administrator PC?" on the sync port, 64 at a time) and joins
+  with the address only; the administrator PC adds it at once. The first connection remembers the certificate
+  fingerprint, so later connections are still pinned ("trust on first use").
+- **Where:** `discover`, `join_open`, `_open_join`, `/sync/hello` in `server/sync.py`; the code method
+  (`create_invite`, `decide`) is kept in the code but not shown in the screens.
+- **Watch out:** B lets any PC with the program in the network join – choose A again for bigger or open networks.
+- 🇪🇬 **بالعربي:** طريقتين لإضافة جهاز: الآمنة (كود + رقم من 6 أرقام وموافقة الأدمن، زي البلوتوث)، والأسهل
+  (المستخدمة دلوقتي لفريق صغير): الجهاز الجديد يدوّر على جهاز الأدمن في الشبكة لوحده وينضم على طول من غير كود ولا
+  موافقة. الأسهل تنفع لفريق صغير موثوق بس.
 
 ### 2.4 Encrypted connections with "pinned" certificates
-- **Idea:** each PC makes its own certificate; the others remember its fingerprint at pairing and accept only that one
+- **Idea:** each PC makes its own certificate; the others remember its fingerprint when it joins and accept only that one
   (no certificate authority needed, a fake PC in the middle is refused).
 - **Where:** `server/tlscert.py`, `server/sync.py`.
 - 🇪🇬 **بالعربي:** كل جهاز بيعمل شهادة أمان لنفسه، والباقي بيحفظوا بصمتها مرة واحدة عند الإقران. أي جهاز مزيف

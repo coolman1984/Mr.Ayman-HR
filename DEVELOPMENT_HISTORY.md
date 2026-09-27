@@ -7,7 +7,27 @@ Version numbers: `server/version.py`. Pull requests: github.com/coolman1984/Mr.A
 
 ---
 
-## IDEAS.md – book of reusable ideas (2026-09-27)
+## 2.4.0 – new PCs join by themselves, no "Add a PC" (2026-09-27)
+
+**Why:** the HR team asked for two simple ways only: a **personal link** (nothing else needed) and **user name and
+password** on a PC that has the program – without the code-and-approval screen of "Add a PC". Small trusted team,
+needed quickly; the owner chose "every PC keeps its own full copy" (works while the administrator PC is off).
+
+**What changed**
+- "Add a PC" button, its code window and "PCs asking to join" are gone from the screens.
+- A new PC: **Join an existing system** → it searches the network for the administrator PC (`/sync/hello` on every
+  address of its networks, 64 at a time, 1.5 s each) and fills in the address, or the person types it (also the web
+  address from Settings is accepted). The administrator PC adds it **at once** (`_open_join` → `decide`), no code,
+  no approval; the new PC copies accounts and data and shows the login.
+- The connection still pins the administrator PC's certificate from the first contact on.
+- The code method stays in the code (tests, possible later use) but is not shown.
+- Help page, guides, IDEAS.md updated. Test `T38_OpenJoin`; browser test joins with the address only.
+
+**Lessons**
+- A security step the users do not want gets skipped anyway; offer a documented "easy mode" for small trusted teams
+  and keep the safe mode in the code for later.
+
+ – book of reusable ideas (2026-09-27)
 
 - New file `IDEAS.md`: every idea and technology of this project in plain words (problem → idea → how → where →
   reuse), so the owner can reuse them in other projects. Kept up to date with every change (rule in `CLAUDE.md`).

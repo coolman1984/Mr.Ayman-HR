@@ -609,6 +609,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(200, SYNC.join(d.get('address'), d.get('code'), d.get('name')))
             except ValueError as e:
                 raise BadRequest(str(e))
+        if p == '/api/join/discover':
+            if self.ip not in LOCAL_IPS or AUTH.has_users() or NODE.role != 'unconfigured':
+                raise Forbidden('Only on a new, not yet set up PC, on the PC itself.')
+            return self.send(200, {'found': SYNC.discover()})
         if p == '/api/join/cancel':
             if self.ip not in LOCAL_IPS or NODE.role != 'unconfigured':
                 raise Forbidden('Not possible.')

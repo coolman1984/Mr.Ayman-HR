@@ -93,7 +93,7 @@ const HELP = [
       <li>If you chose to try it with sample data: delete it (next question).</li>
       <li>Add your break areas (${helpBold('Break Areas → Add New Break Area')}).</li>
       <li>Add the people (${helpBold('Users & Permissions → Add Person')}).</li>
-      <li>Optional: add other PCs (${helpBold('Devices & Sync → Add a PC')}) and choose a backup administrator PC.</li></ol>`],
+      <li>Optional: install the program on other PCs (they join by themselves) and choose a backup administrator PC.</li></ol>`],
     ['How do I delete the sample data?', `At the very first start you choose: an empty system, or sample break areas to try everything.
       ${helpBold('Settings → Delete Sample Data')} and type ${helpBold('DELETE')}. A backup is made first and everything stays in the
       ${helpBold('Recycle Bin')}, so nothing is lost. It is never loaded again by itself (${helpBold('Load Sample Data')} brings it back on purpose).`],
@@ -131,9 +131,11 @@ const HELP = [
       shows when and on which PC each link was last used.`]
   ]},
   { id: 'pcs', title: 'Several PCs, delegation and the sync light', icon: 'sync', admin: true, items: [
-    ['How do I add another PC?', `Install ${helpBold('BAMS-Setup.exe')} on it and choose ${helpBold('Join an existing system')}. On the administrator PC
-      open ${helpBold('Devices & Sync → Add a PC')} and type the code shown there into the new PC. Approve the new PC only if both screens show
-      the same 6-digit number.`],
+    ['How do I add another PC?', `Install ${helpBold('BAMS-Setup.exe')} on it, open it and choose ${helpBold('Join an existing system')}.
+      It finds the administrator PC in the network by itself (or type its address, shown in ${helpBold('Settings')} on the administrator PC)
+      and copies all data. Nothing to do on the administrator PC – no code, no approval. The administrator PC must be switched on.`],
+    ['How do people log in?', `Two ways: ${helpBold('personal link')} – just open the link in any browser, nothing to install; or
+      ${helpBold('user name and password')} – on a PC with the program installed.`],
     ['What if the administrator PC is switched off or I am away?', `Everybody keeps working and the PCs keep sharing. Only people,
       permissions and PCs cannot be changed – unless you set up a ${helpBold('backup administrator PC')}: ${helpBold('Devices & Sync')} →
       ${helpBold('Make backup admin')} next to a trusted PC. From then on people with administrator rights can manage people there too.

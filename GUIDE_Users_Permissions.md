@@ -19,8 +19,13 @@ The administrator decides with simple tick boxes what each person may open and d
 3. Choose **Start with my real data** (empty) or **Try it with sample data first**. Sample data is deleted later in
    one step: **Settings → Delete Sample Data**.
 
-> This screen only works on the PC itself. Other PCs with the program are added later with **Devices & Sync →
-> Add a PC** (see GUIDE_Devices_Sync.md). People who only use a link do **not** need the program on their device.
+> This screen only works on the PC itself. On other PCs install the program and choose **Join an existing system** –
+> they join by themselves (see GUIDE_Devices_Sync.md). People who only use a link do **not** need the program on their
+> device.
+
+**Two ways to log in**
+* **Personal link** – open the link in any browser. Nothing to install, no user name, no password.
+* **User name and password** – on a PC with the program (`BAMS-Setup.exe`) installed. Nothing else is needed.
 
 ---
 
