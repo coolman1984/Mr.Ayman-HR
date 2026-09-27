@@ -214,6 +214,10 @@ The administrator resolves one by choosing a value (a normal change that dominat
   by `js/quick.js`, so link previews/scanners that only GET the address log nobody in. A link session skips
   the forced change of a temporary password (the person may not know it). Every use is a `login-link`
   security event (replicated), shown per user as "last used … on PC …"; wrong links are `login-link-failed`.
+  A person can be created with a link only (`login: "link"`): the user name is derived from the name, the password is a
+  random value nobody knows. **Profiles** (`profiles` entity, admin changesets, fixed ids for the ready-made ones,
+  `administrator` locked to every right) are folded like users; saving a profile with *apply* updates the perms of every
+  user whose role is that profile in the same signed changeset, so all PCs converge on the same result.
   Residual risk: the link is a bearer credential over LAN HTTP – whoever holds it acts as that person; the
   administrator replaces it with one click.
 

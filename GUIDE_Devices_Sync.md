@@ -78,6 +78,8 @@ it can no longer exchange data; everything it did before stays).
 * Every user can get **their own fixed link**. Opening it logs that person in straight away – no user name, no
   password – **under their own name and with their own permissions**. So the logs still show exactly who did
   what, and on which PC.
+* People who only use a link need **nothing installed** – just a browser in the same network. They are added in
+  **Users & Permissions → Add Person** (see GUIDE_Users_Permissions.md); their link is shown right away.
 * **Create link** → the link and a QR code are shown. Send it to that person only, or open it once on their PC
   and save it as a bookmark / desktop shortcut. **Show link** shows the same link again at any time.
 * The list shows for everybody whether they have a link and **when and on which PC it was last used**.

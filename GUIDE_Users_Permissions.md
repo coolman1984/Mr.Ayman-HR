@@ -1,44 +1,85 @@
-# Guide: Users, Passwords and Permissions
+# Guide: People, Links and Permissions
 
-Every person logs in with their **own** user name and password. The administrator decides, with simple
-tick boxes, what each person may see and do. Everything each person does is recorded with their name.
+Every person has their **own** account, so everything they do is recorded with their name. A person logs in in one
+of two ways:
+
+* **Personal link** (easiest, the default) – the administrator gives the person a link. Opening it logs them in
+  straight away. No user name, no password, nothing to install: any browser in the same network is enough.
+* **User name and password** – needed for administrators.
+
+The administrator decides with simple tick boxes what each person may open and do.
 
 ---
 
 ## 1. First start – create the administrator
 
-1. On the **server PC** (the PC running `start.bat`) the browser opens by itself.
+1. On the **administrator PC** (the PC running `start.bat`) the browser opens by itself.
 2. Enter your full name, a user name (e.g. `ayman`) and a password, then click **Create Administrator**.
 
-> This screen only works on the PC itself. The PC where the first administrator is created becomes the
-> **administrator PC**. Other PCs are added later with **Devices & Sync → Add a PC** (see GUIDE_Devices_Sync.md).
+> This screen only works on the PC itself. Other PCs with the program are added later with **Devices & Sync →
+> Add a PC** (see GUIDE_Devices_Sync.md). People who only use a link do **not** need the program on their device.
 
 ---
 
-## 2. Add a user
+## 2. Add a person (about 10 seconds)
 
-1. **Users & Permissions** (left menu) → **Add User**.
-2. Fill in the full name, a user name and (optionally) job title. A temporary password is already suggested.
-3. **Break areas:** *All break areas*, or *Only the selected break areas* and tick them.
-   The user will not even see the other areas.
-4. **Permissions:** choose a **Quick role** to fill the ticks, then add or remove single ticks as you like.
-   Ticking a group title ticks the whole group.
-5. **Create User** → give the shown user name and password to the person privately.
-   At the first login they must choose their own password.
+1. **Users & Permissions** (left menu) → **Add Person**.
+2. Type the **name**.
+3. Choose a **profile** (e.g. *Visitor*). The right boxes are ticked for you. Change single ticks if you like.
+4. **Create** → the person's **link** and a QR code appear. **Copy link** and send it to that person only, or open it
+   once on their PC / phone and save it as a bookmark.
 
-| Quick role | Typical person |
+That is all. The person opens the link and works under their own name, with the permissions you ticked.
+
+**Permissions**
+
+* One tick box per page and per action. Ticking a group title ticks the whole group.
+* **Select all** ticks everything except the orange group **Administrator rights**.
+* **Clear all** removes every tick.
+* The orange **Administrator rights** (manage people, see who clicked what, logins log, restore backups, import) are
+  never given by accident and are **not possible with a personal link** – administrators use a password.
+
+**Profiles** (button **Profiles** on the same page)
+
+A profile is a named set of ticks, e.g. *Visitor*. Ready-made profiles:
+
+| Profile | Typical person |
 |---|---|
-| Administrator | You – everything, including users and backups |
-| Manager | Everything except users, restoring backups, import and the security log |
+| Full access | Everything except the administrator rights (the default for a new person) |
+| Administrator | Everything – always, cannot be changed |
 | Data Entry | Sees the pages, records inventory, issues, inspections, maintenance, surveys, uploads photos |
 | Maintenance Team | Sees break areas and maintenance, follows up issues, completes maintenance |
 | Viewer | Sees everything and runs the reports, changes nothing |
+| Visitor | Only the dashboard and the break areas list |
 
-Changes to a user apply **immediately**, even if that person is logged in right now – on other PCs as soon as they
-receive the change (a PC that is switched off applies it when it comes back).
+**New Profile** – give it a name and tick the boxes. **Edit** – change the ticks; *Also update the people who have
+this profile* changes everybody with it at once, on every PC. **Delete** – the people who had it keep their ticks
+(their profile shows as *Custom*).
 
-> **Several PCs:** users, passwords and permissions can only be changed on the **administrator PC** (open its address
-> in any browser). The other PCs show the list read-only. People change their *own* password on any PC.
+**More options** (at the bottom of the person's window): limit the person to some break areas only, and notes.
+
+Changes apply **immediately**, even if the person is logged in right now – on other PCs as soon as they receive the
+change.
+
+> **Several PCs:** people, links, profiles and permissions are changed only on the **administrator PC**. The links work
+> on every PC. People with a password change their *own* password on any PC.
+
+---
+
+## 2a. Personal links – good to know
+
+* The link opens the system on the PC whose address it contains (normally the administrator PC). That PC must be
+  switched on and in the same network. Windows must allow the program on the **private network** (the question
+  Windows asks the first time).
+* If that PC gets a new network address, open the person and click **Show Link** – it shows the link with the new
+  address. Ask IT for a fixed address for the administrator PC to avoid this.
+* A link is like a key: whoever has it works under that person's name. If it gets into the wrong hands, open the person
+  → **Show Link** → **New link**. The old link stops working at once, on every PC.
+* After 30 minutes without activity the person is logged out – opening the link again logs them back in.
+* To stop a person: **Account → Disabled**, or **Delete**.
+* To switch a person from link to password: choose *User name and password* and give a temporary password (the link
+  stops). And back: choose *Personal link*.
+* **Devices & Sync → Personal links** lists everybody's link with **when and on which PC it was last used**.
 
 ---
 
@@ -48,7 +89,7 @@ Open the user (**Users & Permissions** → **Edit**):
 
 | Need | Button / field |
 |---|---|
-| Person forgot the password | **Reset Password** (new temporary password, logged out everywhere) |
+| Person forgot the password | **Reset Password** (new temporary password, logged out everywhere) – or give them a personal link |
 | Account locked after 5 wrong passwords | **Unlock** (or wait 15 minutes; lockouts count per PC) |
 | Throw someone out now | **Log Out Now** |
 | Block for a while (vacation, suspension) | **Account → Disabled** |
