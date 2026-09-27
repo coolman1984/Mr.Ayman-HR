@@ -55,6 +55,10 @@ Version numbers: `server/version.py`. Pull requests: github.com/coolman1984/Mr.A
   can be dangerous in the other (data next to the pages).
 - Ids made by counting (`length + 1`) are never safe when several PCs work offline – always random ids.
 - Anything a request can send (like `resolve`) is sent by somebody one day: internal options never come from the client.
+- CI (GitHub) found two test problems the local machine hid: the upgrade tests need the full git history
+  (`fetch-depth: 0`), and the attachment test depended on *when* a simulated network cut hit an already-open
+  connection. Tests must create the situation they check directly (here: a half-downloaded file) instead of
+  hoping for a timing. The test proxy now applies a cut limit to already-open connections too.
 - A process killer that matches a command line (`pkill -f`, `ps | grep`) also matches the shell that runs it:
   stop test processes by process name or by PID.
 - Inno Setup `[InstallDelete] {app}\*` looks harmless but wipes whatever folder the user picked: never delete by

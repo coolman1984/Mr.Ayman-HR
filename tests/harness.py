@@ -216,18 +216,25 @@ class TcpProxy:
                 continue
             with self.lock:
                 self.conns += [c, s]
-            threading.Thread(target=self._pipe, args=(c, s, self.cut_after), daemon=True).start()
-            threading.Thread(target=self._pipe, args=(s, c, self.cut_after), daemon=True).start()
+            threading.Thread(target=self._pipe, args=(c, s), daemon=True).start()
+            threading.Thread(target=self._pipe, args=(s, c), daemon=True).start()
 
-    def _pipe(self, a, b, limit):
-        sent = 0
+    def _pipe(self, a, b):
+        # cut_after is read live and counted from the moment it is set, so it also cuts connections that were
+        # already open (kept-alive sync connections) - otherwise an open connection could carry a whole transfer
+        sent, since = 0, None
         try:
             while True:
                 data = a.recv(65536)
                 if not data or not self.up:
                     break
-                if limit is not None and sent + len(data) > limit:
-                    b.sendall(data[:max(0, limit - sent)])
+                limit = self.cut_after
+                if limit is None:
+                    since = None
+                elif since is None:
+                    since = sent
+                if limit is not None and sent - since + len(data) > limit:
+                    b.sendall(data[:max(0, limit - (sent - since))])
                     break
                 b.sendall(data)
                 sent += len(data)

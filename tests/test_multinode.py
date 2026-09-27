@@ -545,9 +545,13 @@ class T19_Crashes(Base):
         self.assertEqual(len([a for a in self.clients[1].get('/api/state')['areas'] if a['id'].startswith('K')]), 20)
 
     def test_c_attachments(self):
-        """22-23. Upload on one PC; the other copies it, verified by SHA-256, also after an interrupted transfer."""
+        """22-23. Upload on one PC; the other shows a placeholder while the file is missing, continues an interrupted
+        download from where it stopped (only the rest travels), verifies it by SHA-256 and never shows a partial file."""
         data = os.urandom(900_000)
-        self.proxies[0].cut_after = 300_000  # downloads from the administrator PC break after 300 kB
+        sha = hashlib.sha256(data).hexdigest()
+        # the administrator PC cannot be reached by pc1 while the photo is added (its rows still arrive: the administrator
+        # PC pushes them), so pc1 certainly has the record but not the file yet
+        self.unplug(0)
         up = self.ac.call('POST', '/api/upload?name=big.jpg', raw=data, headers={'Content-Type': 'application/octet-stream'})
         self.assertTrue(up['src'].startswith('/files/cas/'))
         self.ac.post('/api/commit', {'label': 'photo', 'ops': [area_op('P1', 'Photo area'),
@@ -555,16 +559,26 @@ class T19_Crashes(Base):
         wait_until(lambda: get_area(self.clients[1], 'P1'), 30, what='photo row')
         ph = self.clients[1].call('GET', up['src'])
         self.assertIn(b'<svg', ph, 'while the file is missing a placeholder is shown')
+        # an earlier download stopped after 300 kB: the part file is kept, never shown as the real file
         part_dir = os.path.join(self.servers[1].data_dir, 'uploads', '.incoming')
-        wait_until(lambda: os.path.isdir(part_dir) and os.listdir(part_dir), 30, what='partial file')
+        os.makedirs(part_dir, exist_ok=True)
+        with open(os.path.join(part_dir, sha + '.part'), 'wb') as f:
+            f.write(data[:300_000])
         final = os.path.join(self.servers[1].data_dir, 'uploads', 'cas', os.path.basename(up['src']))
         self.assertFalse(os.path.exists(final), 'a partial file must never be visible as the real file')
-        self.proxies[0].cut_after = None
+        self.assertIn(b'<svg', self.clients[1].call('GET', up['src']))
+        logf = os.path.join(self.servers[1].data_dir, 'logs', time.strftime('sync-%Y-%m.jsonl'))
+        start = os.path.getsize(logf) if os.path.exists(logf) else 0
+        self.plug(0)
         wait_until(lambda: self.clients[1].call('GET', up['src']) == data, 60, what='file copied')
-        self.assertEqual(hashlib.sha256(open(final, 'rb').read()).hexdigest(), os.path.basename(up['src']).split('.')[0])
+        self.assertEqual(hashlib.sha256(open(final, 'rb').read()).hexdigest(), sha)
         self.assertEqual(os.listdir(part_dir), [])
-        log = open(os.path.join(self.servers[1].data_dir, 'logs', time.strftime('sync-%Y-%m.jsonl'))).read()
-        self.assertIn('"result": "interrupted"', log)
+        with open(logf, 'rb') as f:  # the download continued: only the missing 600 kB travelled
+            events = [json.loads(x) for x in f.read()[start:].decode('utf-8').splitlines() if x.strip()]
+        done = [e for e in events if e.get('event') == 'file' and e.get('path') == up['src'] and e.get('result') == 'ok']
+        self.assertTrue(done, events)
+        rounds = [e for e in events if e.get('files')]
+        self.assertTrue(rounds and rounds[-1]['bytes_in'] < 800_000, rounds)
 
     def test_d_corrupt_copy_rejected(self):
         """23. A damaged copy (wrong checksum) is thrown away and never shown."""

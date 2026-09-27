@@ -79,3 +79,5 @@ Check a local compile on Linux: `pip install --target <dir> nuitka ordered-set z
 - Never trust internal options from the client (`resolve` is refused in `/api/commit`); check old *and* new area.
 - One program per data folder (`system.lock_data`); tools (`nodectl`) need the program stopped.
 - Before login: 64 kB requests and max 10 failed logins per minute per address (`too_many_failures`).
+- Tests must build the situation they check (e.g. write a `.part` file) instead of relying on timing; CI machines
+  are faster/slower than the dev machine. CI checkout needs `fetch-depth: 0` (upgrade tests read old commits).
