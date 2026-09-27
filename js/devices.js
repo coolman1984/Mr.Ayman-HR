@@ -248,7 +248,8 @@ Object.assign(ACT, {
   async linkSet(d) {
     const u = LINKS.users.find(x => x.id === d.id), on = d.on === '1';
     if (on && u.on && !confirm(`Make a new link for ${u.full_name}?\n\nThe old link stops working at once on every PC. Give the new link to ${u.full_name}.`)) return;
-    if (!on && !confirm(`Switch off the link of ${u.full_name}?\n\nThey can still log in with their user name and password.`)) return;
+    if (!on && !confirm(`Switch off the link of ${u.full_name}?\n\n` + (u.login === 'link'
+      ? `${u.full_name} has no password, so they cannot log in any more until you make a new link.` : 'They can still log in with their user name and password.'))) return;
     try { await api('POST', '/api/quick-links/set', { id: u.id, on }); }
     catch (e) { return toast(e.message, true, 7000); }
     toast(on ? 'Link ready' : 'Link switched off');

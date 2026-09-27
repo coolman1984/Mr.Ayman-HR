@@ -523,8 +523,8 @@ class Auth:
     # ------------------------------------------------------------ personal quick links
     @staticmethod
     def link_allowed(u):
-        """Administrator accounts never get a link: whoever holds it could change every user and permission."""
-        return 'users.manage' not in (u.get('perms') or [])
+        """A link never carries administrator rights: whoever holds it could restore backups or change people and permissions."""
+        return not ADMIN_PERMS.intersection(u.get('perms') or [])
 
     def link_token(self, uid, nonce):
         """The secret part of a user's link. Only the administrator PC can work it out again (from its own key), so the
@@ -578,6 +578,7 @@ class Auth:
             last = used.get(u['username'].lower())
             on = bool(u.get('link_hash'))
             out.append({'id': u['id'], 'username': u['username'], 'full_name': u['full_name'], 'title': u['title'], 'active': bool(u['active']),
+                        'login': 'link' if u.get('login') == 'link' else 'password',
                         'allowed': self.link_allowed(u), 'on': on, 'created_at': u.get('link_at') if on else None,
                         'created_by': u.get('link_by') if on else None,
                         'token': self.link_token(u['id'], u['link_nonce']) if on and self.node.is_authority and u.get('link_nonce') else None,
@@ -586,11 +587,13 @@ class Auth:
 
     def link_set(self, actor, ip, uid, on):
         """Creates a new personal link (the old one stops working) or switches it off - on every PC."""
+        if not self.node.is_authority:
+            raise NotAuthority(self.authority_hint())
         u = self.get(uid)
         if not u:
             raise AuthError('This user no longer exists.')
         if on and not self.link_allowed(u):
-            raise AuthError('Administrator accounts cannot get a personal link - they always log in with their password.')
+            raise AuthError('People with administrator rights cannot get a personal link - they always log in with their password.')
         ts = now()
         nonce = secrets.token_hex(8) if on else ''
         s = {'link_hash': _token_hash(self.link_token(uid, nonce)) if on else '', 'link_nonce': nonce,
@@ -702,6 +705,9 @@ class Auth:
             raise AuthError('Give the profile a name, e.g. "Visitor".')
         if name.lower() == 'custom':
             raise AuthError('"Custom" is used for people with their own set of permissions. Choose another name.')
+        if name.lower() in {n.lower() for n in OLD_ROLE_NAMES}:
+            raise AuthError(f'"{name}" was the old name of the profile "{OLD_ROLE_NAMES[next(n for n in OLD_ROLE_NAMES if n.lower() == name.lower())]}". '
+                            'Choose another name.')
         ts, res = now(), {}
 
         def check(c):
@@ -718,6 +724,10 @@ class Auth:
                     's': {'name': name, 'perms': perms, 'deleted': False, 'updated_at': ts, 'updated_by': actor['display']},
                     'c': {'name': [cur['name'] if cur else '', name], 'perms': [cur['perms'] if cur else [], perms]}}]
             res['n'] = 0
+            if cur and not apply and cur['name'] != name:  # renamed: its people keep their ticks but follow the new name
+                for r in c.execute('SELECT id, role FROM users WHERE deleted=0'):
+                    if role_name(r['role']) == cur['name']:
+                        ops.append({'e': 'users', 'id': r['id'], 'op': 'update', 'noaudit': True, 's': {'role': name}})
             if cur and apply:
                 users = [self._user(r) for r in c.execute('SELECT * FROM users WHERE deleted=0')]
                 hit = [u for u in users if role_name(u['role']) == cur['name']]
@@ -727,9 +737,9 @@ class Auth:
                 for u in hit:
                     if u['id'] == actor['id'] and 'users.manage' not in perms:
                         raise AuthError('You have this profile yourself. You cannot remove your own right to manage people and permissions.')
-                    if 'users.manage' in perms and (u.get('login') == 'link' or u.get('link_hash')):
-                        raise AuthError(f'{u["full_name"]} has this profile and logs in with a personal link. People with a link cannot '
-                                        'manage people and permissions. Switch off their link first, or remove that right.')
+                    if ADMIN_PERMS.intersection(perms) and (u.get('login') == 'link' or u.get('link_hash')):
+                        raise AuthError(f'{u["full_name"]} has this profile and has a personal link. People with a link cannot have '
+                                        'administrator rights (the orange group). Switch off their link first, or remove those ticks.')
                     if sorted(u['perms']) != perms or u['role'] != name:
                         ops.append({'e': 'users', 'id': u['id'], 'op': 'update', 's': {'perms': perms, 'role': name, 'updated_at': ts,
                                                                                          'updated_by': actor['display']},
@@ -787,9 +797,9 @@ class Auth:
             raise AuthError('Enter the full name.')
         if username and not USERNAME_RE.match(username) or not username and (uid or login == 'password'):
             raise AuthError('User name: 3-32 letters, numbers, dot, dash or underscore (no spaces).')
-        if login == 'link' and 'users.manage' in perms:
-            raise AuthError('People who log in with a personal link cannot manage people and permissions (administrator right). '
-                            'Remove that right, or let this person log in with a user name and password.')
+        if login == 'link' and ADMIN_PERMS.intersection(perms):
+            raise AuthError('People who log in with a personal link cannot have administrator rights (the orange group). '
+                            'Remove those ticks, or let this person log in with a user name and password.')
         if not self.node.is_authority:
             raise NotAuthority(self.authority_hint())
         ts = now()
@@ -822,6 +832,9 @@ class Auth:
                     raise AuthError('This user no longer exists.')
                 if int(d.get('ver') or 0) != old['ver']:
                     raise AuthError(f'{old["display"]} was changed by {old["updated_by"]} at {old["updated_at"]}. Close and open it again.')
+                if login == 'password' and old.get('link_hash') and ADMIN_PERMS.intersection(perms):
+                    raise AuthError(f'{old["full_name"]} also has a personal link. People with a link cannot have administrator rights. '
+                                    'Switch off the link first (Devices & Sync → Personal links), or remove those ticks.')
                 if uid == actor['id'] and (not active or 'users.manage' not in perms):
                     raise AuthError('You cannot disable yourself or remove your own right to manage users.')
                 if (not active or 'users.manage' not in perms) and 'users.manage' in old['perms'] and not self._admins(c, exclude=uid):
@@ -833,13 +846,17 @@ class Auth:
                 row, extra = dict(new_row), []
                 if login == 'link':
                     row['must_change'] = False
-                    if not old.get('link_hash'):
-                        row.update(new_link(uid))
+                    if old_login == 'password':  # from now on only the link: the old password stops working
+                        pw = secrets.token_urlsafe(24)
+                        row.update({'pw_hash': hash_password(pw), 'pw_pub': account_pub(pw, uid), 'pw_changed_at': ts})
+                        extra.append({'e': 'userCommands', 'id': uuid.uuid4().hex, 'op': 'insert', 'noaudit': True, 's': {'cmd': 'logout', 'user': uid}})
+                        if not old.get('link_hash'):
+                            row.update(new_link(uid))
                 elif old_login == 'link':  # from now on with a password: the link is switched off
                     password = d.get('password') or ''
                     self.check_password(password, username, full_name)
-                    row.update({'pw_hash': hash_password(password), 'pw_pub': account_pub(password, uid), 'must_change': True, 'pw_changed_at': ts,
-                                'link_hash': '', 'link_nonce': '', 'link_at': '', 'link_by': ''})
+                    row.update({'pw_hash': hash_password(password), 'pw_pub': account_pub(password, uid), 'must_change': must_change,
+                                'pw_changed_at': ts, 'link_hash': '', 'link_nonce': '', 'link_at': '', 'link_by': ''})
                     extra.append({'e': 'userCommands', 'id': uuid.uuid4().hex, 'op': 'insert', 'noaudit': True, 's': {'cmd': 'logout-link', 'user': uid}})
                 changes = {f: [cur[f], row[f]] for f in cur if cur.get(f) != row.get(f)}
                 if 'pw_hash' in row:

@@ -787,14 +787,17 @@ class T32_PersonalLinks(Base):
             self._open(pc1.client(), new)
         pc1.client().login('omar', 'Temp-pass55')
 
-        # an account that becomes an administrator can no longer use its link
+        # an account with a link cannot become an administrator (switch the link off first)
         ac.post('/api/quick-links/set', {'id': omar['id'], 'on': True})
         tok = self._user('omar')['token']
         u = next(x for x in ac.get('/api/users')['users'] if x['username'] == 'omar')
-        ac.post('/api/users/save', {**u, 'perms': u['perms'] + ['users.manage']})
+        with self.assertRaises(ApiError) as e:
+            ac.post('/api/users/save', {**u, 'perms': u['perms'] + ['users.manage']})
+        self.assertEqual(e.exception.code, 400)
         self.converged()
-        with self.assertRaises(ApiError):
-            self._open(pc1.client(), tok)
+        c3 = pc1.client()
+        self._open(c3, tok)
+        self.assertEqual(c3.get('/api/me')['username'], 'omar')
 
 
 class T33_PeopleAndProfiles(Base):
@@ -857,12 +860,66 @@ class T33_PeopleAndProfiles(Base):
         u = next(x for x in ac.get('/api/users')['users'] if x['id'] == r['id'])
         with self.assertRaises(ApiError):
             ac.post('/api/users/save', {**u, 'login': 'password'})  # a password is needed
-        ac.post('/api/users/save', {**u, 'login': 'password', 'password': 'Fresh-pass42'})
+        ac.post('/api/users/save', {**u, 'login': 'password', 'password': 'Fresh-pass42', 'must_change': True})
         self.converged()
         wait_until(lambda: T03_Cluster._logged_out(c), 20, what='link session ended')
         self.assertTrue(pc1.client().login('mona.adel', 'Fresh-pass42')['must_change'])
         with self.assertRaises(ApiError):
             T32_PersonalLinks._open(pc1.client(), r['token'])
+        # review regressions -------------------------------------------------------------
+        # password -> link: the old password stops working, the person gets a link
+        sara = ac.post('/api/users/save', {'username': 'sara.s', 'full_name': 'Sara Saad', 'password': 'Temp-pass66', 'must_change': True,
+                                           'perms': ['dashboard.view'], 'areas': None})
+        res = ac.post('/api/users/save', {**sara, 'login': 'link'})
+        self.assertTrue(res.get('token') and res['link_on'] and not res['must_change'])
+        with self.assertRaises(ApiError):
+            A2 = self.servers[0].client(); A2.login('sara.s', 'Temp-pass66')
+        # a link never carries any administrator right (not only "manage people")
+        for bad in (['backups.restore'], ['data.import'], ['logs.security']):
+            with self.assertRaises(ApiError) as e:
+                ac.post('/api/users/save', {'full_name': 'No Way', 'login': 'link', 'perms': ['dashboard.view'] + bad, 'areas': None})
+            self.assertEqual(e.exception.code, 400)
+        vis = next(p for p in ac.get('/api/users')['profiles'] if p['id'] == 'visitor')
+        with self.assertRaises(ApiError):  # r2 (a link person) has the Visitor profile
+            ac.post('/api/profiles/save', {'id': 'visitor', 'name': 'Visitor', 'perms': vis['perms'] + ['backups.restore'], 'apply': True})
+        # a password person who also has a link cannot become administrator while the link is on
+        ali = ac.post('/api/users/save', {'username': 'ali.k', 'full_name': 'Ali Kamal', 'password': 'Temp-pass77', 'must_change': False,
+                                          'perms': ['dashboard.view'], 'areas': None})
+        ac.post('/api/quick-links/set', {'id': ali['id'], 'on': True})
+        ali = next(x for x in ac.get('/api/users')['users'] if x['id'] == ali['id'])
+        with self.assertRaises(ApiError):
+            ac.post('/api/users/save', {**ali, 'perms': ali['perms'] + ['users.manage']})
+        # the old name "Manager" is reserved
+        with self.assertRaises(ApiError):
+            ac.post('/api/profiles/save', {'name': 'manager', 'perms': []})
+        # links are only made on the administrator PC (a clear message, not a server error)
+        with self.assertRaises(ApiError) as e:
+            self.clients[1].post('/api/quick-links/set', {'id': ali['id'], 'on': True})
+        self.assertEqual(e.exception.code, 403)
+        # a link person whose link is off: saving other details does not quietly make a new link
+        ac.post('/api/quick-links/set', {'id': r2['id'], 'on': False})
+        u2 = next(x for x in ac.get('/api/users')['users'] if x['id'] == r2['id'])
+        res = ac.post('/api/users/save', {**u2, 'title': 'Guest'})
+        self.assertFalse(res.get('token') or res['link_on'])
+        # renaming a profile without "apply": its people follow the new name
+        h = ac.post('/api/profiles/save', {'name': 'Helpers', 'perms': ['dashboard.view']})
+        hp = ac.post('/api/users/save', {'full_name': 'Hana Help', 'login': 'link', 'role': 'Helpers', 'perms': ['dashboard.view'], 'areas': None})
+        ac.post('/api/profiles/save', {'id': h['id'], 'name': 'Helpers Team', 'perms': ['dashboard.view', 'areas.view'], 'apply': False})
+        u3 = next(x for x in ac.get('/api/users')['users'] if x['id'] == hp['id'])
+        self.assertEqual((u3['role'], u3['perms']), ('Helpers Team', ['dashboard.view']))
+        # a link opened in a browser where somebody else is logged in asks first, and never switches by itself
+        busy = self.servers[0].client()
+        busy.login(*ADMIN)
+        page = busy.get('/k/' + hp['token'])
+        self.assertIn(b'Continue as Hana Help', page)
+        self.assertNotIn(b'quick.js', page)
+        self.assertEqual(busy.get('/api/me')['username'], ADMIN[0])
+        same = self.servers[0].client()
+        T32_PersonalLinks._open(same, hp['token'])
+        self.assertEqual(same.get('/api/me')['username'], 'hana.help')
+        same.get('/k/' + hp['token'])  # already this person: straight to the system
+        self.assertEqual(same.get('/api/me')['username'], 'hana.help')
+
         # people who are not administrators do not see account and profile changes in the data changes log
         viewer = pc1.client()
         ac.post('/api/users/save', {'username': 'logviewer', 'full_name': 'Log Viewer', 'password': 'Look-only77', 'must_change': False,

@@ -31,7 +31,7 @@ import ed25519
 
 ZERO = '0' * 64
 VERSION = 1   # envelope format
-SCHEMA = 2    # business data model; a change made by a newer program version waits until this PC is updated
+SCHEMA = 3    # data model (3: personal links, profiles); a change made by a newer program version waits until this PC is updated
 DATA_KINDS = ('data', 'restore', 'bootstrap')
 KINDS = DATA_KINDS + ('admin', 'account', 'log')
 PRIORITY = {'restore': 0, 'data': 1, 'bootstrap': 1, 'account': 2, 'admin': 3}

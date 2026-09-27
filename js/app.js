@@ -1748,6 +1748,7 @@ function accountMenu() {
 }
 const permGroupsHTML = (perms, input) => ME.permissions.map(([g, list]) => `<fieldset class="perm-group${(ME.adminPerms || []).includes(list[0][0]) ? ' perm-admin' : ''}">
     <legend>${input ? `<label class="check"><input type="checkbox" data-group="${esc(g)}"> ${esc(g)}</label>` : esc(g)}</legend>
+    ${input && (ME.adminPerms || []).includes(list[0][0]) ? '<p class="hint perm-note hidden">Not possible with a personal link.</p>' : ''}
     ${list.map(([p, l]) => input
       ? `<label class="check"><input type="checkbox" name="perm" value="${p}" ${perms.includes(p) ? 'checked' : ''}> ${esc(l)}</label>`
       : `<div class="perm ${perms.includes(p) ? 'yes' : 'no'}">${ic(perms.includes(p) ? 'check' : 'x')}${esc(l)}</div>`).join('')}
@@ -1827,7 +1828,7 @@ function wirePermPicker(form, profiles) {
   });
   form.addEventListener('change', e => {
     const t = e.target;
-    if (t.name === 'role') { const p = profiles.find(x => x.name === t.value); if (p) setAll(true, p.perms); }
+    if (t.name === 'role') { const p = profiles.find(x => x.name === t.value); if (p) { setAll(true, p.perms); matchProfile(); } }
     else if (t.dataset.group) { $$('input[name=perm]', t.closest('fieldset')).forEach(b => { if (!b.disabled) b.checked = t.checked; }); matchProfile(); }
     else if (t.name === 'perm') matchProfile();
     sync();
@@ -1874,7 +1875,8 @@ function userEdit(uid) {
         · Last login ${esc((u.last_login || 'never').replace('T', ' '))} ${esc(u.last_ip || '')}</p>` : ''}
     </details>`, {
     submit: u ? 'Save' : 'Create', wide: true, cls: 'user-modal',
-    extra: u ? `${u.link_on ? `<button type="button" class="btn" data-act="userLink" data-uid="${u.id}">${ic('link')}Show Link</button>` : ''}
+    extra: u ? `${u.link_on ? `<button type="button" class="btn" data-act="userLink" data-uid="${u.id}">${ic('link')}Show Link</button>`
+        : u.login === 'link' && USERS.authority ? `<button type="button" class="btn" data-act="userLinkNew" data-uid="${u.id}">${ic('link')}Make New Link</button>` : ''}
       ${u.login !== 'link' ? `<button type="button" class="btn" data-act="userReset" data-uid="${u.id}">${ic('edit')}Reset Password</button>` : ''}
       ${u.locked ? `<button type="button" class="btn" data-act="userUnlock" data-uid="${u.id}">${ic('check')}Unlock</button>` : ''}
       ${u.online ? `<button type="button" class="btn" data-act="userLogout" data-uid="${u.id}">${ic('arrowLeft')}Log Out Now</button>` : ''}
@@ -1910,12 +1912,15 @@ function userEdit(uid) {
   const loginMode = () => {
     const byLink = form.login.value === 'link';
     $('.pw-fields', form).classList.toggle('hidden', byLink);
-    const adm = $$('input[name=perm]', form).find(b => b.value === 'users.manage');
-    if (adm) {
-      if (byLink) adm.checked = false;
-      adm.disabled = byLink;
-      adm.closest('label').title = byLink ? 'Not possible with a personal link – administrators log in with a password' : '';
-    }
+    $$('input[name=perm]', form).filter(b => USERS.adminPerms.includes(b.value)).forEach(b => {  // never with a link
+      if (byLink) b.checked = false;
+      b.disabled = byLink;
+      b.closest('label').title = byLink ? 'Not possible with a personal link – administrators log in with a password' : '';
+    });
+    const g = $('fieldset.perm-admin input[data-group]', form);
+    if (g) g.disabled = byLink;
+    const note = $('fieldset.perm-admin .perm-note', form);
+    if (note) note.classList.toggle('hidden', !byLink);
     form._permSync();
   };
   form.addEventListener('change', e => {
@@ -1944,7 +1949,7 @@ function linkModal(name, token, fresh) {
 async function userLinkShow(uid, renew) {
   const u = USERS.users.find(x => x.id === uid);
   if (!u) return;
-  if (renew && !confirm(`Make a new link for ${u.full_name}?\n\nThe old link stops working at once on every PC. Give the new link to ${u.full_name}.`)) return;
+  if (renew && u.link_on && !confirm(`Make a new link for ${u.full_name}?\n\nThe old link stops working at once on every PC. Give the new link to ${u.full_name}.`)) return;
   try {
     if (renew) await api('POST', '/api/quick-links/set', { id: uid, on: true });
     const l = (await api('GET', '/api/quick-links')).users.find(x => x.id === uid);

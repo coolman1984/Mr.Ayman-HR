@@ -270,11 +270,20 @@ class Handler(BaseHTTPRequestHandler):
         u = AUTH.link_user(token)
         ok = u and u['active'] and AUTH.link_allowed(u)
         title = 'Break Area Management System'
+        now_in = AUTH.session(self.token, self.ip, touch=False) if ok and self.token else None
+        if now_in and now_in['id'] == u['id']:
+            return self.send(303, b'', 'text/plain', {'Location': '/'})  # already logged in as this person
         if ok:
-            body = (f'<h1>Welcome, {html.escape(u["full_name"])}</h1><p>Opening the system for you…</p>'
-                    f'<form id="go" method="post" action="/k/{html.escape(token)}"><button type="submit">Open the system</button></form>'
-                    '<p class="small">This is your personal link. Do not give it to anybody - whoever has it works under your name.</p>'
-                    '<script src="/js/quick.js"></script>')
+            form = (f'<form id="{"ask" if now_in else "go"}" method="post" action="/k/{html.escape(token)}">'
+                    f'<button type="submit">{"Continue as " + html.escape(u["full_name"]) if now_in else "Open the system"}</button></form>')
+            if now_in:  # somebody else is logged in in this browser: never switch without asking
+                body = (f'<h1>Personal link of {html.escape(u["full_name"])}</h1><p>This browser is logged in as '
+                        f'<b>{html.escape(now_in["full_name"])}</b>. Continuing logs {html.escape(now_in["full_name"])} out.</p>' + form +
+                        '<p class="small"><a href="/">Stay as ' + html.escape(now_in['full_name']) + '</a></p>')
+            else:
+                body = (f'<h1>Welcome, {html.escape(u["full_name"])}</h1><p>Opening the system for you…</p>' + form +
+                        '<p class="small">This is your personal link. Do not give it to anybody - whoever has it works under your name.</p>'
+                        '<script src="/js/quick.js"></script>')
         else:
             body = ('<h1>This link does not work any more</h1><p>Please ask the administrator for your new link, '
                     'or <a href="/">log in with your user name and password</a>.</p>')
