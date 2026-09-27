@@ -475,6 +475,31 @@ class Review231Test(unittest.TestCase):
         self.assertEqual((one['name'], one['address'], one['role'], one['status']), ('Stock PC', '10.0.0.30:8443', 'backup', 'revoked'))
         late = env('admin', 3, 999, {'status': 'active'})  # a removal is final
         self.assertEqual(self.roster_after([base, r, late])['status'], 'revoked')
+        # the same PC removed on two PCs at the same time: same result in both orders, both removals remembered
+        r2 = env('admin', 4, 140, {'status': 'revoked', 'revoked_at': 'y', 'revoked_by': 'Admin'})
+        x, y = self.roster_after([base, r, r2]), self.roster_after([base, r2, r])
+        self.assertEqual(x, y)
+        self.assertEqual((x['revoked_by'], x['revoked_change']), ('Admin', 'admin#4 backup#8'))
+
+    def test_upgrade_rebuilds_the_pc_list(self):
+        """A 2.3.0 database has no field versions: the PC list is folded again from the history once."""
+        from journal import Journal
+        from store import ENTITIES
+        cl = Cluster(2)
+        try:
+            a = cl.peers[0]
+            pc1 = cl.peers[1].node.id
+            a.journal.write('admin', [{'e': 'nodes', 'id': pc1, 'op': 'update', 'noaudit': True, 's': {'name': 'Store room'}}],
+                            actor='admin', label='rename', authority=True)
+            a.journal.conn.execute("UPDATE nodes SET name='wrong', vers=NULL")
+            a.journal.conn.execute('ALTER TABLE nodes DROP COLUMN vers')
+            a.journal.conn.close()
+            j = Journal(a.dir, a.node, ENTITIES.keys())
+            self.assertEqual(j.roster()[pc1]['name'], 'Store room')
+            self.assertTrue(j.roster()[pc1]['vers'])
+            j.conn.close()
+        finally:
+            shutil.rmtree(cl.root, ignore_errors=True)
 
     def test_network_folders_refused(self):
         import backup

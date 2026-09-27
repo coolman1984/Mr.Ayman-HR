@@ -15,6 +15,11 @@ The Codex review of pull request #7 arrived a moment after the merge; its findin
   applied changes in arrival order, so two PCs could end with different values. Now every field keeps the newest
   change by (clock, PC, number) – the same result on every PC in any order – and a removal stays final
   (`Journal._fold_roster`, column `nodes.vers`). Test `test_unit.Review231Test`.
+- The second Codex review (on the fix) found two more: two PCs removing the same PC at the same time kept whichever
+  removal arrived first (and `_consider` used it to refuse later changes) → the earliest removal names who and when,
+  and *all* removals are remembered (`revoked_change` lists them; a change that had seen any of them is refused).
+  And a 2.3.0 database had no field versions, so two PCs could swap values after the update → the PC list is folded
+  again from the history once when the column is added (`Journal.rebuild_roster`).
 - **Mapped network drives** (like `Z:`) passed the "no network folder" rule for the second backup folder; they are
   now recognised with Windows' drive type (`backup.network_folder`).
 - **Known limit, documented, not changed**: a backup PC that is switched off does not know yet that its role was
@@ -26,6 +31,9 @@ The Codex review of pull request #7 arrived a moment after the merge; its findin
 - When a second PC may sign a kind of change that only one PC signed before, every fold of that kind must become
   order-independent. Check each `_fold_*` for "last arrival wins" whenever a new author is added.
 - Wait for the automatic reviews (Codex, Claude) to finish before merging, not only for the CI checks.
+- A new "version" column for folded data is not enough: rows folded before it existed must be rebuilt from the
+  history, or two PCs upgraded at different moments disagree. "Final" states (removal) also need an order-independent
+  rule for *which* of several final changes is kept.
 
 ## 2.3.0 – Help page, delegation, safer first start and backups (2026-09-27)
 
