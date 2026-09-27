@@ -28,6 +28,26 @@ import time
 from datetime import datetime
 
 AUTO_KINDS = ('auto', 'startup')
+DRIVE_REMOTE = 4  # Windows GetDriveTypeW: a mapped network drive
+
+
+def _drive_type(root):
+    import ctypes
+    return ctypes.windll.kernel32.GetDriveTypeW(root)
+
+
+def network_folder(path, drive_type=None):
+    """True for a network folder: \\\\server\\share or a mapped network drive such as Z:. Backups contain the password
+    hashes and the history, so they are only copied to disks of this PC (USB drive, second disk)."""
+    p = str(path or '')
+    if p.startswith(('\\\\', '//')):
+        return True
+    if len(p) >= 2 and p[1] == ':' and (drive_type or os.name == 'nt'):
+        try:
+            return (drive_type or _drive_type)(p[0].upper() + ':\\') == DRIVE_REMOTE
+        except (OSError, AttributeError, ValueError):
+            return False
+    return False
 NAME_RE = re.compile(r'^bams_\d{8}_\d{6}_[a-z-]+\.db$')
 
 

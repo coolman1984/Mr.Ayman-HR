@@ -1,5 +1,11 @@
 # What is new
 
+## 2.3.1
+
+- Several PCs: when the administrator PC and a backup administrator PC change the same PC at the same time, every
+  PC now shows the same result.
+- The second backup folder cannot be a mapped network drive (backups contain the passwords).
+
 ## 2.3.0
 
 - **Help & User Guide** inside the program (left menu *Help*, and Settings → *Help & User Guide*): plain answers to

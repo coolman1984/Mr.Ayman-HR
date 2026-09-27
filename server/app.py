@@ -26,6 +26,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)  # the portable (embedded) Python does not add the script folder itself
 
+import backup as backup_mod  # noqa: E402
 import xlsx  # noqa: E402
 from auth import ADMIN_PERMS, ALL, PERMISSIONS, AuthError, Forbidden  # noqa: E402
 from store import BadRequest, Conflict, now  # noqa: E402
@@ -87,7 +88,7 @@ def set_backup_folder(folder):
     """Choose (or with '' remove) the second backup folder of this PC. Stored in config.json of this PC only."""
     if folder:
         folder = os.path.normpath(folder)
-        if folder.startswith(('\\\\', '//')):
+        if backup_mod.network_folder(folder):
             raise BadRequest('Choose a USB drive or another disk of this PC, not a network folder (the backups contain the passwords).')
         if not os.path.isabs(folder):
             raise BadRequest('Type the full folder, for example E:\\BAMS-Backups.')

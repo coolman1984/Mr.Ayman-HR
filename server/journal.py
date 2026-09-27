@@ -148,8 +148,25 @@ class Journal:
                 confirm TEXT, status TEXT, created_at TEXT, decided_at TEXT, decided_by TEXT, secret TEXT);
             CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
         ''')
-        if 'revoked_change' not in {r[1] for r in self.conn.execute('PRAGMA table_info(nodes)')}:
+        cols = {r[1] for r in self.conn.execute('PRAGMA table_info(nodes)')}
+        if 'revoked_change' not in cols:
             self.conn.execute('ALTER TABLE nodes ADD COLUMN revoked_change TEXT')
+        if 'vers' not in cols:  # per field: the (hlc, origin, cseq) of the change that wrote it (see _fold_roster)
+            self.conn.execute('ALTER TABLE nodes ADD COLUMN vers TEXT')
+            self.rebuild_roster()  # older versions folded the PC list in arrival order: fold it again from the history
+
+    def rebuild_roster(self):
+        """The PC list again from all accepted administrator changes (same result in any order, see _fold_roster)."""
+        c = self.conn
+        c.execute('BEGIN IMMEDIATE')
+        try:
+            c.execute('DELETE FROM nodes')
+            for r in c.execute("SELECT body FROM changes WHERE status='ok' AND kind='admin' ORDER BY rowid").fetchall():
+                self._fold_roster(c, json.loads(r['body']))
+            c.execute('COMMIT')
+        except Exception:
+            c.execute('ROLLBACK')
+            raise
 
     # ------------------------------------------------------------ small helpers
     def vv(self):
@@ -315,13 +332,35 @@ class Journal:
                 continue
             s = {k: v for k, v in op['s'].items() if k in ('name', 'pub', 'cert_fp', 'address', 'status', 'role', 'enrolled_at',
                                                              'enrolled_by', 'revoked_at', 'revoked_by')}
-            if not c.execute('SELECT 1 FROM nodes WHERE id=?', (op['id'],)).fetchone():
+            row = c.execute('SELECT status, vers, revoked_change FROM nodes WHERE id=?', (op['id'],)).fetchone()
+            if not row:
                 c.execute('INSERT INTO nodes (id) VALUES (?)', (op['id'],))
-            if s.get('status') == 'revoked':
-                s['revoked_change'] = f'{env["origin"]}#{env["cseq"]}'  # changes that had seen this are refused (see _consider)
-            if s:
-                c.execute(f'UPDATE nodes SET {", ".join(k + "=?" for k in s)}, updated_at=?, updated_by=? WHERE id=?',
-                          (*[str(v) if v is not None else None for v in s.values()], env['ts'], env['actor'], op['id']))
+            # Several PCs may sign PC changes (administrator + backup administrator PCs), so the same field can be changed
+            # on two PCs at the same time. Every field keeps the newest change by (hlc, origin, cseq) - the same result on
+            # every PC whatever the order of arrival. A removal is final; of several removals the earliest names who and
+            # when, and a change made after having seen any of them is refused (revoked_change lists all, see _consider).
+            try:
+                vers = json.loads(row['vers']) if row and row['vers'] else {}
+            except ValueError:
+                vers = {}
+            me = [env['hlc'], env['origin'], env['cseq']]
+            was_revoked = bool(row) and row['status'] == 'revoked'
+            rev = {k: s.pop(k) for k in ('status', 'revoked_at', 'revoked_by') if k in s}
+            upd = {k: v for k, v in s.items() if k not in vers or me > vers[k]}
+            if rev.get('status') == 'revoked':
+                ids = set((row['revoked_change'] or '').split()) if row else set()
+                ids.add(f'{env["origin"]}#{env["cseq"]}')
+                upd['revoked_change'] = ' '.join(sorted(ids))
+                if not was_revoked or ('revoked' in vers and me < vers['revoked']):
+                    upd.update(rev)
+                    vers['revoked'] = me
+            elif rev and not was_revoked:
+                rev = {k: v for k, v in rev.items() if k not in vers or me > vers[k]}
+                upd.update(rev)
+            if upd:
+                vers.update({k: me for k in upd if k != 'revoked_change'})
+                c.execute(f'UPDATE nodes SET {", ".join(k + "=?" for k in upd)}, vers=?, updated_at=?, updated_by=? WHERE id=?',
+                          (*[str(v) if v is not None else None for v in upd.values()], json.dumps(vers), env['ts'], env['actor'], op['id']))
 
     @staticmethod
     def view_rows(env, status='ok'):
@@ -456,11 +495,13 @@ class Journal:
                        f'(received from {via}).', node, key=f'signature|{origin}|{via}')
             return 'drop'
         status = self._check(env, raw, h, accepted)
-        rc = n.get('revoked_change') if n.get('status') == 'revoked' else None
-        if status == 'ok' and rc:
-            r_origin, _, r_cseq = rc.rpartition('#')
-            if deps.get(r_origin, 0) >= int(r_cseq):  # made by a removed PC after it knew it was removed
-                status = 'made by a removed PC after it was removed'
+        rc = (n.get('revoked_change') or '').split() if n.get('status') == 'revoked' else []
+        if status == 'ok':
+            for one in rc:
+                r_origin, _, r_cseq = one.rpartition('#')
+                if r_cseq.isdigit() and deps.get(r_origin, 0) >= int(r_cseq):  # made by a removed PC after it knew it was removed
+                    status = 'made by a removed PC after it was removed'
+                    break
         if status != 'ok':
             self.alert('rejected', f'A change from PC {n.get("name") or node} was refused: {status}', node)
         accepted.append({'env': env, 'body': body, 'hash': h, 'sig': raw.get('s'), 'asig': raw.get('a'),
@@ -473,7 +514,8 @@ class Journal:
                     r = roster.setdefault(op.get('id'), {'id': op.get('id')})
                     r.update(op['s'])
                     if op['s'].get('status') == 'revoked':
-                        r['revoked_change'] = f'{origin}#{cseq}'
+                        r['status'] = 'revoked'
+                        r['revoked_change'] = ' '.join(sorted(set((r.get('revoked_change') or '').split()) | {f'{origin}#{cseq}'}))
         if isinstance(env.get('hlc'), int) and not self.clock.observe(env['hlc']):
             self.alert('clock', f'The clock of PC {n.get("name") or node} is more than one hour ahead. Please correct its date '
                        'and time.', node, 'warning', key=f'clock|{node}')
