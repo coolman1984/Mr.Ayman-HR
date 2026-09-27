@@ -40,9 +40,9 @@ from urllib.parse import parse_qs, quote, urlparse
 
 import ed25519
 from journal import canonical, now
+from version import VERSION as APP_VERSION
 
 PROTOCOL = 1
-APP_VERSION = '2.1'
 SCHEMA_VERSION = 3
 INVITE_MINUTES = 15
 OFFLINE_ERRORS = (ConnectionRefusedError, ConnectionResetError, ConnectionAbortedError, TimeoutError, socket.timeout, OSError)
@@ -290,7 +290,13 @@ class TLSServer(ThreadingHTTPServer):
     def get_request(self):
         sock, addr = super().get_request()
         sock.settimeout(30)
-        return self.ctx.wrap_socket(sock, server_side=True), addr
+        # the TLS handshake runs in the connection's own thread (finish_request), so a device that connects and
+        # stays silent can never hold up the other PCs
+        return self.ctx.wrap_socket(sock, server_side=True, do_handshake_on_connect=False), addr
+
+    def finish_request(self, request, client_address):
+        request.do_handshake()
+        super().finish_request(request, client_address)
 
     def handle_error(self, request, client_address):
         pass  # failed TLS handshakes of port scanners etc. are not worth logging
@@ -309,7 +315,6 @@ class SyncService:
         self.port = int(cfg.get('sync_port', 8443))
         self.host = cfg.get('host', '0.0.0.0')
         self.interval = max(1.0, float(cfg.get('sync_interval_seconds', 5)))
-        self.enabled = bool(cfg.get('sync_enabled', True))
         self.overrides = cfg.get('peer_addresses') or {}  # {node_id: "host:port"} from config.json
         self.lock = threading.RLock()
         self.challenges = {}
@@ -330,8 +335,7 @@ class SyncService:
 
     # ------------------------------------------------------------ lifecycle
     def start(self):
-        if not self.enabled:
-            return
+        # sharing is always on: it cannot be switched off on a PC, so nobody can keep their changes away from the others
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         ctx.minimum_version = ssl.TLSVersion.TLSv1_2
         ctx.load_cert_chain(self.node.tls_cert, self.node.tls_key)
@@ -511,10 +515,18 @@ class SyncService:
         """Store and fold changesets that arrived from another PC (pull or push)."""
         acc, deferred, problems = self.journal.receive(records, via)
         if acc:
-            self.store.fold_pending()
-            self.auth.fold_pending()
+            self.fold_all()
             self._after_roster_change(acc)
         return acc, deferred, problems
+
+    def fold_all(self):
+        """Applies every stored change that is not applied yet. Each part on its own: a locked data file (antivirus)
+        must not stop account changes (a disabled user) from being applied. Repeated by the housekeeping."""
+        for part in (self.auth, self.store):
+            try:
+                part.fold_pending()
+            except Exception as e:  # noqa: BLE001 - stored in the journal; the housekeeping applies it again shortly
+                self.log(f'applying received changes delayed ({type(part).__name__}): {e}')
 
     def _after_roster_change(self, accepted):
         """React when the administrator revoked this PC or when it was enrolled."""
@@ -532,8 +544,11 @@ class SyncService:
             return [p for p in self.missing]
         found = []
         for p in sorted(self.store.referenced_files()):
-            if not os.path.isfile(self.file_path(p)):
-                found.append(p)
+            try:
+                if not os.path.isfile(self.file_path(p)):
+                    found.append(p)
+            except ValueError:  # a record that points outside the uploads folder: never fetched, never stops the others
+                continue
         with self.lock:
             self.missing = {p: self.missing.get(p, {'tries': 0}) for p in found}
             self.missing_checked = (v, time.time())
@@ -962,16 +977,44 @@ class SyncService:
                 'requests': self.join_requests() if self.node.is_authority else []}
 
     def _housekeeping(self):
-        last_verify = 0
+        last_verify = last_quiet = 0
         while not self.stop:
             time.sleep(10)
+            self.fold_all()  # changes whose applying failed before (e.g. file locked for a moment)
             try:
                 self.journal.flush_activity()
                 if time.time() - last_verify > 6 * 3600:
                     last_verify = time.time()
                     self.journal.verify()
+                if self.node.is_authority and time.time() - last_quiet > 3600:
+                    last_quiet = time.time()
+                    self._quiet_pcs()
             except Exception as e:
                 self.log('sync housekeeping: ' + str(e))
+
+
+    QUIET_DAYS = 3
+
+    def _quiet_pcs(self):
+        """Administrator PC: a warning (once a day) for every PC that has not exchanged data for several days."""
+        limit = datetime.now() - timedelta(days=self.QUIET_DAYS)
+        today = datetime.now().strftime('%Y-%m-%d')
+        for pid, n in self.journal.roster().items():
+            if pid == self.node.id or n.get('status') != 'active':
+                continue
+            seen = self.peer_status(pid).get('last_seen') or n.get('enrolled_at')
+            try:
+                quiet = seen and datetime.fromisoformat(seen) < limit
+            except ValueError:
+                quiet = False
+            told = self.journal.meta('quiet_told', {}) or {}  # kept in the journal, so a restart does not repeat it
+            if quiet and told.get(pid) != today:  # one warning, shown again once a day while it lasts
+                told[pid] = today
+                self.journal.set_meta('quiet_told', told)
+                self.journal.alert('quiet', f'PC "{n.get("name") or pid}" has not shared its data for more than {self.QUIET_DAYS} days '
+                                   f'(last contact {seen.replace("T", " ")}). If it is still used, check that it is switched on and '
+                                   'connected to the network. If it is not used any more, remove it in Devices & Sync.',
+                                   pid, 'warning', key=f'quiet|{pid}')
 
 
 class PeerWorker(threading.Thread):

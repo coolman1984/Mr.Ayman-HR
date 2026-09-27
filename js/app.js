@@ -450,7 +450,7 @@ const printLabels = list => printHTML(`<div class="labels">${list.map(labelHTML)
 function renderShell(route) {
   const s = DB.settings;
   document.title = s.systemName;
-  $('#brand').innerHTML = s.logoImage ? `<img src="${s.logoImage}" alt="logo">` : `<span class="logo">${esc(s.logoText)}</span>`;
+  $('#brand').innerHTML = s.logoImage ? `<img src="${esc(s.logoImage)}" alt="logo">` : `<span class="logo">${esc(s.logoText)}</span>`;
   $('#sysName').textContent = s.systemName;
   $('#factoryName').textContent = s.factory;
   const open = DB.areas.reduce((n, a) => n + openIssues(a).length, 0);
@@ -820,8 +820,8 @@ function viewAreaForm() {
 async function submitNewArea(form) {
   const d = Object.fromEntries(new FormData(form));
   if (!d.name.trim()) return toast('Name is required', true);
-  let n = DB.areas.length + 1, id;
-  do { id = 'ba' + pad(n++); } while (area(id));
+  let id;  // random, so two PCs adding a break area at the same time never get the same id
+  do { id = 'ba' + Date.now().toString(36).slice(-4) + uid().slice(0, 4); } while (area(id));
   const a = { id, inventory: [], photos: [], docs: [], issues: [], maintenance: [], inspections: [], surveys: [], lastInspection: '', nextInspection: addDays(d.startDate || today(), setting('inspectionDays')), inspectedBy: '' };
   applyAreaFields(a, d);
   DB.itemTypes.forEach(t => { const q = +d['qty_' + t.id] || 0; if (q > 0) a.inventory.push({ item: t.id, qty: q, condition: d['cond_' + t.id] }); });
@@ -1535,7 +1535,7 @@ function viewSettings() {
       <div class="card-h">${ic('restore')}<h3>Backups</h3><span class="sp"></span>${can('backups.manage') ? `<button class="btn sm primary" data-act="backupNow">${ic('download')}Backup Now</button>` : ''}</div>
       <div data-async="backups"><p class="muted">Loading…</p></div>
     </div>` : ''}
-    ${can('trash.restore') ? `<div class="card">
+    ${can('trash.restore') && allAreas() ? `<div class="card">
       <div class="card-h">${ic('trash')}<h3>Recycle Bin</h3><span class="hint">Nothing is ever erased – deleted records can be restored</span></div>
       <div data-async="trash"><p class="muted">Loading…</p></div>
     </div>` : ''}
@@ -1690,7 +1690,7 @@ function showLogin(msg = '') {
       <p class="auth-msg" id="authMsg">${esc(msg)}</p>
       <button class="btn primary">${ic('user')}Log In</button>
     </form>
-    <p class="hint">Forgot your password? Ask the system administrator to set a new one.</p>`);
+    <p class="hint">Forgot your password? Ask the system administrator to set a new one.</p>${aboutLine()}`);
 }
 /* showSetup(): first start of a PC - see js/devices.js (create the administrator or join another PC) */
 async function afterLogin(user) {
@@ -1740,7 +1740,8 @@ function accountMenu() {
         <div class="muted">${esc(ME.role || 'Custom')} · ${allAreas() ? 'All break areas' : ME.areas.length + ' break area(s)'} · ${ME.perms.length} permissions</div></div>
     </div>
     <p class="hint">For your security you are logged out automatically after ${ME.sessionIdleMinutes} minutes without activity.
-      Always log out when you leave a shared PC.</p>`, {
+      Always log out when you leave a shared PC.</p>
+    ${ABOUT ? `<p class="about-line">${esc(ABOUT.product)} · version ${esc(ABOUT.version)}<br>Developed by ${esc(ABOUT.developer)} · ${esc(ABOUT.copyright)}<br>${esc(ABOUT.license)}</p>` : ''}`, {
     extra: `<a class="btn" href="#/account" data-act="closeModal">${ic('eye')}What I can do</a>
       ${ME.login === 'link' ? '' : `<button type="button" class="btn" data-act="changePassword">${ic('edit')}Change Password</button>`}
       <button type="button" class="btn danger" data-act="logout">${ic('arrowLeft')}Log Out</button>`
@@ -2427,9 +2428,19 @@ async function start() {
     }
   } catch (e) { /* QR falls back to the current address */ }
 }
+/* typing in a window sends nothing to the server: while the person is active, keep the session alive,
+   so a long form is never lost to the automatic logout (which is meant for PCs left alone) */
+let LAST_ACTIVE = Date.now();
+['keydown', 'pointerdown', 'input'].forEach(ev => document.addEventListener(ev, () => { LAST_ACTIVE = Date.now(); }, { passive: true, capture: true }));
+setInterval(() => {
+  if (ME && !document.hidden && Date.now() - LAST_ACTIVE < 4 * 60000) fetch('/api/me', { credentials: 'same-origin' }).catch(() => {});
+}, 4 * 60000);
+let ABOUT = null;
+const aboutLine = () => ABOUT ? `<p class="about-line">Version ${esc(ABOUT.version)} · ${esc(ABOUT.copyright)}</p>` : '';
 async function boot() {
   let st;
   try { st = await api('GET', '/api/auth/status'); } catch (e) { return serverDown(e); }
+  ABOUT = st.about || null;
   if (st.node && st.node.moved) return showMoved(st);
   if (!st.hasUsers) return showSetup(st.local, st);
   if (!st.me) return showLogin();

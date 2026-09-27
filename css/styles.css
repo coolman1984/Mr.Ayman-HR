@@ -644,3 +644,4 @@ details.more { margin-top: 14px; }
 details.more > summary { cursor: pointer; font-weight: 600; color: var(--navy); padding: 6px 0; }
 ul.tight { margin: 6px 0 0; padding-left: 18px; }
 ul.tight li { margin: 3px 0; }
+.about-line { margin-top: 14px; font-size: 11px; color: var(--muted); text-align: center; line-height: 1.5; }

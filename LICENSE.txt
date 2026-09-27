@@ -1,0 +1,16 @@
+Break Area Management System - Licence
+
+Copyright (c) 2026 Mohamed Fawzy. All rights reserved.
+
+This program was developed by Mohamed Fawzy and remains his property.
+
+1. The company that installs it may use it for its own internal work, on its own computers, for as long as the
+   developer allows.
+2. It is not allowed to copy the program for other companies, to sell, rent or give it away, to change it, to
+   take it apart (decompile or reverse engineer it) or to remove this notice.
+3. The data that the company enters into the program belongs to the company.
+4. The program is provided as it is. Keep the automatic backups switched on and keep a copy of them in a
+   second place.
+5. Updates and changes are made only by the developer.
+
+By installing the program you accept these terms.

@@ -17,6 +17,7 @@ Branch: `claude/distributed-offline-first-sync-cg26d2`.
 - [x] 9. Independent reviews (correctness, security) – all verified findings fixed with regression tests (see DISTRIBUTED_SYNC_ARCHITECTURE.md §13a)
 - [x] 10. Simpler screens for non-technical users: sync light only for administrators, one code to add a PC, plain wording, automatic IP follow-up
 - [x] 11. Personal links: a fixed link per user that logs in under their own name on any PC (Devices & Sync → Personal links)
+- [x] 13. Windows installer (compiled BAMS.exe, one setup for install and update, data in ProgramData), sharing always on, warning for silent PCs, development history, project rules and skill
 - [x] 12. People with only a link (no user name / password), permission tick boxes with Select all / Clear all, profiles (ready-made and own, applied to everybody who has them), plainer Settings
 
 ## How to run the tests
@@ -70,4 +71,7 @@ python3 -m unittest test_e2e_browser                  # needs Playwright + Chrom
 | – | review regressions: save between receive and fold, impossible change, followers, weak restore delete, fingerprint cache, password proof, pre-auth limits, account records hidden | `test_unit.ReviewFindingsTest`, `T03_Cluster.test_f2`, `test_f3`, `test_e` | pass |
 | – | personal links: create/show on the administrator PC only, use on another PC, preview does not log in, own name and permissions, last used on which PC, wrong link refused and logged, new link kills the old one and its sessions, switch off, administrators refused | `T32_PersonalLinks`, `test_e2e_browser.test_personal_link` | pass |
 | – | people & profiles: link-only person (automatic user name, no password), link never with administrator rights (person, profile), own profile made / renamed / applied on every PC / deleted, ready-made profile changed, Administrator profile locked, only on the administrator PC, link → password and back, account and profile changes hidden from non-administrators | `T33_PeopleAndProfiles`, `test_e2e_browser.test_personal_link` | pass |
+| – | installed program: data in BAMS_HOME, pages from inside the program, nothing else fetchable, tools, second start | `T34_InstalledMode`, GitHub workflow smoke test of BAMS.exe | pass |
+| – | second review: program folder unreadable, area limits on old+new area, no client conflict decisions, bad file references, failed-login limit, small requests before login, tools wait, recycle bin scope, saved change survives a failing note file, applying retried, future clock capped | `T35_SecondReview`, `test_unit.SecondReviewTest` | pass |
+| – | silent PC warning (once a day, only active PCs) | `test_unit.QuietPcTest` | pass |
 | – | browser: setup, pairing through the screens, login on 2nd PC, viewer has no access (UI + API 403), live change, sync light green/offline, logs with PC, conflict shown and resolved in UI, no console errors | `test_e2e_browser` | pass |

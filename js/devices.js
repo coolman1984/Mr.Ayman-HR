@@ -155,7 +155,7 @@ function devProblems() {
   if (!al.length) return `<div class="card"><p class="empty">No problems. ${ic('checkCircle')}</p></div>`;
   const KIND = { fork: 'Two different histories', signature: 'Invalid signature', rejected: 'Change refused', integrity: 'History check failed',
     clock: 'Wrong clock', divergence: 'Data differs', revoked: 'PC removed', 'revoked-pc': 'Removed PC tried to connect', 'unknown-pc': 'Unknown PC',
-    auth: 'Impersonation attempt', replay: 'Repeated request refused', file: 'Damaged file copy', rollback: 'History restored', version: 'Update needed',
+    auth: 'Impersonation attempt', replay: 'Repeated request refused', file: 'Damaged file copy', rollback: 'History restored', version: 'Update needed', quiet: 'PC not sharing',
     'bad-data': 'Unreadable data' };
   return `<div class="card"><div class="tbl-wrap"><table class="tbl"><thead><tr><th>When</th><th>What</th><th>Details</th><th>Times</th><th></th></tr></thead><tbody>
     ${al.map(a => `<tr class="${a.severity === 'error' ? 'err' : ''}"><td class="nowrap">${esc(a.last_ts.replace('T', ' '))}</td>

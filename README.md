@@ -1,18 +1,23 @@
 # Break Area Management System
 
-A local web app for the factory network. No installation is needed: a portable Python is included in `runtime/python`.
+A local web app for the factory network, delivered as one installer **BAMS-Setup.exe** (install and update).
+For developers it also runs portable with `start.bat` (a portable Python in `runtime/python`).
 
 It works on **one PC** (every other PC opens it in the browser, as before) or on **several PCs at the same time**:
 each PC has the complete system and all data, keeps working when the others are switched off, and exchanges
 changes with them automatically and encrypted over the company network – see **GUIDE_Devices_Sync.md**.
 
-## Start
+## Install / update
 
-1. On the server PC, double-click **start.bat**.
-2. The browser opens automatically. The console window shows the address for the other PCs,
-   e.g. `http://106.139.71.238:8080/`. Keep that window open (closing it stops the system).
-3. The first time Windows may ask to allow Python through the firewall – allow it on the
-   *private/domain* network, otherwise the other PCs cannot connect.
+1. Run **BAMS-Setup.exe** on the administrator PC (Next → Next → Finish). The same file updates an installed PC;
+   the data is never touched.
+2. The system opens in the browser. **Settings** shows the address for other PCs and phones, e.g.
+   `http://192.168.1.10:8080/`. People with a personal link just open their link.
+3. Install it on other PCs only if they should keep working when the administrator PC is off
+   (see GUIDE_Devices_Sync.md).
+
+Program: `C:\Program Files\BAMS` (compiled). Data, settings and backups: `C:\ProgramData\BAMS`.
+Developers: `docs/BUILD_AND_RELEASE.md`, rules in `CLAUDE.md`, history in `DEVELOPMENT_HISTORY.md`.
 
 ## Users, passwords and permissions
 
@@ -22,8 +27,9 @@ changes with them automatically and encrypted over the company network – see *
   **Users & Permissions**: add, disable, delete, reset password, unlock, log out now.
 - For each user the administrator ticks exactly what they may **see** (pages, survey results, logs) and **do**
   (add / edit / delete per area of the system, which reports, Excel export, print, backups, settings, users),
-  and can limit the user to **selected break areas only**. Quick roles (Administrator, Manager, Data Entry,
-  Maintenance Team, Viewer) fill the ticks in one click. Changes apply immediately, even on PCs already logged in.
+  and can limit the user to **selected break areas only**. Profiles (Full access, Administrator, Data Entry,
+  Maintenance Team, Viewer, Visitor, and your own) fill the ticks in one click. A person can also log in with
+  only a **personal link** (no user name or password). Changes apply immediately, even on PCs already logged in.
 - Every permission is checked by the server for every request, not only hidden in the browser.
 - Everything a user does is logged with their name and PC: data changes, clicks and pages, exports, and
   refused attempts. **Activity Log → Logins & Security** shows every login, wrong password, lockout, logout and
@@ -31,7 +37,8 @@ changes with them automatically and encrypted over the company network – see *
 - Security: passwords stored only as salted PBKDF2 hashes; 5 wrong passwords lock the account for 15 minutes;
   automatic logout after 30 minutes without activity (12 hours at most); new users must choose their own
   password at the first login. These values can be changed in `config.json`.
-- **Administrator password lost?** On the server PC run **reset_admin.bat** – it prints a new temporary password.
+- **Administrator password lost?** On the administrator PC run `"C:\Program Files\BAMS\BAMS.exe" tool reset-admin`
+  in a command window (portable version: **reset_admin.bat**) – it prints a new temporary password.
 - User accounts live in `data/auth.db`. Restoring a data backup never changes them (a copy is saved with every
   backup as `auth_<time>.db`).
 - With several PCs, users and permissions are managed on the **administrator PC** (the PC where the first
@@ -49,6 +56,8 @@ A backup is taken first and everything stays restorable from the Recycle Bin. Th
 loaded again by itself.
 
 ## Where the data is
+
+Installed program: the folders below are in `C:\ProgramData\BAMS`. Portable version: in the program folder.
 
 | Folder | Content |
 |---|---|
@@ -79,8 +88,9 @@ loaded again by itself.
 
 `port`, `backup_interval_hours`, `keep_auto_backups` (only automatic backups are ever pruned), `max_upload_mb`,
 `extra_backup_dirs`, `open_browser`, `session_idle_minutes`, `session_max_hours`, `max_failed_logins`,
-`lockout_minutes`, `min_password_length`, and for several PCs `sync_port` (8443), `sync_interval_seconds`, `sync_enabled`,
-`device_name`, `peer_addresses`. Restart start.bat after changing it.
+`lockout_minutes`, `min_password_length`, and for several PCs `sync_port` (8443), `sync_interval_seconds`,
+`device_name`, `peer_addresses`. The file is `C:\ProgramData\BAMS\config.json` (portable: in the program folder).
+Restart the program after changing it.
 
 ## Upgrading from the single-server version
 

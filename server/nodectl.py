@@ -27,7 +27,7 @@ from node import write_atomic  # noqa: E402
 
 
 def load_cfg():
-    root = os.path.dirname(HERE)
+    root = os.environ.get('BAMS_HOME') or os.path.dirname(HERE)  # installed program: %ProgramData%\BAMS
     path = os.environ.get('BAMS_CONFIG') or os.path.join(root, 'config.json')
     cfg = {}
     if os.path.exists(path):
@@ -199,6 +199,11 @@ def cmd_import(path):
 
 
 def main(argv):
+    from system import lock_data
+    lock = lock_data(load_cfg()[1])  # noqa: F841 - kept until the command ends
+    if lock is None:
+        print('The program is running on this PC. Stop it first (Task Manager -> BAMS.exe, or close its window), then try again.')
+        return 3
     cmds = {'status': cmd_status, 'verify': cmd_verify, 'rebuild': cmd_rebuild, 'reset-admin': cmd_reset_admin}
     if argv[:1] and argv[0] in cmds and len(argv) == 1:
         return cmds[argv[0]]() or 0

@@ -100,7 +100,9 @@ class Journal:
         self._schema()
         self.heads = {r['origin']: (r['cseq'], r['hash'], r['node']) for r in self.conn.execute('SELECT * FROM heads')}
         last = self.conn.execute('SELECT MAX(hlc) FROM changes WHERE node=?', (node.id,)).fetchone()[0] if node.exists else 0
-        self.clock = HLC(last or 0)
+        # a PC whose date was far in the future and has been corrected must not keep writing future times (it would
+        # win every tie and keep warning the others); its own newer changes still win over its older ones by order
+        self.clock = HLC(min(last or 0, int(time.time() * 1000 + MAX_CLOCK_AHEAD_MS) << 16))
         self._deps_cache = {}
         self._activity = []  # buffered user activity, written as one changeset every minute
         self.listeners = []  # called after new changesets were appended: fn(list of envs)
@@ -224,7 +226,14 @@ class Journal:
 
     def append_local(self, rec):
         self._append([rec], via=None)
-        self.node.record_written(rec['env']['origin'], rec['env']['cseq'])
+        try:  # the change is saved; this note only helps to detect a restored journal - never fail the save for it
+            self.node.record_written(rec['env']['origin'], rec['env']['cseq'])
+        except OSError as e:
+            try:  # also best effort: nothing may fail after the change is stored
+                self.alert('disk', f'A small note file could not be written ({e}). Check that the disk is not full.', '', 'warning',
+                           key='disk|state')
+            except Exception:  # noqa: BLE001
+                self.log(f'note file not written: {e}')
 
     def write(self, kind, ops, **kw):
         """Build and append one changeset (for changes that do not touch bams.db)."""
@@ -248,12 +257,16 @@ class Journal:
         self.write('log', [row], actor=user, ip=ip, label='Security: ' + row['event'])
 
     def log_activity(self, user, ip, events):
+        def txt(v, n):  # text cut in the middle of an emoji (half a surrogate pair) must not break the whole batch
+            return str(v or '')[:n].encode('utf-8', 'replace').decode('utf-8')
         with self.lock:
             for e in events:
-                self._activity.append({'t': 'activity', 'ts': str(e.get('ts') or now())[:19], 'user': str(e.get('user') or user)[:80],
-                                       'ip': ip or '', 'type': str(e.get('type') or '')[:30], 'action': str(e.get('action') or '')[:120],
-                                       'target': str(e.get('target') or '')[:200], 'page': str(e.get('page') or '')[:120],
-                                       'detail': str(e.get('detail') or '')[:2000]})
+                if not isinstance(e, dict):
+                    continue
+                self._activity.append({'t': 'activity', 'ts': txt(e.get('ts') or now(), 19), 'user': txt(e.get('user') or user, 80),
+                                       'ip': ip or '', 'type': txt(e.get('type'), 30), 'action': txt(e.get('action'), 120),
+                                       'target': txt(e.get('target'), 200), 'page': txt(e.get('page'), 120),
+                                       'detail': txt(e.get('detail'), 2000)})
             full = len(self._activity) >= 200
         if full:
             self.flush_activity()

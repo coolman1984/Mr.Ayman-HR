@@ -4,6 +4,7 @@ TCP proxy that the test can cut to simulate network failures."""
 import hashlib
 import json
 import os
+import shutil
 import sqlite3
 import time
 import unittest
@@ -544,9 +545,13 @@ class T19_Crashes(Base):
         self.assertEqual(len([a for a in self.clients[1].get('/api/state')['areas'] if a['id'].startswith('K')]), 20)
 
     def test_c_attachments(self):
-        """22-23. Upload on one PC; the other copies it, verified by SHA-256, also after an interrupted transfer."""
+        """22-23. Upload on one PC; the other shows a placeholder while the file is missing, continues an interrupted
+        download from where it stopped (only the rest travels), verifies it by SHA-256 and never shows a partial file."""
         data = os.urandom(900_000)
-        self.proxies[0].cut_after = 300_000  # downloads from the administrator PC break after 300 kB
+        sha = hashlib.sha256(data).hexdigest()
+        # the administrator PC cannot be reached by pc1 while the photo is added (its rows still arrive: the administrator
+        # PC pushes them), so pc1 certainly has the record but not the file yet
+        self.unplug(0)
         up = self.ac.call('POST', '/api/upload?name=big.jpg', raw=data, headers={'Content-Type': 'application/octet-stream'})
         self.assertTrue(up['src'].startswith('/files/cas/'))
         self.ac.post('/api/commit', {'label': 'photo', 'ops': [area_op('P1', 'Photo area'),
@@ -554,16 +559,26 @@ class T19_Crashes(Base):
         wait_until(lambda: get_area(self.clients[1], 'P1'), 30, what='photo row')
         ph = self.clients[1].call('GET', up['src'])
         self.assertIn(b'<svg', ph, 'while the file is missing a placeholder is shown')
+        # an earlier download stopped after 300 kB: the part file is kept, never shown as the real file
         part_dir = os.path.join(self.servers[1].data_dir, 'uploads', '.incoming')
-        wait_until(lambda: os.path.isdir(part_dir) and os.listdir(part_dir), 30, what='partial file')
+        os.makedirs(part_dir, exist_ok=True)
+        with open(os.path.join(part_dir, sha + '.part'), 'wb') as f:
+            f.write(data[:300_000])
         final = os.path.join(self.servers[1].data_dir, 'uploads', 'cas', os.path.basename(up['src']))
         self.assertFalse(os.path.exists(final), 'a partial file must never be visible as the real file')
-        self.proxies[0].cut_after = None
+        self.assertIn(b'<svg', self.clients[1].call('GET', up['src']))
+        logf = os.path.join(self.servers[1].data_dir, 'logs', time.strftime('sync-%Y-%m.jsonl'))
+        start = os.path.getsize(logf) if os.path.exists(logf) else 0
+        self.plug(0)
         wait_until(lambda: self.clients[1].call('GET', up['src']) == data, 60, what='file copied')
-        self.assertEqual(hashlib.sha256(open(final, 'rb').read()).hexdigest(), os.path.basename(up['src']).split('.')[0])
+        self.assertEqual(hashlib.sha256(open(final, 'rb').read()).hexdigest(), sha)
         self.assertEqual(os.listdir(part_dir), [])
-        log = open(os.path.join(self.servers[1].data_dir, 'logs', time.strftime('sync-%Y-%m.jsonl'))).read()
-        self.assertIn('"result": "interrupted"', log)
+        with open(logf, 'rb') as f:  # the download continued: only the missing 600 kB travelled
+            events = [json.loads(x) for x in f.read()[start:].decode('utf-8').splitlines() if x.strip()]
+        done = [e for e in events if e.get('event') == 'file' and e.get('path') == up['src'] and e.get('result') == 'ok']
+        self.assertTrue(done, events)
+        rounds = [e for e in events if e.get('files')]
+        self.assertTrue(rounds and rounds[-1]['bytes_in'] < 800_000, rounds)
 
     def test_d_corrupt_copy_rejected(self):
         """23. A damaged copy (wrong checksum) is thrown away and never shown."""
@@ -927,6 +942,157 @@ class T33_PeopleAndProfiles(Base):
         self.converged()
         viewer.login('logviewer', 'Look-only77')
         self.assertFalse([x for x in viewer.get('/api/audit?limit=1000')['rows'] if x['entity'] in ('users', 'profiles', 'nodes')])
+
+
+class T34_InstalledMode(unittest.TestCase):
+    """The installed program (BAMS.exe = server/bams_main.py with the web pages packed inside): data, settings and
+    backups live in BAMS_HOME (not in the program folder), the pages come from inside the program, nothing else of
+    the program folder can be fetched, the maintenance tools work, a second start does not start a second server."""
+
+    def test_installed_mode(self):
+        import subprocess
+        import sys
+        import tempfile
+        import urllib.request
+        from harness import Client, free_port
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        tmp = tempfile.mkdtemp(prefix='bams-installed-')
+        home, packed = os.path.join(tmp, 'ProgramData', 'BAMS'), os.path.join(tmp, 'packed')
+        os.makedirs(home)
+        os.makedirs(packed)
+        subprocess.check_call([sys.executable, os.path.join(root, 'tools', 'make_assets.py'), os.path.join(packed, '_assets.py')],
+                              stdout=subprocess.DEVNULL)
+        port = free_port()
+        with open(os.path.join(home, 'config.json'), 'w') as f:
+            json.dump({'port': port, 'sync_port': free_port(), 'open_browser': True, 'host': '127.0.0.1'}, f)
+        env = {**os.environ, 'BAMS_HOME': home, 'PYTHONPATH': packed, 'BAMS_MACHINE_ID': 'installed-test'}
+        main = os.path.join(root, 'server', 'bams_main.py')
+        proc = subprocess.Popen([sys.executable, main, '--background'], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            base = f'http://127.0.0.1:{port}'
+            c = Client(base)
+            st = wait_until(lambda: self._try(c), 30, what='installed program started')
+            self.assertTrue(st['about']['installed'])
+            self.assertTrue(st['about']['version'])
+            with open(os.path.join(root, 'js', 'app.js'), 'rb') as f:
+                self.assertEqual(c.get('/js/app.js'), f.read())  # from inside the program
+            self.assertIn(b'Break Area', c.get('/'))
+            for bad in ('/js/../server/app.py', '/js/%2e%2e/server/app.py', '/css/../config.json', '/lib/../LICENSE.txt'):
+                with self.assertRaises(ApiError) as e:
+                    c.get(bad)
+                self.assertEqual(e.exception.code, 404, bad)
+            make_authority(type('S', (), {'client': lambda self: c})())
+            self.assertTrue(os.path.exists(os.path.join(home, 'data', 'auth.db')))
+            self.assertTrue(os.path.exists(os.path.join(home, 'data', 'bams.db')))
+            self.assertFalse(os.path.exists(os.path.join(root, 'server', 'data')))
+            # a second start (desktop icon while it already runs) ends by itself and does not disturb the first
+            second = subprocess.run([sys.executable, main, '--background'], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60)
+            self.assertEqual(second.returncode, 0)
+            self.assertTrue(self._try(c))
+        finally:
+            proc.terminate()
+            proc.wait(20)
+        # the maintenance tools find the data in BAMS_HOME
+        out = subprocess.run([sys.executable, main, 'tool', 'verify'], env=env, capture_output=True, text=True, timeout=120)
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    @staticmethod
+    def _try(c):
+        try:
+            return c.get('/api/auth/status')
+        except Exception:
+            return None
+
+
+class T35_SecondReview(unittest.TestCase):
+    """Regressions of the second whole-code review, on one PC."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.S = Server('solo').start()
+        cls.ac = make_authority(cls.S)
+        cls.ac.post('/api/commit', {'label': 'data', 'ops': [area_op('Z1', 'Zone One'), area_op('Z2', 'Zone Two')]})
+        move(cls.ac, 'Z2', 'chairs', 12)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.S.cleanup()
+
+    def raw_get(self, path):
+        import http.client
+        h = http.client.HTTPConnection('127.0.0.1', self.S.port, timeout=20)
+        h.putrequest('GET', path, skip_accept_encoding=True)
+        h.endheaders()
+        r = h.getresponse()
+        body = r.read()
+        h.close()
+        return r.status, body
+
+    def test_a_program_folder_cannot_be_read(self):
+        """The portable program folder holds data/, keys and config.json next to css/js/lib - none of it may leak."""
+        for path in ('/css/../config.json', '/css/../server/app.py', '/js/..%2fserver%2fapp.py', '/lib/%2e%2e/LICENSE.txt',
+                     '/css/..\\config.json', '/js/../../etc/passwd', '/css/', '/js/app.js/..'):
+            status, body = self.raw_get(path)
+            self.assertEqual(status, 404, path)
+            self.assertNotIn(b'import', body)
+        self.assertEqual(self.raw_get('/js/app.js')[0], 200)
+        self.assertEqual(self.raw_get('/')[0], 200)
+
+    def test_b_area_limited_user_cannot_touch_other_areas(self):
+        ac = self.ac
+        ac.post('/api/users/save', {'username': 'zoe.z', 'full_name': 'Zoe Zone', 'password': 'Area-limit47', 'must_change': False,
+                                    'perms': ['dashboard.view', 'areas.view', 'inventory.edit', 'areas.edit'], 'areas': ['Z1']})
+        c = self.S.client()
+        c.login('zoe.z', 'Area-limit47')
+        inv = next(x for x in get_area(ac, 'Z2')['inventory'] if x['item'] == 'chairs')
+        hostile = {'e': 'inventory', 'id': 'Z2:chairs', 'op': 'put', 'ver': inv['ver'],
+                   'row': {**{k: v for k, v in inv.items() if k != 'ver'}, 'areaId': 'Z1', 'qty': 0}}
+        with self.assertRaises(ApiError) as e:
+            c.post('/api/commit', {'label': 'steal', 'ops': [hostile]})
+        self.assertEqual(e.exception.code, 403)
+        self.assertEqual(next(x for x in get_area(ac, 'Z2')['inventory'] if x['item'] == 'chairs')['qty'], 12)
+        # conflicts are decided by an administrator only, never through a normal save
+        with self.assertRaises(ApiError) as e:
+            c.post('/api/commit', {'label': 'x', 'ops': [{'e': 'areas', 'id': 'Z2', 'op': 'del', 'resolve': True}]})
+        self.assertEqual(e.exception.code, 403)
+        # the recycle bin shows all areas: not for area-limited users even with the permission
+        ac.post('/api/users/save', {**next(u for u in ac.get('/api/users')['users'] if u['username'] == 'zoe.z'),
+                                    'perms': ['dashboard.view', 'areas.view', 'trash.restore']})
+        c2 = self.S.client()
+        c2.login('zoe.z', 'Area-limit47')
+        with self.assertRaises(ApiError) as e:
+            c2.get('/api/trash')
+        self.assertEqual(e.exception.code, 403)
+
+    def test_c_bad_file_reference_refused(self):
+        with self.assertRaises(ApiError) as e:
+            self.ac.post('/api/commit', {'label': 'p', 'ops': [{'e': 'photos', 'id': 'ph1', 'op': 'put',
+                                                                   'row': {'areaId': 'Z1', 'src': '/files/../../x.jpg', 'caption': 'x'}}]})
+        self.assertEqual(e.exception.code, 400)
+
+    def test_d_many_wrong_logins_are_cut_short(self):
+        c = self.S.client()
+        for _ in range(11):
+            with self.assertRaises(ApiError):
+                c.login('boss', 'wrong-password-1')
+        t = time.time()
+        with self.assertRaises(ApiError) as e:
+            c.login('boss', 'wrong-password-1')
+        self.assertIn('Too many', str(e.exception.msg))
+        self.assertLess(time.time() - t, 0.5)  # refused without the slow password check
+        with self.assertRaises(ApiError) as e:  # a huge request before logging in is refused
+            c.call('POST', '/api/auth/login', raw=b'{"username": "' + b'x' * 200000 + b'"}')
+        self.assertEqual(e.exception.code, 400)
+
+    def test_e_tools_wait_for_the_program_to_stop(self):
+        import subprocess
+        import sys
+        tool = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'server', 'nodectl.py')
+        out = subprocess.run([sys.executable, tool, 'status'], env={**os.environ, 'BAMS_CONFIG': self.S.cfg_path},
+                             capture_output=True, text=True, timeout=60)
+        self.assertEqual(out.returncode, 3, out.stdout + out.stderr)
+        self.assertIn('running', out.stdout)
 
 
 if __name__ == '__main__':

@@ -443,3 +443,89 @@ class ToolsTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class QuietPcTest(unittest.TestCase):
+    """The administrator PC warns about a PC that has not shared its data for several days (once a day), not about others."""
+
+    def test_quiet_pc_warning(self):
+        import types
+        from datetime import datetime, timedelta
+        import sync
+        old = (datetime.now() - timedelta(days=5)).isoformat(timespec='seconds')
+        new = datetime.now().isoformat(timespec='seconds')
+        alerts = []
+        status = {'b': {'last_seen': old}, 'c': {'last_seen': new}, 'd': {'last_seen': old}}
+        meta = {}
+        fake = types.SimpleNamespace(
+            QUIET_DAYS=3, node=types.SimpleNamespace(id='a'), peer_status=lambda pid: status.get(pid, {}),
+            journal=types.SimpleNamespace(alert=lambda *a, **k: alerts.append((a, k)), meta=lambda k, d=None: meta.get(k, d),
+                                          set_meta=lambda k, v: meta.__setitem__(k, v), roster=lambda: {
+                'a': {'status': 'active', 'name': 'Admin'}, 'b': {'status': 'active', 'name': 'Store PC'},
+                'c': {'status': 'active', 'name': 'HR PC'}, 'd': {'status': 'revoked', 'name': 'Old PC'}}))
+        sync.SyncService._quiet_pcs(fake)
+        sync.SyncService._quiet_pcs(fake)  # the same day: not again (also after a restart: remembered in the journal)
+        self.assertEqual(len(alerts), 1)
+        self.assertIn('Store PC', alerts[0][0][1])
+        self.assertEqual(alerts[0][1]['key'], 'quiet|b')
+
+
+class SecondReviewTest(unittest.TestCase):
+    """Regressions of the second whole-code review."""
+
+    def test_saved_change_survives_a_failing_note_file(self):
+        root = tempfile.mkdtemp()
+        try:
+            p = Peer(root, 'pc')
+
+            def broken(*a, **k):
+                raise OSError('disk full')
+            p.node.record_written = broken
+            real_alert = p.journal.alert
+
+            def alert_also_fails(*a, **k):
+                real_alert(*a, **k)
+                raise sqlite3.OperationalError('disk full')
+            p.journal.alert = alert_also_fails
+            p.commit('add', [{'e': 'areas', 'id': 'A1', 'op': 'put', 'row': {'id': 'A1', 'name': 'One'}}])  # must not raise
+            self.assertEqual([a['name'] for a in p.state()['areas']], ['One'])
+            self.assertTrue(any(a['kind'] == 'disk' for a in p.journal.alerts()))
+            p.close()
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+
+    def test_fold_all_keeps_going(self):
+        import types
+        import sync
+        calls = []
+
+        class Bad:
+            def fold_pending(self):
+                calls.append('bad')
+                raise sqlite3.OperationalError('database is locked')
+
+        class Good:
+            def fold_pending(self):
+                calls.append('good')
+        fake = types.SimpleNamespace(auth=Bad(), store=Good(), log=lambda m: calls.append('log'))
+        sync.SyncService.fold_all(fake)
+        self.assertEqual(calls, ['bad', 'log', 'good'])
+
+    def test_future_clock_is_not_kept(self):
+        import time as _t
+        import journal
+        c = journal.HLC(0)
+        far = int((_t.time() + 30 * 86400) * 1000) << 16
+        root = tempfile.mkdtemp()
+        try:
+            p = Peer(root, 'pc')
+            p.commit('x', [{'e': 'areas', 'id': 'A1', 'op': 'put', 'row': {'id': 'A1', 'name': 'One'}}])
+            p.journal.conn.execute('UPDATE changes SET hlc=?', (far,))
+            p.journal.conn.commit() if p.journal.conn.in_transaction else None
+            j2 = journal.Journal(p.dir, p.node, p.journal.business)
+            self.assertLess(j2.clock.last >> 16, (_t.time() + 2 * 3600) * 1000)
+            j2.conn.close()
+            p.close()
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+        self.assertTrue(c.now() > 0)
