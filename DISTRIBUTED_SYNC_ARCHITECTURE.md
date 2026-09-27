@@ -232,8 +232,11 @@ then signs admin changesets with the same authority key (the key is the trust an
 `info.backup` so that it deletes the key again as soon as the roster no longer lists it as an active backup
 (`drop_backup_key`). Every hand-over is in the security log. Residual risk: while the role lasts, OS administrators
 of that PC can read the key, exactly as on the administrator PC – choose only a PC as trusted as that one. Two
-PCs signing admin changes offline at the same time is handled by the normal fold (last writer wins per field,
-conflicts flagged). The key can also be saved as a passphrase-sealed file from the screen on the administrator PC
+PCs signing admin changes offline at the same time is handled by the normal fold for accounts, and for the PC list
+by a per-field last-writer-wins on (hlc, origin, cseq) with a final removal (`nodes.vers`, 2.3.1) – the same on
+every PC in any arrival order. Known limit: admin changes a switched-off backup PC signs before it learns that its
+role ended are accepted (they are concurrent with the ending; refusing them only on the PCs that already know
+would break convergence). Full revocation of a delegated key needs key rotation. The key can also be saved as a passphrase-sealed file from the screen on the administrator PC
 itself (`/api/devices/export-key`, same format as `nodectl export-authority`).
 
 **Threat model – protected against:** unknown PCs on the LAN (cannot join or sync), passive

@@ -445,6 +445,46 @@ if __name__ == '__main__':
     unittest.main()
 
 
+class Review231Test(unittest.TestCase):
+    """Automatic review after 2.3.0: PC changes signed on two PCs (administrator + backup) end the same everywhere,
+    and network drives are refused for the second backup folder."""
+
+    def roster_after(self, envs):
+        from journal import Journal
+        c = sqlite3.connect(':memory:')
+        c.row_factory = sqlite3.Row
+        c.execute('CREATE TABLE nodes (id TEXT PRIMARY KEY, name TEXT, pub TEXT, cert_fp TEXT, address TEXT, status TEXT, role TEXT, '
+                  'enrolled_at TEXT, enrolled_by TEXT, revoked_at TEXT, revoked_by TEXT, updated_at TEXT, updated_by TEXT, '
+                  'revoked_change TEXT, vers TEXT)')
+        for env in envs:
+            Journal._fold_roster(c, env)
+        return {k: v for k, v in dict(c.execute('SELECT * FROM nodes WHERE id=?', ('pc3',)).fetchone()).items()
+                if k not in ('vers', 'updated_at', 'updated_by')}
+
+    def test_roster_same_in_any_order(self):
+        def env(origin, cseq, hlc, s):
+            return {'origin': origin, 'cseq': cseq, 'hlc': hlc, 'ts': '2026-09-27T10:00:00', 'actor': 'Admin',
+                    'ops': [{'e': 'nodes', 'id': 'pc3', 'op': 'update', 's': s}]}
+        base = env('admin', 1, 100, {'name': 'Store', 'address': '10.0.0.3:8443', 'status': 'active', 'role': 'member'})
+        a = env('admin', 2, 205, {'name': 'Store room', 'address': '10.0.0.30:8443'})
+        b = env('backup', 7, 210, {'name': 'Stock PC', 'role': 'backup'})
+        r = env('backup', 8, 150, {'status': 'revoked', 'revoked_at': 'x', 'revoked_by': 'Deputy'})
+        one = self.roster_after([base, a, b, r])
+        self.assertEqual(one, self.roster_after([base, r, b, a]))
+        self.assertEqual(one, self.roster_after([b, r, a, base]))
+        self.assertEqual((one['name'], one['address'], one['role'], one['status']), ('Stock PC', '10.0.0.30:8443', 'backup', 'revoked'))
+        late = env('admin', 3, 999, {'status': 'active'})  # a removal is final
+        self.assertEqual(self.roster_after([base, r, late])['status'], 'revoked')
+
+    def test_network_folders_refused(self):
+        import backup
+        self.assertTrue(backup.network_folder('\\\\fileserver\\share'))
+        self.assertTrue(backup.network_folder('//fileserver/share'))
+        self.assertTrue(backup.network_folder('Z:\\BAMS', drive_type=lambda root: backup.DRIVE_REMOTE))
+        self.assertFalse(backup.network_folder('E:\\BAMS', drive_type=lambda root: 2))  # USB drive
+        self.assertFalse(backup.network_folder('/media/usb/BAMS'))
+
+
 class QuietPcTest(unittest.TestCase):
     """The administrator PC warns about a PC that has not shared its data for several days (once a day), not about others."""
 

@@ -7,6 +7,26 @@ Version numbers: `server/version.py`. Pull requests: github.com/coolman1984/Mr.A
 
 ---
 
+## 2.3.1 – fixes from the automatic review of 2.3.0 (2026-09-27)
+
+The Codex review of pull request #7 arrived a moment after the merge; its findings were checked and fixed here.
+- **PC list not the same on every PC** (convergence): since a backup administrator PC can also sign PC changes, the
+  administrator PC and a backup PC could change the same PC (name, address, role) at the same time. The PC list
+  applied changes in arrival order, so two PCs could end with different values. Now every field keeps the newest
+  change by (clock, PC, number) – the same result on every PC in any order – and a removal stays final
+  (`Journal._fold_roster`, column `nodes.vers`). Test `test_unit.Review231Test`.
+- **Mapped network drives** (like `Z:`) passed the "no network folder" rule for the second backup folder; they are
+  now recognised with Windows' drive type (`backup.network_folder`).
+- **Known limit, documented, not changed**: a backup PC that is switched off does not know yet that its role was
+  ended; administrator changes it makes before it hears about it are accepted everywhere (like decisions a deputy
+  made before being told). Accepting them on some PCs and refusing them on others would break "same data
+  everywhere". Stopping it completely needs a new administrator key (key rotation) – a possible later step.
+
+**Lessons**
+- When a second PC may sign a kind of change that only one PC signed before, every fold of that kind must become
+  order-independent. Check each `_fold_*` for "last arrival wins" whenever a new author is added.
+- Wait for the automatic reviews (Codex, Claude) to finish before merging, not only for the CI checks.
+
 ## 2.3.0 – Help page, delegation, safer first start and backups (2026-09-27)
 
 **Why**: the owner uses the installed `BAMS.exe` and still saw "start.bat" in screens; asked for a user guide under

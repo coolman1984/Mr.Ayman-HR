@@ -148,8 +148,11 @@ class Journal:
                 confirm TEXT, status TEXT, created_at TEXT, decided_at TEXT, decided_by TEXT, secret TEXT);
             CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
         ''')
-        if 'revoked_change' not in {r[1] for r in self.conn.execute('PRAGMA table_info(nodes)')}:
+        cols = {r[1] for r in self.conn.execute('PRAGMA table_info(nodes)')}
+        if 'revoked_change' not in cols:
             self.conn.execute('ALTER TABLE nodes ADD COLUMN revoked_change TEXT')
+        if 'vers' not in cols:  # per field: the (hlc, origin, cseq) of the change that wrote it (see _fold_roster)
+            self.conn.execute('ALTER TABLE nodes ADD COLUMN vers TEXT')
 
     # ------------------------------------------------------------ small helpers
     def vv(self):
@@ -315,13 +318,26 @@ class Journal:
                 continue
             s = {k: v for k, v in op['s'].items() if k in ('name', 'pub', 'cert_fp', 'address', 'status', 'role', 'enrolled_at',
                                                              'enrolled_by', 'revoked_at', 'revoked_by')}
-            if not c.execute('SELECT 1 FROM nodes WHERE id=?', (op['id'],)).fetchone():
+            row = c.execute('SELECT status, vers FROM nodes WHERE id=?', (op['id'],)).fetchone()
+            if not row:
                 c.execute('INSERT INTO nodes (id) VALUES (?)', (op['id'],))
+            # Several PCs may sign PC changes (administrator + backup administrator PCs), so the same field can be changed
+            # on two PCs at the same time. Every field keeps the newest change by (hlc, origin, cseq) - the same result on
+            # every PC whatever the order of arrival. A removal is final.
+            try:
+                vers = json.loads(row['vers']) if row and row['vers'] else {}
+            except ValueError:
+                vers = {}
+            me = [env['hlc'], env['origin'], env['cseq']]
+            s = {k: v for k, v in s.items() if k not in vers or me > vers[k]}
+            if row and row['status'] == 'revoked':
+                s = {k: v for k, v in s.items() if k not in ('status', 'revoked_at', 'revoked_by')}
             if s.get('status') == 'revoked':
                 s['revoked_change'] = f'{env["origin"]}#{env["cseq"]}'  # changes that had seen this are refused (see _consider)
             if s:
-                c.execute(f'UPDATE nodes SET {", ".join(k + "=?" for k in s)}, updated_at=?, updated_by=? WHERE id=?',
-                          (*[str(v) if v is not None else None for v in s.values()], env['ts'], env['actor'], op['id']))
+                vers.update({k: me for k in s})
+                c.execute(f'UPDATE nodes SET {", ".join(k + "=?" for k in s)}, vers=?, updated_at=?, updated_by=? WHERE id=?',
+                          (*[str(v) if v is not None else None for v in s.values()], json.dumps(vers), env['ts'], env['actor'], op['id']))
 
     @staticmethod
     def view_rows(env, status='ok'):

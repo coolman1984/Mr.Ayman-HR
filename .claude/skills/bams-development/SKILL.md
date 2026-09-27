@@ -92,6 +92,9 @@ Check a local compile on Linux: `pip install --target <dir> nuitka ordered-set z
 - A removed (revoked) PC never receives its removal: undo local powers on the refusal itself and at start
   (`check_backup_role`, `Revoked` handler). A backup administrator PC cannot export the key or remove the administrator PC.
 - Sample data = break areas `ba01..ba22` named "Break Area NN" (`isSampleArea`); Delete Sample Data removes only those.
+- The PC list (`nodes`) has several authors (administrator + backup PCs): `_fold_roster` keeps the newest change per
+  field by (hlc, origin, cseq); a removal is final. Any new multi-author table needs the same.
+- Before merging, wait for the automatic PR reviews too (they may arrive after CI is green).
 - The first start asks empty / sample data (`firstStartChoice`); browser tests must click the choice.
 - Script files share one global scope: no short top-level names in new JS files. `<a data-act>` needs `data-href`
   to reach `ACT` – use `<button>` for in-page actions.
