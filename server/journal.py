@@ -229,8 +229,11 @@ class Journal:
         try:  # the change is saved; this note only helps to detect a restored journal - never fail the save for it
             self.node.record_written(rec['env']['origin'], rec['env']['cseq'])
         except OSError as e:
-            self.alert('disk', f'A small note file could not be written ({e}). Check that the disk is not full.', '', 'warning',
-                       key='disk|state')
+            try:  # also best effort: nothing may fail after the change is stored
+                self.alert('disk', f'A small note file could not be written ({e}). Check that the disk is not full.', '', 'warning',
+                           key='disk|state')
+            except Exception:  # noqa: BLE001
+                self.log(f'note file not written: {e}')
 
     def write(self, kind, ops, **kw):
         """Build and append one changeset (for changes that do not touch bams.db)."""

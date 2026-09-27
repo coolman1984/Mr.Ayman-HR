@@ -994,7 +994,6 @@ class SyncService:
 
 
     QUIET_DAYS = 3
-    _quiet_told = {}
 
     def _quiet_pcs(self):
         """Administrator PC: a warning (once a day) for every PC that has not exchanged data for several days."""
@@ -1008,8 +1007,10 @@ class SyncService:
                 quiet = seen and datetime.fromisoformat(seen) < limit
             except ValueError:
                 quiet = False
-            if quiet and self._quiet_told.get(pid) != today:  # one warning, shown again once a day while it lasts
-                self._quiet_told[pid] = today
+            told = self.journal.meta('quiet_told', {}) or {}  # kept in the journal, so a restart does not repeat it
+            if quiet and told.get(pid) != today:  # one warning, shown again once a day while it lasts
+                told[pid] = today
+                self.journal.set_meta('quiet_told', told)
                 self.journal.alert('quiet', f'PC "{n.get("name") or pid}" has not shared its data for more than {self.QUIET_DAYS} days '
                                    f'(last contact {seen.replace("T", " ")}). If it is still used, check that it is switched on and '
                                    'connected to the network. If it is not used any more, remove it in Devices & Sync.',

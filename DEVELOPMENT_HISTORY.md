@@ -55,6 +55,10 @@ Version numbers: `server/version.py`. Pull requests: github.com/coolman1984/Mr.A
   can be dangerous in the other (data next to the pages).
 - Ids made by counting (`length + 1`) are never safe when several PCs work offline – always random ids.
 - Anything a request can send (like `resolve`) is sent by somebody one day: internal options never come from the client.
+- The automatic PR review found four more: the disk warning itself could fail a stored save (now best effort), a local
+  Windows build left the packed pages next to the source (removed after building), a failed copy of the old data
+  left half the data behind (removed, the old folder is restored), the silent-PC warning repeated after every
+  restart (remembered in the journal).
 - CI (GitHub) found two test problems the local machine hid: the upgrade tests need the full git history
   (`fetch-depth: 0`), and the attachment test depended on *when* a simulated network cut hit an already-open
   connection. Tests must create the situation they check directly (here: a half-downloaded file) instead of

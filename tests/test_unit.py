@@ -456,13 +456,15 @@ class QuietPcTest(unittest.TestCase):
         new = datetime.now().isoformat(timespec='seconds')
         alerts = []
         status = {'b': {'last_seen': old}, 'c': {'last_seen': new}, 'd': {'last_seen': old}}
+        meta = {}
         fake = types.SimpleNamespace(
-            QUIET_DAYS=3, _quiet_told={}, node=types.SimpleNamespace(id='a'), peer_status=lambda pid: status.get(pid, {}),
-            journal=types.SimpleNamespace(alert=lambda *a, **k: alerts.append((a, k)), roster=lambda: {
+            QUIET_DAYS=3, node=types.SimpleNamespace(id='a'), peer_status=lambda pid: status.get(pid, {}),
+            journal=types.SimpleNamespace(alert=lambda *a, **k: alerts.append((a, k)), meta=lambda k, d=None: meta.get(k, d),
+                                          set_meta=lambda k, v: meta.__setitem__(k, v), roster=lambda: {
                 'a': {'status': 'active', 'name': 'Admin'}, 'b': {'status': 'active', 'name': 'Store PC'},
                 'c': {'status': 'active', 'name': 'HR PC'}, 'd': {'status': 'revoked', 'name': 'Old PC'}}))
         sync.SyncService._quiet_pcs(fake)
-        sync.SyncService._quiet_pcs(fake)  # the same day: not again
+        sync.SyncService._quiet_pcs(fake)  # the same day: not again (also after a restart: remembered in the journal)
         self.assertEqual(len(alerts), 1)
         self.assertIn('Store PC', alerts[0][0][1])
         self.assertEqual(alerts[0][1]['key'], 'quiet|b')
@@ -476,9 +478,15 @@ class SecondReviewTest(unittest.TestCase):
         try:
             p = Peer(root, 'pc')
 
-            def broken(*a):
+            def broken(*a, **k):
                 raise OSError('disk full')
             p.node.record_written = broken
+            real_alert = p.journal.alert
+
+            def alert_also_fails(*a, **k):
+                real_alert(*a, **k)
+                raise sqlite3.OperationalError('disk full')
+            p.journal.alert = alert_also_fails
             p.commit('add', [{'e': 'areas', 'id': 'A1', 'op': 'put', 'row': {'id': 'A1', 'name': 'One'}}])  # must not raise
             self.assertEqual([a['name'] for a in p.state()['areas']], ['One'])
             self.assertTrue(any(a['kind'] == 'disk' for a in p.journal.alerts()))

@@ -30,16 +30,25 @@ def iscc():
     sys.exit('Inno Setup 6 (ISCC.exe) was not found.')
 
 
-def main():
-    os.makedirs(BUILD, exist_ok=True)
-    run([sys.executable, 'tools/make_assets.py', os.path.join('server', '_assets.py')])
-    run([sys.executable, 'tools/make_icon.py', os.path.join(BUILD, 'bams.ico')])
-    v4 = '.'.join((VERSION.split('.') + ['0', '0', '0'])[:4])
+def compile_program(v4):
     run([sys.executable, '-m', 'nuitka', '--standalone', '--assume-yes-for-downloads', '--windows-console-mode=attach',
          f'--output-dir={BUILD}', '--output-filename=BAMS.exe', f'--windows-icon-from-ico={os.path.join(BUILD, "bams.ico")}',
          f'--company-name={DEVELOPER}', f'--product-name={PRODUCT}', f'--file-description={PRODUCT}', f'--file-version={v4}',
          f'--product-version={v4}', f'--copyright={COPYRIGHT}', '--include-module=nodectl', '--include-module=_assets',
          '--nofollow-import-to=tkinter,unittest,pydoc,test', os.path.join('server', 'bams_main.py')])
+
+
+def main():
+    os.makedirs(BUILD, exist_ok=True)
+    assets = os.path.join(ROOT, 'server', '_assets.py')
+    run([sys.executable, 'tools/make_assets.py', assets])
+    run([sys.executable, 'tools/make_icon.py', os.path.join(BUILD, 'bams.ico')])
+    v4 = '.'.join((VERSION.split('.') + ['0', '0', '0'])[:4])
+    try:
+        compile_program(v4)
+    finally:  # never leave the packed pages next to the source: the portable version would serve them instead
+        if os.path.exists(assets):
+            os.remove(assets)
     dist = os.path.join(BUILD, 'bams_main.dist')
     assert os.path.exists(os.path.join(dist, 'BAMS.exe')), 'BAMS.exe was not built'
     leaks = [p for p in glob.glob(os.path.join(dist, '**', '*.py'), recursive=True)]

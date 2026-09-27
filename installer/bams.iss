@@ -159,6 +159,7 @@ begin
        '', SW_HIDE, ewWaitUntilTerminated, Code);
   if Code >= 8 then
   begin
+    DelTree(DataHome() + '\data', True, True, True);   { never start with half of the data }
     RenameFile(Moved, Old + '\data');
     MsgBox('Copying the data failed (code ' + IntToStr(Code) + '). The old version was left as it was. Ask the developer for help.', mbError, MB_OK);
     Exit;
