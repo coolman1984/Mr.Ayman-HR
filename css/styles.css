@@ -631,3 +631,4 @@ p.big-code { font-size: 30px; text-align: center; margin: 8px 0 16px; }
 .setup-choice .choice .ic { grid-row: span 2; width: 26px; height: 26px; color: var(--blue); }
 .setup-choice .choice small { color: var(--muted); }
 .code-box { font-size: 22px; background: var(--blue-l); border-radius: 8px; padding: 10px 12px; text-align: center; margin: 8px 0; line-height: 1.6; }
+.warn-txt { color: var(--orange, #b45309); }

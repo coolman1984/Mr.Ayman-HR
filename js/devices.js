@@ -11,6 +11,7 @@ Object.assign(IC, {
   monitor: '<rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/>',
   shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/>',
   plug: '<path d="M9 2v6M15 2v6M6 8h12v4a6 6 0 0 1-12 0z"/><path d="M12 18v4"/>',
+  link: '<path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/>',
   merge: '<circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="12" r="3"/><path d="M6 9v6M9 6h3a3 3 0 0 1 3 3v0M9 18h3a3 3 0 0 0 3-3v0"/>'
 });
 
@@ -61,7 +62,7 @@ const PEER_STATE = {
 const agoTs = ts => ts ? ago(ts) : 'never';
 
 EXTRA_VIEWS.devices = () => {
-  const tabs = [['devices', 'PCs'], ['conflicts', 'To decide'], ['problems', 'Warnings'], ['history', 'Details']];
+  const tabs = [['devices', 'PCs'], ['links', 'Personal links'], ['conflicts', 'To decide'], ['problems', 'Warnings'], ['history', 'Details']];
   return `<div class="page-head"><h2>Devices &amp; Sync</h2><span class="muted" id="devSub"></span>
     <div class="actions">
       <button class="btn" data-act="devSyncNow" title="Contact all PCs now">${ic('sync')}Share Now</button>
@@ -79,6 +80,7 @@ ASYNC.devices = async el => {
   syncIndicator(DEV.summary);
   if (DTAB.tab === 'conflicts') return devConflicts(el);
   if (DTAB.tab === 'history') return devHistory(el);
+  if (DTAB.tab === 'links') return devLinks(el);
   if (DTAB.tab === 'problems') { el.innerHTML = devProblems(); return; }
   el.innerHTML = devSummary() + devRequests() + devTable() + devThisPC();
 };
@@ -208,6 +210,39 @@ async function devConflicts(el) {
   }).join('') : `<div class="card"><p class="empty">No conflicts. Changes made on different PCs fitted together. ${ic('checkCircle')}</p></div>`;
 }
 
+/* ---------- personal links: every user gets their own fixed link that opens the system under their name ---------- */
+let LINKS = null;
+function linkBase() {  // an address the other PCs and phones can open (not "localhost")
+  if (!/^(localhost|127\.|\[?::1)/.test(location.hostname)) return location.origin;
+  const ip = (LINKS.urls || []).find(u => /^http:\/\/\d+\.\d+\.\d+\.\d+:/.test(u));
+  return (ip || LINKS.urls[0] || location.origin + '/').replace(/\/$/, '');
+}
+const linkUrl = u => `${linkBase()}/k/${u.token}`;
+async function devLinks(el) {
+  LINKS = await api('GET', '/api/quick-links');
+  const rows = LINKS.users;
+  el.innerHTML = `<div class="card mb"><div class="card-h">${ic('link')}<h3>Personal links</h3></div>
+    <p class="hint">A personal link opens the system straight away, <b>without typing a user name or password</b>. Everybody gets their own
+      link, so the system always knows who did what (and on which PC). The person works with their own permissions.<br>
+      Treat a link like a key: whoever has it works under that person's name. If a link got into the wrong hands, press
+      <b>New link</b> – the old one stops working at once on every PC. Administrator accounts never get a link.</p>
+    ${LINKS.authority ? '' : `<p class="hint warn-txt">${esc(LINKS.authorityHint)} Links can only be created or shown there.</p>`}
+    <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Person</th><th>Link</th><th>Last used</th><th></th></tr></thead><tbody>
+    ${rows.map(u => `<tr><td><b>${esc(u.full_name)}</b><br><small class="muted">${esc(u.username)}${u.title ? ' · ' + esc(u.title) : ''}</small>
+        ${u.active ? '' : ' <span class="badge b-gray">Disabled</span>'}</td>
+      <td>${!u.allowed ? '<small class="muted">Administrator – logs in with the password</small>'
+        : u.on ? `<span class="badge b-green">On</span> <small class="muted">since ${fmt(u.created_at.slice(0, 10))}</small>`
+        : '<span class="badge b-gray">No link</span>'}</td>
+      <td>${u.last_used ? `${ago(u.last_used.ts)}<br><small class="muted">on ${esc(u.last_used.pc || '')}</small>` : '<small class="muted">never</small>'}</td>
+      <td class="nowrap">${!u.allowed || !LINKS.authority ? '' : u.on
+        ? `<button class="btn sm primary" data-act="linkShow" data-id="${u.id}">${ic('link')}Show link</button>
+           <button class="btn sm" data-act="linkSet" data-id="${u.id}" data-on="1" title="Make a new link – the old one stops working">${ic('sync')}New link</button>
+           <button class="btn sm" data-act="linkSet" data-id="${u.id}" data-on="0">${ic('x')}Switch off</button>`
+        : `<button class="btn sm primary" data-act="linkSet" data-id="${u.id}" data-on="1">${ic('plus')}Create link</button>`}</td></tr>`).join('')
+      || '<tr><td colspan="4" class="empty">No users yet.</td></tr>'}
+    </tbody></table></div></div>`;
+}
+
 async function resolveConflict(body, done) {
   try { await api('POST', '/api/conflicts/resolve', body); await load(); rerender(); toast(done); }
   catch (e) { toast(e.message, true, 7000); }
@@ -215,6 +250,27 @@ async function resolveConflict(body, done) {
 
 Object.assign(ACT, {
   devTab: d => { DTAB.tab = d.tab; rerender(); },
+  linkShow(d) {
+    const u = LINKS.users.find(x => x.id === d.id), url = linkUrl(u);
+    modal(`Personal link – ${esc(u.full_name)}`, `<p>Send this link to <b>${esc(u.full_name)}</b> only (or scan the code with their phone).
+        Opening it logs them in under their own name.</p>
+      <input class="mono full" readonly value="${esc(url)}" data-select-all style="width:100%">
+      <div class="qr-box" style="max-width:220px;margin:12px auto">${qrSVG(url)}</div>
+      <p class="hint">Tip: open the link once on the person's PC and save it as a bookmark or a desktop shortcut – from then on one click is enough.</p>`,
+    { extra: `<button type="button" class="btn" data-act="copyLink" data-url="${esc(url)}">${ic('copy')}Copy link</button>` });
+    const inp = $('#modal input[data-select-all]');
+    if (inp) { inp.addEventListener('focus', () => inp.select()); inp.select(); }
+  },
+  async linkSet(d) {
+    const u = LINKS.users.find(x => x.id === d.id), on = d.on === '1';
+    if (on && u.on && !confirm(`Make a new link for ${u.full_name}?\n\nThe old link stops working at once on every PC. Give the new link to ${u.full_name}.`)) return;
+    if (!on && !confirm(`Switch off the link of ${u.full_name}?\n\nThey can still log in with their user name and password.`)) return;
+    try { await api('POST', '/api/quick-links/set', { id: u.id, on }); }
+    catch (e) { return toast(e.message, true, 7000); }
+    toast(on ? 'Link ready' : 'Link switched off');
+    await devLinks($('[data-async=devices]'));
+    if (on) ACT.linkShow({ id: u.id });
+  },
   async devSyncNow() { try { await api('POST', '/api/devices/sync-now', {}); toast('Contacting all PCs…'); setTimeout(rerender, 2500); } catch (e) { toast(e.message, true); } },
   async devVerify() {
     toast('Checking the complete history…', false, 20000);

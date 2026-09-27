@@ -73,6 +73,22 @@ Buttons: **Share Now** (contact all PCs immediately), **Check Records** (checks 
 deleted), **Add a PC**, **Edit** (name, address after an IP change), **Remove** (a lost, replaced or retired PC:
 it can no longer exchange data; everything it did before stays).
 
+**Personal links** – an extra, faster way to log in (optional):
+
+* Every user can get **their own fixed link**. Opening it logs that person in straight away – no user name, no
+  password – **under their own name and with their own permissions**. So the logs still show exactly who did
+  what, and on which PC.
+* **Create link** → the link and a QR code are shown. Send it to that person only, or open it once on their PC
+  and save it as a bookmark / desktop shortcut. **Show link** shows the same link again at any time.
+* The list shows for everybody whether they have a link and **when and on which PC it was last used**.
+* A link is like a key: whoever has it works under that person's name. If it got into the wrong hands press
+  **New link** (the old one stops working at once on every PC and whoever used it is logged out) or
+  **Switch off**. The normal user name and password always keep working.
+* Administrator accounts never get a link – they always log in with their password.
+* Links are created and shown only on the administrator PC, but they work on **every** PC, also while the
+  administrator PC is switched off. The link contains the address of the PC it opens; on a PC where the
+  program runs, `http://localhost:<port>/k/…` with the same ending works too.
+
 **To decide** – things two PCs did at the same time that a person should look at:
 
 * *Changed on two PCs at the same time* – both values are shown with who, when and on which PC. The one marked
