@@ -192,11 +192,10 @@ class BrowserFlow(unittest.TestCase):
         self.assertEqual(self.errors, [], 'browser console errors')
 
     def test_personal_link(self):
-        """Administrator makes a personal link in Devices & Sync; opening it in another browser logs that person in under
-        their own name, without the forced password change of a temporary password."""
-        ac = make_authority(self.A)
-        ac.post('/api/users/save', {'username': 'mona', 'full_name': 'Mona Adel', 'password': 'Temp-pass88', 'must_change': True,
-                                    'perms': ['dashboard.view', 'areas.view'], 'areas': None, 'role': 'Custom'})
+        """The administrator adds a person with only a name (personal link is the default) and a profile; the link is shown
+        at once; opening it in another browser logs that person in under their own name. The link list in Devices & Sync
+        shows when it was used."""
+        make_authority(self.A)
         with sync_playwright() as pw:
             browser = pw.chromium.launch(executable_path=CHROME) if CHROME else pw.chromium.launch()
             a = self.page(browser, 'A')
@@ -205,26 +204,50 @@ class BrowserFlow(unittest.TestCase):
             a.fill('input[name=password]', ADMIN[1])
             a.get_by_role('button', name='Log In').click()
             a.wait_for_selector('#syncInd', state='attached', timeout=30000)
-            a.goto(self.A.base + '/#/devices')
-            a.get_by_role('button', name='Personal links').click()
-            a.wait_for_selector('tr:has-text("Mona Adel") button:has-text("Create link")', timeout=20000)
-            self.assertIn('Administrator', a.locator('tr:has-text("The Admin")').inner_text())
-            a.locator('tr:has-text("Mona Adel") button:has-text("Create link")').click()
+            a.goto(self.A.base + '/#/users')
+            a.get_by_role('button', name='Add Person').click()
+            a.wait_for_selector('#modal.open input[name=full_name]')
+            self.assertTrue(a.locator('#modal input[name=login][value=link]').is_checked(), 'personal link is the default')
+            self.assertTrue(a.locator('#modal .pw-fields').is_hidden(), 'no user name / password fields for a link')
+            self.assertEqual(a.locator('#modal select[name=role]').input_value(), 'Full access')
+            self.assertTrue(a.locator('#modal input[name=perm][value="users.manage"]').is_disabled())
+            a.fill('#modal input[name=full_name]', 'Mona Adel')
+            a.select_option('#modal select[name=role]', 'Visitor')
+            self.assertEqual(sorted(a.eval_on_selector_all('#modal input[name=perm]:checked', 'els => els.map(e => e.value)')),
+                             ['areas.view', 'dashboard.view'])
+            a.get_by_role('button', name='Clear all').click()
+            self.assertEqual(a.locator('#modal select[name=role]').input_value(), 'Custom')
+            a.get_by_role('button', name='Select all').click()
+            self.assertEqual(a.locator('#modal select[name=role]').input_value(), 'Full access')
+            a.select_option('#modal select[name=role]', 'Visitor')
+            self.shot(a, '13-add-person')
+            a.locator('#modal .modal-f button.primary').click()
             a.wait_for_selector('#modal.open input[data-select-all]', timeout=20000)
+            self.assertIn('Mona Adel is ready', a.locator('#modal h3').inner_text())
             url = a.locator('#modal.open input[data-select-all]').input_value()
             self.assertRegex(url, r'^http://[^/]+/k/[A-Za-z0-9_-]{25,}$')
             self.assertEqual(a.locator('#modal.open .qr-box svg').count(), 1, 'QR code shown')
-            self.shot(a, '13-personal-link')
+            self.shot(a, '14-person-link')
             m = self.page(browser, 'Mona')
             m.goto(self.A.base + url[url.index('/k/'):])
-            try:
-                m.wait_for_url(self.A.base + '/', timeout=20000)
-            except Exception:
-                raise AssertionError(f'url {m.url}; errors {self.errors}; ' + m.content()[:1500])
+            m.wait_for_url(self.A.base + '/', timeout=20000)
             wait_until(lambda: 'Mona Adel' in m.locator('body').inner_text(), 30, what='logged in as Mona')
-            self.assertEqual(m.evaluate("() => fetch('/api/me').then(r => r.json()).then(x => x.username)"), 'mona')
-            self.shot(m, '14-opened-with-link')
+            self.assertEqual(m.evaluate("() => fetch('/api/me').then(r => r.json()).then(x => [x.username, x.perms.join()])"),
+                             ['mona.adel', 'areas.view,dashboard.view'])
+            self.shot(m, '15-opened-with-link')
             a.locator('#modal .modal-f button:has-text("Close")').click()
+            # profiles: make one of our own
+            a.get_by_role('button', name='Profiles').click()
+            a.get_by_role('button', name='New Profile').click()
+            a.fill('#modal input[name=name]', 'Night Shift')
+            a.get_by_role('button', name='Select all').click()
+            a.locator('#modal .modal-f button.primary').click()
+            a.wait_for_selector('#modal.open td:has-text("Night Shift")', timeout=20000)
+            self.shot(a, '16-profiles')
+            a.locator('#modal .modal-f button:has-text("Close")').click()
+            # the overview in Devices & Sync
+            a.goto(self.A.base + '/#/devices')
+            a.get_by_role('button', name='Personal links').click()
             a.wait_for_selector('tr:has-text("Mona Adel") td:has-text("on ")', timeout=20000)  # last used, on which PC
             browser.close()
         self.assertEqual(self.errors, [], 'browser console errors')

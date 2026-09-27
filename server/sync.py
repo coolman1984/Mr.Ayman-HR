@@ -42,8 +42,8 @@ import ed25519
 from journal import canonical, now
 
 PROTOCOL = 1
-APP_VERSION = '2.0'
-SCHEMA_VERSION = 2
+APP_VERSION = '2.1'
+SCHEMA_VERSION = 3
 INVITE_MINUTES = 15
 OFFLINE_ERRORS = (ConnectionRefusedError, ConnectionResetError, ConnectionAbortedError, TimeoutError, socket.timeout, OSError)
 

@@ -632,3 +632,15 @@ p.big-code { font-size: 30px; text-align: center; margin: 8px 0 16px; }
 .setup-choice .choice small { color: var(--muted); }
 .code-box { font-size: 22px; background: var(--blue-l); border-radius: 8px; padding: 10px 12px; text-align: center; margin: 8px 0; line-height: 1.6; }
 .warn-txt { color: var(--orange, #b45309); }
+.perm-bar { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; margin-bottom: 10px; }
+.perm-bar .fld { min-width: 200px; }
+.perm-bar .hint { flex: 1 1 240px; margin: 0; }
+.perm-group.perm-admin { border-color: var(--orange, #d97706); background: #fff8ec; }
+.perm-group.perm-admin legend { color: #9a4a00; }
+.login-choice { display: grid; gap: 6px; }
+.login-choice label.check { display: flex; gap: 8px; align-items: flex-start; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; cursor: pointer; }
+.login-choice label.check:has(input:checked) { border-color: var(--blue); background: var(--blue-l); }
+details.more { margin-top: 14px; }
+details.more > summary { cursor: pointer; font-weight: 600; color: var(--navy); padding: 6px 0; }
+ul.tight { margin: 6px 0 0; padding-left: 18px; }
+ul.tight li { margin: 3px 0; }

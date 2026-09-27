@@ -787,14 +787,146 @@ class T32_PersonalLinks(Base):
             self._open(pc1.client(), new)
         pc1.client().login('omar', 'Temp-pass55')
 
-        # an account that becomes an administrator can no longer use its link
+        # an account with a link cannot become an administrator (switch the link off first)
         ac.post('/api/quick-links/set', {'id': omar['id'], 'on': True})
         tok = self._user('omar')['token']
         u = next(x for x in ac.get('/api/users')['users'] if x['username'] == 'omar')
-        ac.post('/api/users/save', {**u, 'perms': u['perms'] + ['users.manage']})
+        with self.assertRaises(ApiError) as e:
+            ac.post('/api/users/save', {**u, 'perms': u['perms'] + ['users.manage']})
+        self.assertEqual(e.exception.code, 400)
         self.converged()
+        c3 = pc1.client()
+        self._open(c3, tok)
+        self.assertEqual(c3.get('/api/me')['username'], 'omar')
+
+
+class T33_PeopleAndProfiles(Base):
+    """A person added with a personal link only (no user name, no password), profiles made and changed on the administrator
+    PC and applied to everybody who has them, on every PC."""
+    N = 2
+
+    def test_people_and_profiles(self):
+        ac, pc1 = self.ac, self.servers[1]
+        us = ac.get('/api/users')
+        full = next(p for p in us['profiles'] if p['id'] == 'full-access')
+        self.assertNotIn('users.manage', full['perms'])
+        # a person with only a link: the user name is made from the name, there is no password anybody knows
+        r = ac.post('/api/users/save', {'full_name': 'Mona Adel', 'login': 'link', 'role': full['name'], 'perms': full['perms'], 'areas': None})
+        self.assertEqual((r['username'], r['login'], r['link_on'], r['must_change']), ('mona.adel', 'link', True, False))
+        r2 = ac.post('/api/users/save', {'full_name': 'Mona Adel', 'login': 'link', 'role': 'Visitor', 'perms': ['dashboard.view'], 'areas': None})
+        self.assertEqual(r2['username'], 'mona.adel2')  # same name twice: still two different people
+        with self.assertRaises(ApiError) as e:  # a link can never carry administrator rights
+            ac.post('/api/users/save', {'full_name': 'Boss Two', 'login': 'link', 'perms': ['users.manage'], 'areas': None})
+        self.assertEqual(e.exception.code, 400)
+        self.converged()
+        c = pc1.client()
+        T32_PersonalLinks._open(c, r['token'])
+        me = c.get('/api/me')
+        self.assertEqual((me['username'], sorted(me['perms'])), ('mona.adel', sorted(full['perms'])))
+
+        # a profile of our own, used by a person, then changed: the person is updated on every PC
+        g = ac.post('/api/profiles/save', {'name': 'Guest', 'perms': ['dashboard.view']})
+        gus = ac.post('/api/users/save', {'full_name': 'Gus Guest', 'login': 'link', 'role': 'Guest', 'perms': ['dashboard.view'], 'areas': None})
+        with self.assertRaises(ApiError) as e:
+            ac.post('/api/profiles/save', {'name': 'guest', 'perms': []})  # the same name twice
+        self.assertEqual(e.exception.code, 400)
+        res = ac.post('/api/profiles/save', {'id': g['id'], 'name': 'Guests', 'perms': ['areas.view', 'dashboard.view'], 'apply': True})
+        self.assertEqual(res['updated'], 1)
+        self.converged()
+        on_pc1 = {u['id']: u for u in self.clients[1].get('/api/users')['users']}
+        self.assertEqual((on_pc1[gus['id']]['role'], on_pc1[gus['id']]['perms']), ('Guests', ['areas.view', 'dashboard.view']))
+        self.assertIn('Guests', [p['name'] for p in self.clients[1].get('/api/users')['profiles']])
+        # a ready-made profile can be changed too, the Administrator profile never
+        ac.post('/api/profiles/save', {'id': 'visitor', 'name': 'Visitor', 'perms': ['dashboard.view', 'reports.view'], 'apply': True})
+        self.assertEqual(next(u for u in ac.get('/api/users')['users'] if u['id'] == r2['id'])['perms'], ['dashboard.view', 'reports.view'])
+        with self.assertRaises(ApiError) as e:
+            ac.post('/api/profiles/save', {'id': 'administrator', 'name': 'Administrator', 'perms': []})
+        self.assertEqual(e.exception.code, 400)
+        with self.assertRaises(ApiError) as e:  # only on the administrator PC
+            self.clients[1].post('/api/profiles/save', {'name': 'Sneaky', 'perms': ['users.manage']})
+        self.assertEqual(e.exception.code, 403)
+        # a profile that would give a link person administrator rights is refused
+        with self.assertRaises(ApiError) as e:
+            ac.post('/api/profiles/save', {'id': g['id'], 'name': 'Guests', 'perms': ['users.manage'], 'apply': True})
+        self.assertEqual(e.exception.code, 400)
+        # deleting a profile: its people keep their permissions
+        ac.post('/api/profiles/delete', {'id': g['id']})
+        self.converged()
+        u = next(x for x in self.clients[1].get('/api/users')['users'] if x['id'] == gus['id'])
+        self.assertEqual((u['role'], u['perms']), ('Custom', ['areas.view', 'dashboard.view']))
+        self.assertNotIn('Guests', [p['name'] for p in self.clients[1].get('/api/users')['profiles']])
+
+        # from link to password: the link stops, the password works
+        u = next(x for x in ac.get('/api/users')['users'] if x['id'] == r['id'])
         with self.assertRaises(ApiError):
-            self._open(pc1.client(), tok)
+            ac.post('/api/users/save', {**u, 'login': 'password'})  # a password is needed
+        ac.post('/api/users/save', {**u, 'login': 'password', 'password': 'Fresh-pass42', 'must_change': True})
+        self.converged()
+        wait_until(lambda: T03_Cluster._logged_out(c), 20, what='link session ended')
+        self.assertTrue(pc1.client().login('mona.adel', 'Fresh-pass42')['must_change'])
+        with self.assertRaises(ApiError):
+            T32_PersonalLinks._open(pc1.client(), r['token'])
+        # review regressions -------------------------------------------------------------
+        # password -> link: the old password stops working, the person gets a link
+        sara = ac.post('/api/users/save', {'username': 'sara.s', 'full_name': 'Sara Saad', 'password': 'Temp-pass66', 'must_change': True,
+                                           'perms': ['dashboard.view'], 'areas': None})
+        res = ac.post('/api/users/save', {**sara, 'login': 'link'})
+        self.assertTrue(res.get('token') and res['link_on'] and not res['must_change'])
+        with self.assertRaises(ApiError):
+            A2 = self.servers[0].client(); A2.login('sara.s', 'Temp-pass66')
+        # a link never carries any administrator right (not only "manage people")
+        for bad in (['backups.restore'], ['data.import'], ['logs.security']):
+            with self.assertRaises(ApiError) as e:
+                ac.post('/api/users/save', {'full_name': 'No Way', 'login': 'link', 'perms': ['dashboard.view'] + bad, 'areas': None})
+            self.assertEqual(e.exception.code, 400)
+        vis = next(p for p in ac.get('/api/users')['profiles'] if p['id'] == 'visitor')
+        with self.assertRaises(ApiError):  # r2 (a link person) has the Visitor profile
+            ac.post('/api/profiles/save', {'id': 'visitor', 'name': 'Visitor', 'perms': vis['perms'] + ['backups.restore'], 'apply': True})
+        # a password person who also has a link cannot become administrator while the link is on
+        ali = ac.post('/api/users/save', {'username': 'ali.k', 'full_name': 'Ali Kamal', 'password': 'Temp-pass77', 'must_change': False,
+                                          'perms': ['dashboard.view'], 'areas': None})
+        ac.post('/api/quick-links/set', {'id': ali['id'], 'on': True})
+        ali = next(x for x in ac.get('/api/users')['users'] if x['id'] == ali['id'])
+        with self.assertRaises(ApiError):
+            ac.post('/api/users/save', {**ali, 'perms': ali['perms'] + ['users.manage']})
+        # the old name "Manager" is reserved
+        with self.assertRaises(ApiError):
+            ac.post('/api/profiles/save', {'name': 'manager', 'perms': []})
+        # links are only made on the administrator PC (a clear message, not a server error)
+        with self.assertRaises(ApiError) as e:
+            self.clients[1].post('/api/quick-links/set', {'id': ali['id'], 'on': True})
+        self.assertEqual(e.exception.code, 403)
+        # a link person whose link is off: saving other details does not quietly make a new link
+        ac.post('/api/quick-links/set', {'id': r2['id'], 'on': False})
+        u2 = next(x for x in ac.get('/api/users')['users'] if x['id'] == r2['id'])
+        res = ac.post('/api/users/save', {**u2, 'title': 'Guest'})
+        self.assertFalse(res.get('token') or res['link_on'])
+        # renaming a profile without "apply": its people follow the new name
+        h = ac.post('/api/profiles/save', {'name': 'Helpers', 'perms': ['dashboard.view']})
+        hp = ac.post('/api/users/save', {'full_name': 'Hana Help', 'login': 'link', 'role': 'Helpers', 'perms': ['dashboard.view'], 'areas': None})
+        ac.post('/api/profiles/save', {'id': h['id'], 'name': 'Helpers Team', 'perms': ['dashboard.view', 'areas.view'], 'apply': False})
+        u3 = next(x for x in ac.get('/api/users')['users'] if x['id'] == hp['id'])
+        self.assertEqual((u3['role'], u3['perms']), ('Helpers Team', ['dashboard.view']))
+        # a link opened in a browser where somebody else is logged in asks first, and never switches by itself
+        busy = self.servers[0].client()
+        busy.login(*ADMIN)
+        page = busy.get('/k/' + hp['token'])
+        self.assertIn(b'Continue as Hana Help', page)
+        self.assertNotIn(b'quick.js', page)
+        self.assertEqual(busy.get('/api/me')['username'], ADMIN[0])
+        same = self.servers[0].client()
+        T32_PersonalLinks._open(same, hp['token'])
+        self.assertEqual(same.get('/api/me')['username'], 'hana.help')
+        same.get('/k/' + hp['token'])  # already this person: straight to the system
+        self.assertEqual(same.get('/api/me')['username'], 'hana.help')
+
+        # people who are not administrators do not see account and profile changes in the data changes log
+        viewer = pc1.client()
+        ac.post('/api/users/save', {'username': 'logviewer', 'full_name': 'Log Viewer', 'password': 'Look-only77', 'must_change': False,
+                                    'perms': ['dashboard.view', 'logs.view'], 'areas': None})
+        self.converged()
+        viewer.login('logviewer', 'Look-only77')
+        self.assertFalse([x for x in viewer.get('/api/audit?limit=1000')['rows'] if x['entity'] in ('users', 'profiles', 'nodes')])
 
 
 if __name__ == '__main__':

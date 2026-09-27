@@ -212,12 +212,6 @@ async function devConflicts(el) {
 
 /* ---------- personal links: every user gets their own fixed link that opens the system under their name ---------- */
 let LINKS = null;
-function linkBase() {  // an address the other PCs and phones can open (not "localhost")
-  if (!/^(localhost|127\.|\[?::1)/.test(location.hostname)) return location.origin;
-  const ip = (LINKS.urls || []).find(u => /^http:\/\/\d+\.\d+\.\d+\.\d+:/.test(u));
-  return (ip || LINKS.urls[0] || location.origin + '/').replace(/\/$/, '');
-}
-const linkUrl = u => `${linkBase()}/k/${u.token}`;
 async function devLinks(el) {
   LINKS = await api('GET', '/api/quick-links');
   const rows = LINKS.users;
@@ -250,21 +244,12 @@ async function resolveConflict(body, done) {
 
 Object.assign(ACT, {
   devTab: d => { DTAB.tab = d.tab; rerender(); },
-  linkShow(d) {
-    const u = LINKS.users.find(x => x.id === d.id), url = linkUrl(u);
-    modal(`Personal link – ${esc(u.full_name)}`, `<p>Send this link to <b>${esc(u.full_name)}</b> only (or scan the code with their phone).
-        Opening it logs them in under their own name.</p>
-      <input class="mono full" readonly value="${esc(url)}" data-select-all style="width:100%">
-      <div class="qr-box" style="max-width:220px;margin:12px auto">${qrSVG(url)}</div>
-      <p class="hint">Tip: open the link once on the person's PC and save it as a bookmark or a desktop shortcut – from then on one click is enough.</p>`,
-    { extra: `<button type="button" class="btn" data-act="copyLink" data-url="${esc(url)}">${ic('copy')}Copy link</button>` });
-    const inp = $('#modal input[data-select-all]');
-    if (inp) { inp.addEventListener('focus', () => inp.select()); inp.select(); }
-  },
+  linkShow(d) { const u = LINKS.users.find(x => x.id === d.id); linkModal(u.full_name, u.token, false); },
   async linkSet(d) {
     const u = LINKS.users.find(x => x.id === d.id), on = d.on === '1';
     if (on && u.on && !confirm(`Make a new link for ${u.full_name}?\n\nThe old link stops working at once on every PC. Give the new link to ${u.full_name}.`)) return;
-    if (!on && !confirm(`Switch off the link of ${u.full_name}?\n\nThey can still log in with their user name and password.`)) return;
+    if (!on && !confirm(`Switch off the link of ${u.full_name}?\n\n` + (u.login === 'link'
+      ? `${u.full_name} has no password, so they cannot log in any more until you make a new link.` : 'They can still log in with their user name and password.'))) return;
     try { await api('POST', '/api/quick-links/set', { id: u.id, on }); }
     catch (e) { return toast(e.message, true, 7000); }
     toast(on ? 'Link ready' : 'Link switched off');

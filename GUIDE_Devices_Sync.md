@@ -78,6 +78,8 @@ it can no longer exchange data; everything it did before stays).
 * Every user can get **their own fixed link**. Opening it logs that person in straight away – no user name, no
   password – **under their own name and with their own permissions**. So the logs still show exactly who did
   what, and on which PC.
+* People who only use a link need **nothing installed** – just a browser in the same network. They are added in
+  **Users & Permissions → Add Person** (see GUIDE_Users_Permissions.md); their link is shown right away.
 * **Create link** → the link and a QR code are shown. Send it to that person only, or open it once on their PC
   and save it as a bookmark / desktop shortcut. **Show link** shows the same link again at any time.
 * The list shows for everybody whether they have a link and **when and on which PC it was last used**.
@@ -140,6 +142,7 @@ Entries from before the upgrade are marked “before upgrade”.
 | A PC is broken / lost | Devices & Sync → **Remove**. Install a new PC and add it (section 3). |
 | The data folder was copied to another PC | The system asks on that PC: *same computer* (continue) or *copy on a new PC* (the copied data is set aside, the PC joins as a new PC). |
 | The administrator PC is lost for good | Only possible if the **administrator key** was exported (below): run `python server\nodectl.py import-authority <file>` on another PC. Without it user management cannot be changed any more (all other work continues). |
+| A new version of the program | Install it on **every PC that has the program** (devices that only use a link need nothing). Until a PC is updated it keeps working, but the changes of the updated PCs wait there (Warnings shows "uses a newer version") – nothing is lost. |
 | Database file damaged | `python server\nodectl.py rebuild` re-creates it from the history (the damaged file is kept). |
 
 **Export the administrator key once** (on the administrator PC, program stopped):

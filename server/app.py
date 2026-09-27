@@ -27,7 +27,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)  # the portable (embedded) Python does not add the script folder itself
 
 import xlsx  # noqa: E402
-from auth import ALL, PERMISSIONS, ROLES, AuthError, Forbidden  # noqa: E402
+from auth import ADMIN_PERMS, ALL, PERMISSIONS, AuthError, Forbidden  # noqa: E402
 from store import BadRequest, Conflict, now  # noqa: E402
 from sync import SyncService  # noqa: E402
 from system import System  # noqa: E402
@@ -270,11 +270,20 @@ class Handler(BaseHTTPRequestHandler):
         u = AUTH.link_user(token)
         ok = u and u['active'] and AUTH.link_allowed(u)
         title = 'Break Area Management System'
+        now_in = AUTH.session(self.token, self.ip, touch=False) if ok and self.token else None
+        if now_in and now_in['id'] == u['id']:
+            return self.send(303, b'', 'text/plain', {'Location': '/'})  # already logged in as this person
         if ok:
-            body = (f'<h1>Welcome, {html.escape(u["full_name"])}</h1><p>Opening the system for you…</p>'
-                    f'<form id="go" method="post" action="/k/{html.escape(token)}"><button type="submit">Open the system</button></form>'
-                    '<p class="small">This is your personal link. Do not give it to anybody - whoever has it works under your name.</p>'
-                    '<script src="/js/quick.js"></script>')
+            form = (f'<form id="{"ask" if now_in else "go"}" method="post" action="/k/{html.escape(token)}">'
+                    f'<button type="submit">{"Continue as " + html.escape(u["full_name"]) if now_in else "Open the system"}</button></form>')
+            if now_in:  # somebody else is logged in in this browser: never switch without asking
+                body = (f'<h1>Personal link of {html.escape(u["full_name"])}</h1><p>This browser is logged in as '
+                        f'<b>{html.escape(now_in["full_name"])}</b>. Continuing logs {html.escape(now_in["full_name"])} out.</p>' + form +
+                        '<p class="small"><a href="/">Stay as ' + html.escape(now_in['full_name']) + '</a></p>')
+            else:
+                body = (f'<h1>Welcome, {html.escape(u["full_name"])}</h1><p>Opening the system for you…</p>' + form +
+                        '<p class="small">This is your personal link. Do not give it to anybody - whoever has it works under your name.</p>'
+                        '<script src="/js/quick.js"></script>')
         else:
             body = ('<h1>This link does not work any more</h1><p>Please ask the administrator for your new link, '
                     'or <a href="/">log in with your user name and password</a>.</p>')
@@ -355,7 +364,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def me(self):
         u = self.u
-        return {**AUTH.public(u), 'display': u['display'], 'permissions': PERMISSIONS, 'roles': ROLES,
+        return {**AUTH.public(u), 'display': u['display'], 'permissions': PERMISSIONS, 'adminPerms': sorted(ADMIN_PERMS),
                 'sessionIdleMinutes': CFG['session_idle_minutes'], 'minPasswordLength': AUTH.min_len, 'admin': is_admin(u), 'viaLink': bool(u.get('via_link')),
                 'node': {'id': NODE.id, 'name': NODE.name, 'role': NODE.role, 'authority': NODE.is_authority}}
 
@@ -442,7 +451,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(200, self.conflict_list())
         if p == '/api/users':
             self.need('users.manage')
-            return self.send(200, {'users': AUTH.list_users(), 'permissions': PERMISSIONS, 'roles': ROLES, 'authority': NODE.is_authority,
+            return self.send(200, {'users': AUTH.list_users(), 'permissions': PERMISSIONS, 'profiles': AUTH.profiles(), 'adminPerms': sorted(ADMIN_PERMS),
+                                   'authority': NODE.is_authority,
                                    'authorityHint': '' if NODE.is_authority else AUTH.authority_hint()})
         if p == '/api/export.xlsx':
             self.need('report.full')
@@ -625,6 +635,13 @@ class Handler(BaseHTTPRequestHandler):
         if p == '/api/conflicts/resolve':
             self.need_admin()
             return self.send(200, self.resolve_conflict(self.json_body()))
+        if p in ('/api/profiles/save', '/api/profiles/delete'):
+            self.need('users.manage')
+            d = self.json_body()
+            if p.endswith('save'):
+                return self.send(200, AUTH.save_profile(self.u, self.ip, d))
+            AUTH.delete_profile(self.u, self.ip, str(d.get('id') or ''))
+            return self.send(200, {'ok': True})
         if p.startswith('/api/users/'):
             self.need('users.manage')
             d = self.json_body()
