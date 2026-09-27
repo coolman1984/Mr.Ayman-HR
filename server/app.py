@@ -50,7 +50,6 @@ DEFAULT_CONFIG = {
     'lockout_minutes': 15,
     'min_password_length': 8,
     'device_name': '',
-    'sync_enabled': True,
     'sync_port': 8443,
     'sync_interval_seconds': 5,
     'peer_addresses': {},

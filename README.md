@@ -79,7 +79,7 @@ loaded again by itself.
 
 `port`, `backup_interval_hours`, `keep_auto_backups` (only automatic backups are ever pruned), `max_upload_mb`,
 `extra_backup_dirs`, `open_browser`, `session_idle_minutes`, `session_max_hours`, `max_failed_logins`,
-`lockout_minutes`, `min_password_length`, and for several PCs `sync_port` (8443), `sync_interval_seconds`, `sync_enabled`,
+`lockout_minutes`, `min_password_length`, and for several PCs `sync_port` (8443), `sync_interval_seconds`,
 `device_name`, `peer_addresses`. Restart start.bat after changing it.
 
 ## Upgrading from the single-server version

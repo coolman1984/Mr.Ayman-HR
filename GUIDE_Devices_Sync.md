@@ -157,7 +157,6 @@ least 12 characters. Keep the file and the passphrase in a safe place, separatel
 |---|---|---|
 | `sync_port` | 8443 | Port the PCs use to talk to each other (encrypted). Allow it in the Windows firewall. |
 | `sync_interval_seconds` | 5 | How often each PC asks the others for news (changes are also sent immediately after saving). |
-| `sync_enabled` | true | `false` switches exchanging off on this PC. |
 | `device_name` | computer name | Name of this PC shown to the administrator. |
 | `peer_addresses` | `{}` | Optional fixed addresses `{"<PC id>": "192.168.1.20:8443"}` when the addresses in Devices & Sync are not usable. |
 

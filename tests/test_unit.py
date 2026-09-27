@@ -443,3 +443,26 @@ class ToolsTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class QuietPcTest(unittest.TestCase):
+    """The administrator PC warns about a PC that has not shared its data for several days (once a day), not about others."""
+
+    def test_quiet_pc_warning(self):
+        import types
+        from datetime import datetime, timedelta
+        import sync
+        old = (datetime.now() - timedelta(days=5)).isoformat(timespec='seconds')
+        new = datetime.now().isoformat(timespec='seconds')
+        alerts = []
+        status = {'b': {'last_seen': old}, 'c': {'last_seen': new}, 'd': {'last_seen': old}}
+        fake = types.SimpleNamespace(
+            QUIET_DAYS=3, _quiet_told={}, node=types.SimpleNamespace(id='a'), peer_status=lambda pid: status.get(pid, {}),
+            journal=types.SimpleNamespace(alert=lambda *a, **k: alerts.append((a, k)), roster=lambda: {
+                'a': {'status': 'active', 'name': 'Admin'}, 'b': {'status': 'active', 'name': 'Store PC'},
+                'c': {'status': 'active', 'name': 'HR PC'}, 'd': {'status': 'revoked', 'name': 'Old PC'}}))
+        sync.SyncService._quiet_pcs(fake)
+        sync.SyncService._quiet_pcs(fake)  # the same day: not again
+        self.assertEqual(len(alerts), 1)
+        self.assertIn('Store PC', alerts[0][0][1])
+        self.assertEqual(alerts[0][1]['key'], 'quiet|b')

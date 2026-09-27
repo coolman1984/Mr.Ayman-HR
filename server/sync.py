@@ -309,7 +309,6 @@ class SyncService:
         self.port = int(cfg.get('sync_port', 8443))
         self.host = cfg.get('host', '0.0.0.0')
         self.interval = max(1.0, float(cfg.get('sync_interval_seconds', 5)))
-        self.enabled = bool(cfg.get('sync_enabled', True))
         self.overrides = cfg.get('peer_addresses') or {}  # {node_id: "host:port"} from config.json
         self.lock = threading.RLock()
         self.challenges = {}
@@ -330,8 +329,7 @@ class SyncService:
 
     # ------------------------------------------------------------ lifecycle
     def start(self):
-        if not self.enabled:
-            return
+        # sharing is always on: it cannot be switched off on a PC, so nobody can keep their changes away from the others
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         ctx.minimum_version = ssl.TLSVersion.TLSv1_2
         ctx.load_cert_chain(self.node.tls_cert, self.node.tls_key)
@@ -962,7 +960,7 @@ class SyncService:
                 'requests': self.join_requests() if self.node.is_authority else []}
 
     def _housekeeping(self):
-        last_verify = 0
+        last_verify = last_quiet = 0
         while not self.stop:
             time.sleep(10)
             try:
@@ -970,8 +968,34 @@ class SyncService:
                 if time.time() - last_verify > 6 * 3600:
                     last_verify = time.time()
                     self.journal.verify()
+                if self.node.is_authority and time.time() - last_quiet > 3600:
+                    last_quiet = time.time()
+                    self._quiet_pcs()
             except Exception as e:
                 self.log('sync housekeeping: ' + str(e))
+
+
+    QUIET_DAYS = 3
+    _quiet_told = {}
+
+    def _quiet_pcs(self):
+        """Administrator PC: a warning (once a day) for every PC that has not exchanged data for several days."""
+        limit = datetime.now() - timedelta(days=self.QUIET_DAYS)
+        today = datetime.now().strftime('%Y-%m-%d')
+        for pid, n in self.journal.roster().items():
+            if pid == self.node.id or n.get('status') != 'active':
+                continue
+            seen = self.peer_status(pid).get('last_seen') or n.get('enrolled_at')
+            try:
+                quiet = seen and datetime.fromisoformat(seen) < limit
+            except ValueError:
+                quiet = False
+            if quiet and self._quiet_told.get(pid) != today:  # one warning, shown again once a day while it lasts
+                self._quiet_told[pid] = today
+                self.journal.alert('quiet', f'PC "{n.get("name") or pid}" has not shared its data for more than {self.QUIET_DAYS} days '
+                                   f'(last contact {seen.replace("T", " ")}). If it is still used, check that it is switched on and '
+                                   'connected to the network. If it is not used any more, remove it in Devices & Sync.',
+                                   pid, 'warning', key=f'quiet|{pid}')
 
 
 class PeerWorker(threading.Thread):
