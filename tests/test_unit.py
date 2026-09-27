@@ -466,3 +466,58 @@ class QuietPcTest(unittest.TestCase):
         self.assertEqual(len(alerts), 1)
         self.assertIn('Store PC', alerts[0][0][1])
         self.assertEqual(alerts[0][1]['key'], 'quiet|b')
+
+
+class SecondReviewTest(unittest.TestCase):
+    """Regressions of the second whole-code review."""
+
+    def test_saved_change_survives_a_failing_note_file(self):
+        root = tempfile.mkdtemp()
+        try:
+            p = Peer(root, 'pc')
+
+            def broken(*a):
+                raise OSError('disk full')
+            p.node.record_written = broken
+            p.commit('add', [{'e': 'areas', 'id': 'A1', 'op': 'put', 'row': {'id': 'A1', 'name': 'One'}}])  # must not raise
+            self.assertEqual([a['name'] for a in p.state()['areas']], ['One'])
+            self.assertTrue(any(a['kind'] == 'disk' for a in p.journal.alerts()))
+            p.close()
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+
+    def test_fold_all_keeps_going(self):
+        import types
+        import sync
+        calls = []
+
+        class Bad:
+            def fold_pending(self):
+                calls.append('bad')
+                raise sqlite3.OperationalError('database is locked')
+
+        class Good:
+            def fold_pending(self):
+                calls.append('good')
+        fake = types.SimpleNamespace(auth=Bad(), store=Good(), log=lambda m: calls.append('log'))
+        sync.SyncService.fold_all(fake)
+        self.assertEqual(calls, ['bad', 'log', 'good'])
+
+    def test_future_clock_is_not_kept(self):
+        import time as _t
+        import journal
+        c = journal.HLC(0)
+        far = int((_t.time() + 30 * 86400) * 1000) << 16
+        root = tempfile.mkdtemp()
+        try:
+            p = Peer(root, 'pc')
+            p.commit('x', [{'e': 'areas', 'id': 'A1', 'op': 'put', 'row': {'id': 'A1', 'name': 'One'}}])
+            p.journal.conn.execute('UPDATE changes SET hlc=?', (far,))
+            p.journal.conn.commit() if p.journal.conn.in_transaction else None
+            j2 = journal.Journal(p.dir, p.node, p.journal.business)
+            self.assertLess(j2.clock.last >> 16, (_t.time() + 2 * 3600) * 1000)
+            j2.conn.close()
+            p.close()
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+        self.assertTrue(c.now() > 0)

@@ -450,7 +450,7 @@ const printLabels = list => printHTML(`<div class="labels">${list.map(labelHTML)
 function renderShell(route) {
   const s = DB.settings;
   document.title = s.systemName;
-  $('#brand').innerHTML = s.logoImage ? `<img src="${s.logoImage}" alt="logo">` : `<span class="logo">${esc(s.logoText)}</span>`;
+  $('#brand').innerHTML = s.logoImage ? `<img src="${esc(s.logoImage)}" alt="logo">` : `<span class="logo">${esc(s.logoText)}</span>`;
   $('#sysName').textContent = s.systemName;
   $('#factoryName').textContent = s.factory;
   const open = DB.areas.reduce((n, a) => n + openIssues(a).length, 0);
@@ -820,8 +820,8 @@ function viewAreaForm() {
 async function submitNewArea(form) {
   const d = Object.fromEntries(new FormData(form));
   if (!d.name.trim()) return toast('Name is required', true);
-  let n = DB.areas.length + 1, id;
-  do { id = 'ba' + pad(n++); } while (area(id));
+  let id;  // random, so two PCs adding a break area at the same time never get the same id
+  do { id = 'ba' + Date.now().toString(36).slice(-4) + uid().slice(0, 4); } while (area(id));
   const a = { id, inventory: [], photos: [], docs: [], issues: [], maintenance: [], inspections: [], surveys: [], lastInspection: '', nextInspection: addDays(d.startDate || today(), setting('inspectionDays')), inspectedBy: '' };
   applyAreaFields(a, d);
   DB.itemTypes.forEach(t => { const q = +d['qty_' + t.id] || 0; if (q > 0) a.inventory.push({ item: t.id, qty: q, condition: d['cond_' + t.id] }); });
@@ -1535,7 +1535,7 @@ function viewSettings() {
       <div class="card-h">${ic('restore')}<h3>Backups</h3><span class="sp"></span>${can('backups.manage') ? `<button class="btn sm primary" data-act="backupNow">${ic('download')}Backup Now</button>` : ''}</div>
       <div data-async="backups"><p class="muted">Loading…</p></div>
     </div>` : ''}
-    ${can('trash.restore') ? `<div class="card">
+    ${can('trash.restore') && allAreas() ? `<div class="card">
       <div class="card-h">${ic('trash')}<h3>Recycle Bin</h3><span class="hint">Nothing is ever erased – deleted records can be restored</span></div>
       <div data-async="trash"><p class="muted">Loading…</p></div>
     </div>` : ''}
@@ -2428,6 +2428,13 @@ async function start() {
     }
   } catch (e) { /* QR falls back to the current address */ }
 }
+/* typing in a window sends nothing to the server: while the person is active, keep the session alive,
+   so a long form is never lost to the automatic logout (which is meant for PCs left alone) */
+let LAST_ACTIVE = Date.now();
+['keydown', 'pointerdown', 'input'].forEach(ev => document.addEventListener(ev, () => { LAST_ACTIVE = Date.now(); }, { passive: true, capture: true }));
+setInterval(() => {
+  if (ME && !document.hidden && Date.now() - LAST_ACTIVE < 4 * 60000) fetch('/api/me', { credentials: 'same-origin' }).catch(() => {});
+}, 4 * 60000);
 let ABOUT = null;
 const aboutLine = () => ABOUT ? `<p class="about-line">Version ${esc(ABOUT.version)} · ${esc(ABOUT.copyright)}</p>` : '';
 async function boot() {

@@ -30,7 +30,7 @@ import xlsx  # noqa: E402
 from auth import ADMIN_PERMS, ALL, PERMISSIONS, AuthError, Forbidden  # noqa: E402
 from store import BadRequest, Conflict, now  # noqa: E402
 from sync import SyncService  # noqa: E402
-from system import System  # noqa: E402
+from system import System, lock_data  # noqa: E402
 
 ROOT = os.path.dirname(HERE)  # program files (web pages); in the installed program they are built into BAMS.exe (_assets)
 HOME = os.environ.get('BAMS_HOME') or ROOT  # config.json, data and backups: %ProgramData%\BAMS when installed
@@ -62,6 +62,7 @@ DEFAULT_CONFIG = {
 }
 STATIC = {'/': 'index.html', '/index.html': 'index.html'}
 STATIC_DIRS = ('/css/', '/js/', '/lib/')
+STATIC_EXT = {'.html', '.js', '.css', '.svg', '.png', '.ico', '.woff', '.woff2', '.map', '.json'}
 UPLOAD_EXT = {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.heic', '.pdf', '.doc', '.docx', '.xls', '.xlsx',
               '.ppt', '.pptx', '.txt', '.csv', '.zip'}
 IMAGE_EXT = {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.heic'}
@@ -104,9 +105,13 @@ def say(msg):
     print(f'[{datetime.now():%H:%M:%S}] {msg}', flush=True)
 
 
-SYSTEM = System(DATA_DIR, CFG, UPLOADS, resolve(CFG['backup_dir']), [resolve(d) for d in CFG['extra_backup_dirs']], log=say)
-STORE, AUTH, BACKUPS, JOURNAL, NODE = SYSTEM.store, SYSTEM.auth, SYSTEM.backups, SYSTEM.journal, SYSTEM.node
-SYNC = SyncService(SYSTEM, CFG, UPLOADS, log=say)
+INSTANCE = lock_data(DATA_DIR)  # taken before anything touches the data
+if INSTANCE:
+    SYSTEM = System(DATA_DIR, CFG, UPLOADS, resolve(CFG['backup_dir']), [resolve(d) for d in CFG['extra_backup_dirs']], log=say)
+    STORE, AUTH, BACKUPS, JOURNAL, NODE = SYSTEM.store, SYSTEM.auth, SYSTEM.backups, SYSTEM.journal, SYSTEM.node
+    SYNC = SyncService(SYSTEM, CFG, UPLOADS, log=say)
+else:
+    SYSTEM = STORE = AUTH = BACKUPS = JOURNAL = NODE = SYNC = None
 PLACEHOLDER = (b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 200"><rect width="320" height="200" fill="#eef1f5"/>'
                b'<text x="160" y="96" font-family="Segoe UI,Arial" font-size="15" text-anchor="middle" fill="#6b7785">Photo is being copied</text>'
                b'<text x="160" y="118" font-family="Segoe UI,Arial" font-size="12" text-anchor="middle" fill="#8a95a3">from another PC\u2026</text></svg>')
@@ -168,7 +173,7 @@ def commit_guard(u):
         removed = {c['id'] for c in changes if c['entity'] == 'areas' and c['op'] == 'delete'}
         for c in changes:
             e, op, area = c['entity'], c['op'], c['area']
-            if scope is not None and e not in ('settings', 'itemTypes') and area not in scope:
+            if scope is not None and e not in ('settings', 'itemTypes') and not {area, c.get('area_before', area)} <= scope:
                 raise Forbidden('You are limited to certain break areas and cannot add new ones.' if e == 'areas' and op == 'insert'
                                 else 'You can only change the break areas assigned to you.')
             if e != 'areas' and op == 'insert' and area in created and 'areas.create' in perms:
@@ -201,9 +206,31 @@ def is_admin(u):
     return bool(u) and 'users.manage' in u['perms']
 
 
+FAILED = {}  # ip -> times of recent failed logins (this PC only)
+FAILED_LOCK = threading.Lock()
+
+
+def too_many_failures(ip, add=False):
+    """More than 10 failed logins (password or link) from one address within a minute: refuse quickly for a while,
+    without the slow password check and without filling the logs of every PC."""
+    t = time.time()
+    with FAILED_LOCK:
+        recent = [x for x in FAILED.get(ip, []) if t - x < 60]
+        if add:
+            recent.append(t)
+        if recent:
+            FAILED[ip] = recent[-50:]
+        else:
+            FAILED.pop(ip, None)
+        if len(FAILED) > 5000:  # never grow without limit
+            FAILED.clear()
+        return len(recent) > 10
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = 'BAMS/1.0'
     protocol_version = 'HTTP/1.1'
+    timeout = 120  # a connection that stays silent is closed
     u = None  # the logged-in user of this request (set by login_required)
     _read = False  # True once the request body was read
 
@@ -319,7 +346,7 @@ class Handler(BaseHTTPRequestHandler):
         return self.rfile.read(n) if n else b''
 
     def json_body(self):
-        raw = self.body(200 * 1048576)
+        raw = self.body(200 * 1048576 if self.u else 65536)  # before logging in only small requests
         return json.loads(raw.decode('utf-8')) if raw else {}
 
     def denied(self, msg):
@@ -375,6 +402,10 @@ class Handler(BaseHTTPRequestHandler):
                 'sessionIdleMinutes': CFG['session_idle_minutes'], 'minPasswordLength': AUTH.min_len, 'admin': is_admin(u), 'viaLink': bool(u.get('via_link')),
                 'node': {'id': NODE.id, 'name': NODE.name, 'role': NODE.role, 'authority': NODE.is_authority}}
 
+    def need_all_areas(self):
+        if self.u['areas'] is not None:
+            raise Forbidden('The Recycle Bin shows all break areas. It is only for users who work with all break areas.')
+
     def need_admin(self):
         if not is_admin(self.u):
             raise Forbidden('Only an administrator can open this.')
@@ -426,6 +457,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(200, BACKUPS.list())
         if p == '/api/trash':
             self.need('trash.restore')
+            self.need_all_areas()
             return self.send(200, STORE.trash())
         if p in ('/api/audit', '/api/activity'):
             self.need('logs.view' if p == '/api/audit' else 'logs.activity')
@@ -434,13 +466,13 @@ class Handler(BaseHTTPRequestHandler):
             node = qs.get('node', '') if is_admin(self.u) else ''
             return self.send(200, STORE.query_log('audit' if p == '/api/audit' else 'activity', qs.get('q', ''), qs.get('user', ''),
                                                   qs.get('type', ''), qs.get('area', ''), qs.get('from', ''), qs.get('to', ''),
-                                                  min(1000, int(qs.get('limit', 200))), int(qs.get('offset', 0)), self.u['areas'], node,
+                                                  max(1, min(1000, int(qs.get('limit', 200)))), max(0, int(qs.get('offset', 0))), self.u['areas'], node,
                                                   admin=is_admin(self.u)))
         if p == '/api/security':
             self.need('logs.security')
             self.need_admin()
             return self.send(200, AUTH.query_log(qs.get('q', ''), qs.get('user', ''), qs.get('type', ''), qs.get('from', ''), qs.get('to', ''),
-                                                 min(1000, int(qs.get('limit', 200))), int(qs.get('offset', 0)), qs.get('node', '')))
+                                                 max(1, min(1000, int(qs.get('limit', 200)))), max(0, int(qs.get('offset', 0))), qs.get('node', '')))
         if p == '/api/devices':
             self.need_admin()
             return self.send(200, SYNC.overview())
@@ -484,9 +516,12 @@ class Handler(BaseHTTPRequestHandler):
 
         # ---------------- no login needed
         if p.startswith('/k/'):  # personal link: the page below sends this by itself
+            if too_many_failures(self.ip):
+                raise AuthError('Too many attempts. Wait a minute and try again.')
             try:
                 token, u = AUTH.link_login(p[3:], self.ip, self.headers.get('User-Agent', ''))
             except AuthError:
+                too_many_failures(self.ip, add=True)
                 time.sleep(0.6)
                 return self.link_page(p[3:])
             if self.token:
@@ -495,9 +530,12 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(303, b'', 'text/plain', {'Location': '/', **self.set_session(token)})
         if p == '/api/auth/login':
             d = self.json_body()
+            if too_many_failures(self.ip):
+                raise AuthError('Too many wrong attempts from this computer. Wait a minute and try again.')
             try:
                 token, u = AUTH.login(d.get('username'), d.get('password'), self.ip, self.headers.get('User-Agent', ''))
             except AuthError:
+                too_many_failures(self.ip, add=True)
                 time.sleep(0.6)  # slows down password guessing
                 raise
             self.u = u
@@ -567,6 +605,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.need('data.import')
                 if STORE.counts().get('Break Areas'):
                     BACKUPS.create('pre-import')
+            if any(isinstance(o, dict) and 'resolve' in o for o in (d.get('ops') or []) if isinstance(d.get('ops'), list)):
+                raise Forbidden('Conflicts are decided only in Devices & Sync by an administrator.')
             res = STORE.commit(self.user, self.ip, label, d.get('ops'), force, guard=commit_guard(self.u), user_id=self.u['id'])
             log.info('COMMIT %s (%s) "%s" %s changes', self.user, self.ip, label, res['changes'])
             return self.send(200, res)
@@ -602,6 +642,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(200, {'ok': True, 'safety': safety, 'changes': res['changes']})
         if p == '/api/trash/restore':
             self.need('trash.restore')
+            self.need_all_areas()
             d = self.json_body()
             return self.send(200, STORE.restore_txn(self.user, self.ip, str(d.get('txn'))))
         if p == '/api/quick-links/set':
@@ -741,13 +782,25 @@ class Handler(BaseHTTPRequestHandler):
         self.send(200, {'src': src, 'size': len(data)})
 
     def serve_static(self, rel):
-        """The program's own web pages: from inside BAMS.exe when installed, else from the program folder."""
-        if ASSETS is None:
-            return self.serve_file(ROOT, rel)
-        data = ASSETS.get(unquote(rel).replace('\\', '/'))
+        """The program's own web pages: from inside BAMS.exe when installed, else from the program folder.
+        Only index.html and files inside css/, js/ and lib/ - never anything else of the program folder (data, keys)."""
+        rel = unquote(rel).replace('\\', '/')
+        parts = rel.split('/')
+        ext = os.path.splitext(rel)[1].lower()
+        if (any(x in ('', '.', '..') or ':' in x for x in parts) or ext not in STATIC_EXT
+                or not (rel == 'index.html' or len(parts) > 1 and parts[0] in ('css', 'js', 'lib'))):
+            return self.send(404, {'error': 'File not found'})
+        if ASSETS is not None:
+            data = ASSETS.get(rel)
+        else:
+            path = os.path.join(ROOT, *parts)
+            data = None
+            if os.path.isfile(path):
+                with open(path, 'rb') as f:
+                    data = f.read()
         if data is None:
             return self.send(404, {'error': 'File not found'})
-        ctype = TYPES.get(os.path.splitext(rel)[1].lower()) or mimetypes.guess_type(rel)[0] or 'application/octet-stream'
+        ctype = TYPES.get(ext) or mimetypes.guess_type(rel)[0] or 'application/octet-stream'
         return self.send(200, data, ctype, {'Cache-Control': 'no-cache'})
 
     def serve_file(self, base, rel, upload=False, src=None):
@@ -778,6 +831,11 @@ class Server(ThreadingHTTPServer):
 
 def main(background=False):
     port = int(CFG['port'])
+    if not INSTANCE:
+        print('The system is already running on this PC. Opening it in the browser.')
+        if not background:
+            webbrowser.open(f'http://localhost:{port}/')
+        return
     try:
         httpd = Server((CFG['host'], port), Handler)
     except OSError:

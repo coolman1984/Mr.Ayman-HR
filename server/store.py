@@ -377,6 +377,10 @@ class Store:
         if kind != 'put' or not isinstance(op.get('row'), dict):
             raise BadRequest(f'Invalid change: {entity}/{rid}')
         row = op['row']
+        for f in ('src', 'thumb'):  # file references must stay inside the uploads folder
+            v = row.get(f)
+            if isinstance(v, str) and v.startswith('/files/') and ('..' in v or '\\' in v or ':' in v):
+                raise BadRequest('Invalid file reference')
         if entity == 'surveys':
             p = _coerce(R, row.get('percentage'))
             if p is None or not 0 <= p <= 100:
@@ -405,7 +409,8 @@ class Store:
             if not changes:
                 rop['noaudit'] = True
                 return None, rop
-            return {'entity': entity, 'id': rid, 'op': 'update', 'area': area, 'changes': changes, 'before': b, 'after': after}, rop
+            return {'entity': entity, 'id': rid, 'op': 'update', 'area': area, 'area_before': self._area_of(entity, b), 'changes': changes,
+                    'before': b, 'after': after}, rop
         if cur:  # previously deleted row that is being re-created
             old = self._row_js(entity, cur)
             s = {js: after.get(js) for js in names if js not in counters}
@@ -417,7 +422,8 @@ class Store:
         n = {k: v for k, v in n.items() if v}
         if n:
             rop['n'] = n
-        return {'entity': entity, 'id': rid, 'op': 'insert', 'area': area, 'changes': {}, 'before': None, 'after': after}, rop
+        return {'entity': entity, 'id': rid, 'op': 'insert', 'area': area, 'area_before': self._area_of(entity, old) if cur else area,
+                'changes': {}, 'before': None, 'after': after}, rop
 
     def fold_pending(self, limit=2000):
         """Applies every journal changeset not yet in the tables (after a crash, or received from another PC).

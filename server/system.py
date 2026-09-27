@@ -245,3 +245,22 @@ class System:
                 c.close()
             except sqlite3.Error:
                 pass
+
+
+def lock_data(folder):
+    """Only one program may work with a data folder at a time (autostart + desktop icon, a double click, a
+    maintenance tool while the program runs). Returns the lock - keep it open - or None when it is taken."""
+    os.makedirs(folder, exist_ok=True)
+    f = open(os.path.join(folder, 'program.lock'), 'a+')
+    try:
+        if os.name == 'nt':
+            import msvcrt
+            f.seek(0)
+            msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return f
+    except OSError:
+        f.close()
+        return None

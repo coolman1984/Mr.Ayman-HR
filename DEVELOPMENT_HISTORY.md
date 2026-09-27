@@ -27,7 +27,34 @@ Version numbers: `server/version.py`. Pull requests: github.com/coolman1984/Mr.A
 - **Sharing can no longer be switched off** (`sync_enabled` removed). The administrator PC warns once a day about
   a PC that has not shared its data for more than 3 days ("PC not sharing").
 
+**Second whole-code review – found and fixed (with regression tests `T35_SecondReview`, `SecondReviewTest`)**
+- CRITICAL (portable version only): `/css/../data/node/authority.key` served the administrator key and the databases
+  without login, because static files were checked against the whole program folder. Now only `index.html` and
+  files inside `css/`, `js/`, `lib/` with known extensions are served, and `..` is refused.
+- New break areas got numbered ids (`ba23`): two PCs adding an area at the same time produced the same id and the two
+  areas merged. Ids are now random.
+- A save could fail *after* it was stored in the history (a small note file could not be written) → the user retried
+  and the change was counted twice. The note file can no longer fail a save.
+- Received changes that could not be applied at once (file locked by antivirus) waited until the next change or a
+  restart – also account changes like a disabled user. Now retried every 10 seconds, accounts separately.
+- An area-limited user could move a record *out of* another area (only the new area was checked). Both are checked.
+- Conflict decisions (`resolve`) could be sent through a normal save by anybody. Only the administrator screen can.
+- A silent connection to the sync port held up all other PCs (TLS handshake in the accept loop) → handshake per thread.
+- Before login, requests up to 200 MB and unlimited failed logins (each one a slow password check and a log entry on
+  every PC). Now 64 kB before login, and more than 10 failures per minute from one address are cut short.
+- A bad file reference in a photo stopped photo copying on every PC → refused on save, skipped when copying.
+- Two copies of the program on one PC (autostart + desktop icon) could both open the data → one lock per data folder;
+  the maintenance tools also wait until the program is stopped.
+- A PC whose clock had been far ahead kept writing future times after the clock was fixed → capped at start.
+- A long form was lost when the automatic logout came while typing → the session stays alive while the person is active.
+- Small: logo address escaped, log paging limits, half emojis in the activity log, recycle bin only for users with
+  all break areas.
+
 **Lessons**
+- Review the portable and the installed layout separately: a check that is safe in one (pages inside the program)
+  can be dangerous in the other (data next to the pages).
+- Ids made by counting (`length + 1`) are never safe when several PCs work offline – always random ids.
+- Anything a request can send (like `resolve`) is sent by somebody one day: internal options never come from the client.
 - A process killer that matches a command line (`pkill -f`, `ps | grep`) also matches the shell that runs it:
   stop test processes by process name or by PID.
 - Inno Setup `[InstallDelete] {app}\*` looks harmless but wipes whatever folder the user picked: never delete by

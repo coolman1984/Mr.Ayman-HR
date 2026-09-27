@@ -991,5 +991,95 @@ class T34_InstalledMode(unittest.TestCase):
             return None
 
 
+class T35_SecondReview(unittest.TestCase):
+    """Regressions of the second whole-code review, on one PC."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.S = Server('solo').start()
+        cls.ac = make_authority(cls.S)
+        cls.ac.post('/api/commit', {'label': 'data', 'ops': [area_op('Z1', 'Zone One'), area_op('Z2', 'Zone Two')]})
+        move(cls.ac, 'Z2', 'chairs', 12)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.S.cleanup()
+
+    def raw_get(self, path):
+        import http.client
+        h = http.client.HTTPConnection('127.0.0.1', self.S.port, timeout=20)
+        h.putrequest('GET', path, skip_accept_encoding=True)
+        h.endheaders()
+        r = h.getresponse()
+        body = r.read()
+        h.close()
+        return r.status, body
+
+    def test_a_program_folder_cannot_be_read(self):
+        """The portable program folder holds data/, keys and config.json next to css/js/lib - none of it may leak."""
+        for path in ('/css/../config.json', '/css/../server/app.py', '/js/..%2fserver%2fapp.py', '/lib/%2e%2e/LICENSE.txt',
+                     '/css/..\\config.json', '/js/../../etc/passwd', '/css/', '/js/app.js/..'):
+            status, body = self.raw_get(path)
+            self.assertEqual(status, 404, path)
+            self.assertNotIn(b'import', body)
+        self.assertEqual(self.raw_get('/js/app.js')[0], 200)
+        self.assertEqual(self.raw_get('/')[0], 200)
+
+    def test_b_area_limited_user_cannot_touch_other_areas(self):
+        ac = self.ac
+        ac.post('/api/users/save', {'username': 'zoe.z', 'full_name': 'Zoe Zone', 'password': 'Area-limit47', 'must_change': False,
+                                    'perms': ['dashboard.view', 'areas.view', 'inventory.edit', 'areas.edit'], 'areas': ['Z1']})
+        c = self.S.client()
+        c.login('zoe.z', 'Area-limit47')
+        inv = next(x for x in get_area(ac, 'Z2')['inventory'] if x['item'] == 'chairs')
+        hostile = {'e': 'inventory', 'id': 'Z2:chairs', 'op': 'put', 'ver': inv['ver'],
+                   'row': {**{k: v for k, v in inv.items() if k != 'ver'}, 'areaId': 'Z1', 'qty': 0}}
+        with self.assertRaises(ApiError) as e:
+            c.post('/api/commit', {'label': 'steal', 'ops': [hostile]})
+        self.assertEqual(e.exception.code, 403)
+        self.assertEqual(next(x for x in get_area(ac, 'Z2')['inventory'] if x['item'] == 'chairs')['qty'], 12)
+        # conflicts are decided by an administrator only, never through a normal save
+        with self.assertRaises(ApiError) as e:
+            c.post('/api/commit', {'label': 'x', 'ops': [{'e': 'areas', 'id': 'Z2', 'op': 'del', 'resolve': True}]})
+        self.assertEqual(e.exception.code, 403)
+        # the recycle bin shows all areas: not for area-limited users even with the permission
+        ac.post('/api/users/save', {**next(u for u in ac.get('/api/users')['users'] if u['username'] == 'zoe.z'),
+                                    'perms': ['dashboard.view', 'areas.view', 'trash.restore']})
+        c2 = self.S.client()
+        c2.login('zoe.z', 'Area-limit47')
+        with self.assertRaises(ApiError) as e:
+            c2.get('/api/trash')
+        self.assertEqual(e.exception.code, 403)
+
+    def test_c_bad_file_reference_refused(self):
+        with self.assertRaises(ApiError) as e:
+            self.ac.post('/api/commit', {'label': 'p', 'ops': [{'e': 'photos', 'id': 'ph1', 'op': 'put',
+                                                                   'row': {'areaId': 'Z1', 'src': '/files/../../x.jpg', 'caption': 'x'}}]})
+        self.assertEqual(e.exception.code, 400)
+
+    def test_d_many_wrong_logins_are_cut_short(self):
+        c = self.S.client()
+        for _ in range(11):
+            with self.assertRaises(ApiError):
+                c.login('boss', 'wrong-password-1')
+        t = time.time()
+        with self.assertRaises(ApiError) as e:
+            c.login('boss', 'wrong-password-1')
+        self.assertIn('Too many', str(e.exception.msg))
+        self.assertLess(time.time() - t, 0.5)  # refused without the slow password check
+        with self.assertRaises(ApiError) as e:  # a huge request before logging in is refused
+            c.call('POST', '/api/auth/login', raw=b'{"username": "' + b'x' * 200000 + b'"}')
+        self.assertEqual(e.exception.code, 400)
+
+    def test_e_tools_wait_for_the_program_to_stop(self):
+        import subprocess
+        import sys
+        tool = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'server', 'nodectl.py')
+        out = subprocess.run([sys.executable, tool, 'status'], env={**os.environ, 'BAMS_CONFIG': self.S.cfg_path},
+                             capture_output=True, text=True, timeout=60)
+        self.assertEqual(out.returncode, 3, out.stdout + out.stderr)
+        self.assertIn('running', out.stdout)
+
+
 if __name__ == '__main__':
     unittest.main()

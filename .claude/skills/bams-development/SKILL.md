@@ -73,3 +73,9 @@ Check a local compile on Linux: `pip install --target <dir> nuitka ordered-set z
 - A new change after a link/profile change must be tested on a second PC after `converged()`.
 - Inno Setup: never delete `{app}\*` by wildcard; start the program with `runasoriginaluser`.
 - Keep the review → fix → regression-test loop; independent reviews found real bugs every time.
+- Static files: only `index.html` and `css/ js/ lib/` with known extensions (`serve_static`); the portable program
+  folder also holds `data/` and keys.
+- Record ids must be random (never `length + 1`): PCs create records offline at the same time.
+- Never trust internal options from the client (`resolve` is refused in `/api/commit`); check old *and* new area.
+- One program per data folder (`system.lock_data`); tools (`nodectl`) need the program stopped.
+- Before login: 64 kB requests and max 10 failed logins per minute per address (`too_many_failures`).

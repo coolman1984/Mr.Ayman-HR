@@ -290,7 +290,13 @@ class TLSServer(ThreadingHTTPServer):
     def get_request(self):
         sock, addr = super().get_request()
         sock.settimeout(30)
-        return self.ctx.wrap_socket(sock, server_side=True), addr
+        # the TLS handshake runs in the connection's own thread (finish_request), so a device that connects and
+        # stays silent can never hold up the other PCs
+        return self.ctx.wrap_socket(sock, server_side=True, do_handshake_on_connect=False), addr
+
+    def finish_request(self, request, client_address):
+        request.do_handshake()
+        super().finish_request(request, client_address)
 
     def handle_error(self, request, client_address):
         pass  # failed TLS handshakes of port scanners etc. are not worth logging
@@ -509,10 +515,18 @@ class SyncService:
         """Store and fold changesets that arrived from another PC (pull or push)."""
         acc, deferred, problems = self.journal.receive(records, via)
         if acc:
-            self.store.fold_pending()
-            self.auth.fold_pending()
+            self.fold_all()
             self._after_roster_change(acc)
         return acc, deferred, problems
+
+    def fold_all(self):
+        """Applies every stored change that is not applied yet. Each part on its own: a locked data file (antivirus)
+        must not stop account changes (a disabled user) from being applied. Repeated by the housekeeping."""
+        for part in (self.auth, self.store):
+            try:
+                part.fold_pending()
+            except Exception as e:  # noqa: BLE001 - stored in the journal; the housekeeping applies it again shortly
+                self.log(f'applying received changes delayed ({type(part).__name__}): {e}')
 
     def _after_roster_change(self, accepted):
         """React when the administrator revoked this PC or when it was enrolled."""
@@ -530,8 +544,11 @@ class SyncService:
             return [p for p in self.missing]
         found = []
         for p in sorted(self.store.referenced_files()):
-            if not os.path.isfile(self.file_path(p)):
-                found.append(p)
+            try:
+                if not os.path.isfile(self.file_path(p)):
+                    found.append(p)
+            except ValueError:  # a record that points outside the uploads folder: never fetched, never stops the others
+                continue
         with self.lock:
             self.missing = {p: self.missing.get(p, {'tries': 0}) for p in found}
             self.missing_checked = (v, time.time())
@@ -963,6 +980,7 @@ class SyncService:
         last_verify = last_quiet = 0
         while not self.stop:
             time.sleep(10)
+            self.fold_all()  # changes whose applying failed before (e.g. file locked for a moment)
             try:
                 self.journal.flush_activity()
                 if time.time() - last_verify > 6 * 3600:
