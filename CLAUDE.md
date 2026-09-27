@@ -8,6 +8,7 @@ Before working, load the project skill `bams-development` (`.claude/skills/bams-
 1. **Keep the memory up to date in the same pull request as the code:**
    - `DEVELOPMENT_HISTORY.md` – new entry at the top: what changed, why, mistakes made, lessons learned.
    - `.claude/skills/bams-development/SKILL.md` – new rules, pitfalls, files, commands.
+   - `IDEAS.md` – every new reusable idea or technology, in plain words (problem → idea → how → where → reuse).
    - The guides that describe what changed (`GUIDE_*.md`, `README.md`, `docs/*`), `TASKS.md` test map,
      `DISTRIBUTED_SYNC_ARCHITECTURE.md` for design changes, `docs/RELEASE_NOTES.md` for user-visible changes.
 2. **Test before every push**: the fast tests always, the full suite before a pull request (see Tests).

@@ -7,6 +7,13 @@ Version numbers: `server/version.py`. Pull requests: github.com/coolman1984/Mr.A
 
 ---
 
+## IDEAS.md – book of reusable ideas (2026-09-27)
+
+- New file `IDEAS.md`: every idea and technology of this project in plain words (problem → idea → how → where →
+  reuse), so the owner can reuse them in other projects. Kept up to date with every change (rule in `CLAUDE.md`).
+- Why: the owner has about 100 repositories and wants one place per project with its best ideas (sync, sharing,
+  security), later collected into one central file.
+
 ## 2.3.1 – fixes from the automatic review of 2.3.0 (2026-09-27)
 
 The Codex review of pull request #7 arrived a moment after the merge; its findings were checked and fixed here.
