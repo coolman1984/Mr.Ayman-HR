@@ -4,13 +4,15 @@ Everything below happens on GitHub; no Windows PC is needed for building. For th
 
 ## Make a new version
 
-1. Change the code on a branch, run the tests (`CLAUDE.md` → Tests) and merge the pull request.
+1. Change the code on a branch, run the tests (`CLAUDE.md` → Tests), and open a pull request.
    The workflow **Test and build** runs on every pull request: tests on Linux, then the Windows build.
-2. Raise the version in `server/version.py` (e.g. `2.2.0` → `2.2.1` for fixes, `2.3.0` for new features).
-3. Add the entry to `DEVELOPMENT_HISTORY.md` and write `docs/RELEASE_NOTES.md` (what the users notice, short).
-4. Create the tag on `main`: `git tag v2.2.1 && git push origin v2.2.1`.
-5. GitHub builds `BAMS-Setup-2.2.1.exe` and publishes it under **Releases** (about 15–20 minutes).
-   Without a tag, the installer of every build is under **Actions → the run → Artifacts** for 30 days.
+2. In the same pull request raise the version in `server/version.py` (e.g. `2.2.0` → `2.2.1` for fixes,
+   `2.3.0` for new features), add the entry to `DEVELOPMENT_HISTORY.md` and write `docs/RELEASE_NOTES.md`
+   (what the users notice, short).
+3. Merge the pull request. GitHub builds `BAMS-Setup-<version>.exe` again from `main` and publishes it under
+   **Releases** as `v<version>` (about 5–10 minutes). Nothing else to do – no tag needed.
+   A version that already has a release is not published twice (raise the version for a new release).
+4. The installer of every build (also pull requests) is under **Actions → the run → Artifacts** for 30 days.
 
 ## Give it to the company
 

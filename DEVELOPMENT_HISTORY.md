@@ -7,6 +7,13 @@ Version numbers: `server/version.py`. Pull requests: github.com/coolman1984/Mr.A
 
 ---
 
+## 2.2.0 – permanent release on GitHub (2026-09-27)
+
+- Every version that reaches `main` is now published once under **Releases** (`v<version>` with its
+  `BAMS-Setup-<version>.exe`) by the build workflow – no tag is needed.
+- Lesson: this Claude session may only push its own branch; pushing a tag was refused (HTTP 403). Releases are
+  therefore made by GitHub Actions on `main`.
+
 ## 2.2.0 – Windows installer, protected program, sharing always on (2026-09-27)
 
 **What changed**
