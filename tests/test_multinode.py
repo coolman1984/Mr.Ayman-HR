@@ -751,6 +751,20 @@ class T32_PersonalLinks(Base):
             bad.get('/api/me')
         self.assertTrue(self.clients[1].get('/api/security?type=login-link-failed')['rows'])
 
+        # a request from another web site is refused, and the secret part of the link is never written into a log
+        with self.assertRaises(ApiError) as e:
+            pc1.client().call('POST', '/k/' + token, raw=b'', headers={'Origin': 'http://evil.example'})
+        self.assertEqual(e.exception.code, 403)
+        self.converged()
+        for x in self.clients:
+            self.assertEqual(x.get('/api/security?limit=1000&q=' + token)['rows'], [])
+            self.assertEqual(x.get('/api/activity?limit=1000&q=' + token)['rows'], [])
+        for srv in self.servers:
+            for root, _, files in os.walk(os.path.join(srv.data_dir, 'logs')):
+                for f in files:
+                    with open(os.path.join(root, f), encoding='utf-8', errors='ignore') as fh:
+                        self.assertNotIn(token, fh.read(), f)
+
         # new link: the old one stops working on every PC, and whoever used it is logged out
         ac.post('/api/quick-links/set', {'id': omar['id'], 'on': True})
         new = self._user('omar')['token']

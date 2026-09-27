@@ -209,6 +209,11 @@ class Handler(BaseHTTPRequestHandler):
         return self.u['display'] if self.u else 'Not logged in'
 
     @property
+    def log_path(self):
+        """The address for logs: the secret part of a personal link is never written anywhere."""
+        return '/k/…' if self.path.startswith('/k/') else self.path
+
+    @property
     def ip(self):
         return self.client_address[0]
 
@@ -302,9 +307,9 @@ class Handler(BaseHTTPRequestHandler):
         return json.loads(raw.decode('utf-8')) if raw else {}
 
     def denied(self, msg):
-        AUTH.log(self.user, self.ip, 'access-denied', self.path.split('?')[0], msg)
+        AUTH.log(self.user, self.ip, 'access-denied', self.log_path.split('?')[0], msg)
         try:
-            STORE.log_activity(self.user, self.ip, [{'type': 'denied', 'action': self.path.split('?')[0], 'detail': msg}])
+            STORE.log_activity(self.user, self.ip, [{'type': 'denied', 'action': self.log_path.split('?')[0], 'detail': msg}])
         except Exception:
             pass
 
@@ -314,24 +319,24 @@ class Handler(BaseHTTPRequestHandler):
         except NotLoggedIn:
             self.send(401, {'error': 'Please log in.', 'login': True}, headers=self.clear_session())
         except Forbidden as e:
-            log.info('DENIED %s %s %s', self.user, self.path, e)
+            log.info('DENIED %s %s %s', self.user, self.log_path, e)
             self.denied(str(e))
             self.send(403, {'error': str(e)})
         except AuthError as e:
             self.send(400, {'error': str(e)})
         except Conflict as e:
-            log.info('CONFLICT %s %s %s', self.user, self.path, e)
+            log.info('CONFLICT %s %s %s', self.user, self.log_path, e)
             self.send(409, {'error': str(e)})
         except (BadRequest, ValueError) as e:
-            log.info('BAD REQUEST %s %s %s', self.user, self.path, e)
+            log.info('BAD REQUEST %s %s %s', self.user, self.log_path, e)
             self.send(400, {'error': str(e)})
         except (ConnectionError, BrokenPipeError):
             pass
         except Exception as e:
             tb = traceback.format_exc()
-            log.error('ERROR %s %s\n%s', self.user, self.path, tb)
+            log.error('ERROR %s %s\n%s', self.user, self.log_path, tb)
             try:
-                STORE.log_activity(self.user, self.ip, [{'type': 'server-error', 'action': self.path, 'detail': tb[-1900:]}])
+                STORE.log_activity(self.user, self.ip, [{'type': 'server-error', 'action': self.log_path, 'detail': tb[-1900:]}])
             except Exception:
                 pass
             self.send(500, {'error': f'Server error: {e}'})
