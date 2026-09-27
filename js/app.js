@@ -1299,7 +1299,7 @@ function qrModal(a) {
     <div style="max-width:260px;margin:0 auto">${qrSVG(url)}</div>
     <p style="word-break:break-all" class="muted">${esc(url)}</p>
     <p class="hint">Scanning opens this break area profile (contents, status, latest updates and history).
-    Phones must be on the same company network as the server PC.</p></div>`, {
+    Phones must be on the same company network as this PC.</p></div>`, {
     extra: `<button type="button" class="btn" data-act="copyLink" data-url="${esc(url)}">${ic('copy')}Copy Link</button>
       ${can('report.labels') ? `<button type="button" class="btn primary" data-act="printLabel" data-id="${a.id}">${ic('printer')}Print Label</button>` : ''}`
   });
@@ -1808,7 +1808,8 @@ function permPicker(perms, profile) {
       <label class="fld">Profile<select name="role">${options(opts, profile)}</select></label>
       <button type="button" class="btn sm" data-act="permAll" data-on="1">${ic('check')}Select all</button>
       <button type="button" class="btn sm" data-act="permAll" data-on="0">${ic('x')}Clear all</button>
-      <span class="hint">Choosing a profile ticks the boxes for you. "Select all" gives everything except the administrator rights.</span></div>
+      <span class="hint">Choosing a profile ticks the boxes for you. "Select all" gives everything except the administrator rights.
+        To make someone a <b>deputy administrator</b>, choose the profile <b>Administrator</b> (they log in with a user name and password).</span></div>
     <div class="perm-grid">${permGroupsHTML(perms, true)}</div>`;
 }
 function wirePermPicker(form, profiles) {
@@ -2396,8 +2397,8 @@ setInterval(async () => {
 const serverDown = e => {
   document.body.classList.add('locked');
   $('#auth').innerHTML = `<div class="auth-card"><div class="kic red" style="margin:0 auto 10px">${ic('alert')}</div><h2>Cannot connect to the server</h2>
-    <p>${esc(e.message)}</p><p class="hint">Start the system with <b>start.bat</b> on the server PC, then open the address shown in its window.
-    Opening index.html directly from the folder does not work.</p><button class="btn" data-act="reloadPage">${ic('restore')}Try again</button></div>`;
+    <p>${esc(e.message)}</p><p class="hint">Open the program from the desktop icon (or the Start menu) on the PC where it is installed.
+    If it still does not open, restart that PC. From another device, check that the PC with the program is switched on and in the same network.</p><button class="btn" data-act="reloadPage">${ic('restore')}Try again</button></div>`;
 };
 /* After a successful login: load the data the user may see and show their start page */
 async function start() {

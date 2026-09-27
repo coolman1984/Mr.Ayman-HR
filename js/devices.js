@@ -76,7 +76,7 @@ EXTRA_VIEWS.devices = () => {
 ASYNC.devices = async el => {
   DEV = await api('GET', '/api/devices');
   $('#devAdd').innerHTML = DEV.me.role === 'authority' ? `<button class="btn primary" data-act="devInvite">${ic('plus')}Add a PC</button>` : '';
-  $('#devSub').textContent = `This PC: ${DEV.me.name}${DEV.me.role === 'authority' ? ' (administrator PC)' : ''}`;
+  $('#devSub').textContent = `This PC: ${DEV.me.name}${DEV.me.role === 'authority' ? (DEV.me.backup ? ' (backup administrator PC)' : ' (administrator PC)') : ''}`;
   syncIndicator(DEV.summary);
   if (DTAB.tab === 'conflicts') return devConflicts(el);
   if (DTAB.tab === 'history') return devHistory(el);
@@ -129,14 +129,20 @@ function devTable() {
   return `<div class="card mb"><div class="card-h">${ic('monitor')}<h3>PCs in this system</h3></div>
     <div class="tbl-wrap"><table class="tbl"><thead><tr><th>PC</th><th>Status</th><th>Last shared</th><th>Added</th><th></th></tr></thead><tbody>
     ${DEV.nodes.map(n => `<tr class="${n.status === 'revoked' ? 'muted' : ''}">
-      <td><b>${esc(n.name)}</b>${n.authority ? ' <span class="badge b-purple" title="User accounts and permissions are managed here">Administrator PC</span>' : ''}</td>
+      <td><b>${esc(n.name)}</b>${n.authority ? ' <span class="badge b-purple" title="People, permissions and PCs are managed here">Administrator PC</span>'
+        : n.backup ? ' <span class="badge b-blue" title="Can also manage people, permissions and PCs – for example while the administrator PC is switched off">Backup administrator PC</span>' : ''}</td>
       <td>${peerLine(n)}</td>
       <td class="nowrap">${n.self ? '-' : agoTs((n.status_now || {}).last_ok)}</td>
       <td class="nowrap">${n.enrolled_at ? fmt(n.enrolled_at.slice(0, 10)) : '-'}</td>
       <td class="nowrap">${admin && n.status === 'active' ? `<button class="btn sm" data-act="devEdit" data-id="${n.id}">${ic('edit')}Edit</button>
+        ${n.self || n.authority ? '' : `<button class="btn sm" data-act="devBackup" data-id="${n.id}" data-on="${n.backup ? '0' : '1'}"
+            title="${n.backup ? 'This PC stops managing people and permissions' : 'This PC can also manage people and permissions, e.g. while the administrator PC is off'}">${ic('shield')}${n.backup ? 'End backup admin' : 'Make backup admin'}</button>`}
         ${n.self ? '' : `<button class="btn sm danger" data-act="devRevoke" data-id="${n.id}">${ic('trash')}Remove</button>`}` : ''}</td></tr>`).join('')}
     </tbody></table></div>
-    ${admin ? '' : '<p class="hint">PCs can be added, changed or removed only on the administrator PC.</p>'}</div>`;
+    ${admin ? `<p class="hint"><b>Backup administrator PC:</b> a second PC that can also manage people, permissions and PCs – useful when the
+      administrator PC is switched off or the administrator is away. Choose a PC that only trusted people use. Anybody who should manage
+      people also needs the profile <b>Administrator</b> (Users &amp; Permissions).</p>`
+      : '<p class="hint">PCs can be added, changed or removed only on the administrator PC or a backup administrator PC.</p>'}</div>`;
 }
 
 function devThisPC() {
@@ -269,7 +275,7 @@ Object.assign(ACT, {
     let r;
     try { r = await api('POST', '/api/devices/invite', {}); } catch (e) { return toast(e.message, true, 7000); }
     modal('Add a PC', `<ol class="steps">
-        <li>On the new PC start the program (<b>start.bat</b>) and choose <b>Join an existing system</b>.</li>
+        <li>On the new PC install the program (<b>BAMS-Setup.exe</b>), open it and choose <b>Join an existing system</b>.</li>
         <li>Type this code there:<p class="big-code mono code-box">${r.code.split('-').reduce((o, g, i) => o + (i && i % 5 === 0 ? '<br>' : i ? ' ' : '') + esc(g), '')}</p></li>
         <li>Come back here and press <b>Approve</b> when the new PC appears.</li></ol>
       <p class="hint">The code works once, for 15 minutes. Nobody can join without your approval.</p>`,
@@ -302,6 +308,13 @@ Object.assign(ACT, {
     try { await api('POST', '/api/devices/revoke', { id: n.id }); toast(`${n.name} removed`); rerender(); }
     catch (e) { toast(e.message, true, 7000); }
   },
+  async devBackup(d) {
+    const n = DEV.nodes.find(x => x.id === d.id), on = d.on === '1';
+    if (on && !confirm(`Make "${n.name}" a backup administrator PC?\n\nFrom there, people with administrator rights can manage people, permissions and PCs – also while this PC is switched off.\nChoose a PC that only trusted people use.`)) return;
+    if (!on && !confirm(`"${n.name}" stops being a backup administrator PC. Continue?`)) return;
+    try { await api('POST', '/api/devices/backup', { id: n.id, on }); toast(on ? `${n.name} becomes a backup administrator PC at its next contact` : 'Done'); rerender(); }
+    catch (e) { toast(e.message, true, 7000); }
+  },
   async devAck(d) { try { await api('POST', '/api/devices/ack', { key: d.key }); rerender(); } catch (e) { toast(e.message, true); } },
   conflictKeep: d => { const c = CONFLICTS[+d.i]; resolveConflict({ entity: c.entity, id: c.id, action: 'value', field: d.f, value: JSON.parse(d.v) }, 'Conflict resolved on all PCs'); },
   conflictDel: d => { const c = CONFLICTS[+d.i]; resolveConflict({ entity: c.entity, id: c.id, action: 'keep-deleted' }, 'It stays deleted'); },
@@ -326,7 +339,7 @@ function showSetup(local, st) {
   if (node.join) return showJoinWait(node.join);
   if (!local) {
     return authScreen(`<h2>System not set up yet</h2><p class="muted">This PC must first be set up <b>on the PC itself</b>
-      (the PC running start.bat) by opening <b>http://localhost:${esc(location.port || '80')}/</b> there.</p>
+      (where the program is installed) by opening the program there, or <b>http://localhost:${esc(location.port || '80')}/</b>.</p>
       <button class="btn" data-act="reloadPage">${ic('restore')}Try again</button>`);
   }
   authScreen(`<h2>Welcome – set up this PC</h2>
@@ -410,7 +423,7 @@ Object.assign(ACT, {
   async movedNew() {
     if (!confirm('Set this PC up as a new PC? The copied data folder is kept in data/copied-<date> and not used any more.')) return;
     await api('POST', '/api/node/moved', { choice: 'new' });
-    authScreen(`<h2>Please restart</h2><p>Close the black server window and start <b>start.bat</b> again. Then choose “Join an existing system”.</p>`);
+    authScreen(`<h2>Please restart this PC</h2><p>Restart the computer, then open the program again (desktop icon) and choose “Join an existing system”.</p>`);
   }
 });
 document.addEventListener('submit', async e => {

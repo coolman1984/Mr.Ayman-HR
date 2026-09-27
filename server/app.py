@@ -663,6 +663,8 @@ class Handler(BaseHTTPRequestHandler):
                     SYNC.update_node(str(d.get('id')), self.u, name=d.get('name'), address=d.get('address'))
                 elif action == 'revoke':
                     SYNC.update_node(str(d.get('id')), self.u, revoke=True)
+                elif action == 'backup':
+                    SYNC.set_backup(str(d.get('id')), self.u, bool(d.get('on')))
                 elif action == 'sync-now':
                     for st in SYNC.status.values():
                         st['fails'] = 0
