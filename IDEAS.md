@@ -127,11 +127,12 @@ Kept up to date with every change (rule in `CLAUDE.md`). New idea → new card i
 - **Idea:** every person gets a fixed secret link that logs them in under their own name.
 - **How:** token = HMAC(secret key, person + random number); the PCs store only a hash of it. Opening the link shows a
   small page that logs in by itself from inside the page (a POST), so chat previews and virus scanners that only
-  *read* the link never log anybody in. "New link" kills the old one everywhere at once.
+  *read* the link never log anybody in. "New link" kills the old one at once on the administrator PC, and on
+  every other PC as soon as it has shared changes with it (a PC that is off keeps the old link until then).
 - **Where:** `server/auth.py` (links), `js/quick.js`.
 - **Watch out:** a link never carries administrator rights (checked on every request, not only in the screen).
 - 🇪🇬 **بالعربي:** بدل يوزر نيم وباسورد، كل موظف بياخد لينك ثابت بيدخّله باسمه على طول. اللينك ما بيدّيش صلاحيات
-  أدمن أبداً، ولو ضاع تعمل لينك جديد يلغي القديم فوراً.
+  أدمن أبداً، ولو ضاع تعمل لينك جديد يلغي القديم فوراً على جهاز الأدمن، وعلى باقي الأجهزة أول ما تتواصل معاه.
 
 ### 3.2 Tick boxes + profiles
 - **Idea:** one tick per page and per action, grouped; ready-made profiles (Viewer, Data Entry…) tick them for you;
