@@ -23,7 +23,15 @@ needed quickly; the owner chose "every PC keeps its own full copy" (works while 
 - The code method stays in the code (tests, possible later use) but is not shown.
 - Help page, guides, IDEAS.md updated. Test `T38_OpenJoin`; browser test joins with the address only.
 
+**Automatic review (Codex) – fixed**
+- If the answer to the join got lost, the new PC was already in the list and could never join (asking again was
+  refused) → asking again with the same identity and keys returns the same approved request.
+- A pasted web address with another web port than 8080 tried to join on the web port → a web address (`http://…`)
+  always uses the sync port; a typed `host:port` is tried first, then the usual sync port.
+  Test `T38_OpenJoin.test_join_answer_lost_then_asked_again`.
+
 **Lessons**
+- Every "do it once" network step needs a safe answer when it is asked again (the first answer can be lost).
 - A security step the users do not want gets skipped anyway; offer a documented "easy mode" for small trusted teams
   and keep the safe mode in the code for later.
 

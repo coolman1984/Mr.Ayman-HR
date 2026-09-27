@@ -1259,6 +1259,29 @@ class T38_OpenJoin(unittest.TestCase):
         with self.assertRaises(ApiError):  # a set-up PC cannot join again
             bc.post('/api/join', {'address': self.A.sync_address, 'code': '', 'name': 'Again'})
 
+    def _sync_post(self, path, body):
+        import ssl, http.client
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        ctx.check_hostname, ctx.verify_mode = False, ssl.CERT_NONE
+        h = http.client.HTTPSConnection('127.0.0.1', self.A.sync_port, timeout=10, context=ctx)
+        data = json.dumps(body).encode()
+        h.request('POST', path, body=data, headers={'Content-Type': 'application/json', 'Content-Length': str(len(data))})
+        r = h.getresponse()
+        out = (r.status, json.loads(r.read()))
+        h.close()
+        return out
+
+    def test_join_answer_lost_then_asked_again(self):
+        """Review 2.4: the first answer got lost - asking again with the same identity returns the same approved
+        request instead of 'already registered'; a different key under that identity is refused."""
+        ident = {'node': 'abcdef012345', 'name': 'Lost Answer PC', 'pub': '11' * 32, 'cert_fp': '22' * 32, 'port': '8443', 'open': True}
+        st1, r1 = self._sync_post('/sync/join', ident)
+        st2, r2 = self._sync_post('/sync/join', ident)
+        self.assertEqual((st1, st2), (200, 200), (r1, r2))
+        self.assertEqual((r1['request'], r1['secret']), (r2['request'], r2['secret']))
+        st3, r3 = self._sync_post('/sync/join', {**ident, 'pub': '33' * 32})
+        self.assertEqual(st3, 400, r3)
+
 
 if __name__ == '__main__':
     unittest.main()

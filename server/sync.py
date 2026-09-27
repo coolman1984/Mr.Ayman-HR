@@ -878,8 +878,18 @@ class SyncService:
             ok = len(bytes.fromhex(fields['pub'])) == 32 and len(bytes.fromhex(fields['cert_fp'])) == 32 and len(fields['node']) == 12
         except ValueError:
             ok = False
-        if not ok or fields['node'] in self.journal.roster():
-            return 400, {'error': 'This PC is already registered or its identity is invalid.'}, 'application/json', {}
+        if not ok:
+            return 400, {'error': 'The identity of this PC is invalid.'}, 'application/json', {}
+        known = self.journal.roster().get(fields['node'])
+        if known:  # asked again (the first answer was lost): give the same, already approved request back
+            with self.journal.lock:
+                r = self.journal.conn.execute("SELECT * FROM join_requests WHERE node_id=? AND status='approved' ORDER BY created_at DESC",
+                                              (fields['node'],)).fetchone()
+            if (not r or known.get('status') != 'active' or known.get('pub') != fields['pub']
+                    or known.get('cert_fp') != fields['cert_fp']):
+                return 400, {'error': 'This PC was removed from the system or is already registered.'}, 'application/json', {}
+            return 200, {'request': r['id'], 'secret': r['secret'], 'confirm': '', 'status': 'approved',
+                         'authority': {'node': self.node.id, 'name': self.node.name}}, 'application/json', {}
         rid, secret = secrets.token_hex(8), secrets.token_hex(16)
         port = fields['port'] if fields['port'].isdigit() else str(self.port)
         name = fields['name'][:60] or ip
@@ -992,20 +1002,27 @@ class SyncService:
         if self.node.role != 'unconfigured' or self.auth.has_users():
             raise ValueError('This PC is already set up.')
         a = str(address or '').strip()
-        a = a.split('://', 1)[-1].split('/', 1)[0]  # also accepts the web address shown in Settings (http://…:8080/)
+        web = '://' in a  # the web address shown in Settings (http://…:<web port>/): the PCs share on the sync port
+        a = a.split('://', 1)[-1].split('/', 1)[0]
         h, _, p = a.rpartition(':')
-        host, port = (h, int(p)) if h and p.isdigit() else (a, self.port)
-        if port == 8080:  # the web port, not the port the PCs share on
-            port = self.port
+        host, port = (h, int(p)) if h and p.isdigit() and not web else ((h or a) if web else a, self.port)
         if not host:
             raise ValueError('Type the address of the administrator PC, for example 192.168.1.10.')
         if device_name:
             self.node.set_name(device_name)
-        c = Connection(self, host, int(port), '', None, timeout=15)
+        fields = {'node': self.node.id, 'name': self.node.name, 'pub': self.node.pub.hex(), 'cert_fp': self.node.cert_fp, 'port': str(self.port)}
+        c = None
         try:
-            fields = {'node': self.node.id, 'name': self.node.name, 'pub': self.node.pub.hex(), 'cert_fp': self.node.cert_fp, 'port': str(self.port)}
-            r = c.request('POST', '/sync/join', {**fields, 'open': True})
-            fp = c.peer_fp
+            for attempt, prt in enumerate(dict.fromkeys([int(port), self.port])):  # typed port first, then the usual sync port
+                c = Connection(self, host, prt, '', None, timeout=15)
+                try:
+                    r = c.request('POST', '/sync/join', {**fields, 'open': True})
+                    port, fp = prt, c.peer_fp
+                    break
+                except (Offline, SyncError):
+                    c.close()
+                    if prt == self.port or attempt:
+                        raise
         except Offline:
             raise ValueError('The administrator PC cannot be reached. Check that it is switched on, that the program runs there, and '
                              'that both PCs are on the company network.')
