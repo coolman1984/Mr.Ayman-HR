@@ -37,7 +37,7 @@ KINDS = DATA_KINDS + ('admin', 'account', 'log')
 PRIORITY = {'restore': 0, 'data': 1, 'bootstrap': 1, 'account': 2, 'admin': 3}
 ACCOUNT_FIELDS = {'pw_hash', 'pw_pub', 'must_change', 'pw_changed_at'}
 MAX_DELTA = 10 ** 9
-ADMIN_ENTITIES = {'users', 'nodes', 'userCommands'}
+ADMIN_ENTITIES = {'users', 'nodes', 'userCommands', 'profiles'}
 MAX_CLOCK_AHEAD_MS = 60 * 60 * 1000  # a PC more than 1 hour ahead gets a warning and cannot drag our clock
 
 
@@ -704,7 +704,7 @@ class Journal:
                 'security': ['target', 'detail', 'user']}[table]
         where, args = [], []
         if business_only and table == 'audit':  # user accounts and PCs are for administrators only
-            where.append("entity NOT IN ('users', 'nodes', 'userCommands')")
+            where.append("entity NOT IN ('users', 'nodes', 'userCommands', 'profiles')")
         if areas is not None and table == 'audit':
             where.append(f'area_id IN ({",".join("?" * len(areas)) or "NULL"})')
             args += list(areas)

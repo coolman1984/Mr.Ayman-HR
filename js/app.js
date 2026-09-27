@@ -1504,12 +1504,12 @@ function viewSettings() {
     ${can('settings.view') ? `<form class="card" data-form="settings"><fieldset class="plain" ${ro}>
       <div class="card-h">${ic('settings')}<h3>General</h3></div>
       <div class="form-grid">
-        <label class="full">System Name<input name="systemName" value="${esc(s.systemName)}"></label>
-        <label>Factory / Site<input name="factory" value="${esc(s.factory)}"></label>
-        <label>Logo Text<input name="logoText" value="${esc(s.logoText)}"></label>
-        <label>Inspection frequency (days)<input type="number" min="1" name="inspectionDays" value="${s.inspectionDays}"></label>
+        <label class="full">System name<input name="systemName" value="${esc(s.systemName)}"></label>
+        <label>Factory / site<input name="factory" value="${esc(s.factory)}"></label>
+        <label>Short name (top left)<input name="logoText" value="${esc(s.logoText)}"></label>
+        <label>Inspect every … days<input type="number" min="1" name="inspectionDays" value="${s.inspectionDays}"></label>
         <label>Satisfaction target (%)<input type="number" min="1" max="100" name="satisfactionTarget" value="${satTarget()}"></label>
-        <label class="full">Logo Image (optional)<input type="file" name="logo" accept="image/*"></label>
+        <label class="full">Logo picture (optional)<input type="file" name="logo" accept="image/*"></label>
         <label class="full">Locations <span class="hint">(one per line)</span><textarea name="locations" rows="5">${esc(s.locations.join('\n'))}</textarea></label>
       </div>
       ${ro ? '<p class="hint" style="margin-top:12px">You can see the settings but not change them.</p>'
@@ -1545,7 +1545,8 @@ function viewSettings() {
 /* ============================== Activity log ============================== */
 const ENTITY_NAME = {
   areas: 'Break Area', inventory: 'Inventory', surveys: 'Satisfaction', photos: 'Photo', docs: 'Document', issues: 'Issue',
-  issueLog: 'Issue Follow-up', maintenance: 'Maintenance', inspections: 'Inspection', history: 'Transaction', itemTypes: 'Item Type', settings: 'Setting'
+  issueLog: 'Issue Follow-up', maintenance: 'Maintenance', inspections: 'Inspection', history: 'Transaction', itemTypes: 'Item Type', settings: 'Setting',
+  users: 'Person', profiles: 'Profile', nodes: 'PC'
 };
 const OP_BADGE = { insert: ['Added', 'b-green'], update: ['Changed', 'b-blue'], delete: ['Deleted', 'b-red'] };
 const ACTIVITY_TYPES = ['session', 'navigate', 'click', 'open', 'filter', 'save', 'save-failed', 'denied', 'export', 'backup', 'restore', 'js-error', 'server-error'];
@@ -1556,7 +1557,9 @@ const SECURITY_EVENTS = [['login', 'Logged in'], ['logout', 'Logged out'], ['log
   ['forced-logout', 'Logged out by admin'], ['access-denied', 'Access denied'], ['backup-restored', 'Backup restored'], ['setup', 'First setup'], ['admin-reset', 'Admin password reset on server'],
   ['pairing-code', 'Pairing code created'], ['pairing-request', 'PC asked to join'], ['pairing-refused', 'Join refused'], ['pairing-rejected', 'Join rejected'],
   ['node-enrolled', 'PC added'], ['node-revoked', 'PC removed'], ['node-changed', 'PC changed'], ['node-confirmed', 'PC confirmed'],
-  ['integrity-check', 'History check'], ['conflict-resolved', 'Conflict resolved'], ['change-rejected', 'Change refused']];
+  ['integrity-check', 'History check'], ['conflict-resolved', 'Conflict resolved'], ['change-rejected', 'Change refused'],
+  ['login-link', 'Logged in with personal link'], ['login-link-failed', 'Wrong or old personal link'], ['link-created', 'Personal link made'],
+  ['link-removed', 'Personal link switched off'], ['profile-saved', 'Profile saved'], ['profile-deleted', 'Profile deleted']];
 const SEC_LABEL = Object.fromEntries(SECURITY_EVENTS);
 const SEC_BAD = /failed|blocked|locked|denied|reset|deleted|disabled/;
 let LOGDATA = { rows: [], total: 0, users: [] };
@@ -1636,7 +1639,8 @@ const ASYNC = {
     const i = await api('GET', '/api/info');
     const counts = Object.entries(i.counts).filter(([k]) => k !== 'Settings').map(([k, v]) => `<span><b>${v.toLocaleString()}</b> ${esc(k)}</span>`).join('');
     el.innerHTML = `<dl class="kv">
-      <dt>Open from other PCs</dt><dd>${i.urls.map(u => `<div><a class="link" href="${esc(u)}">${esc(u)}</a></div>`).join('')}</dd>
+      <dt>Address for other PCs and phones</dt><dd>${[...i.urls].sort((a, b) => /\/\/\d/.test(b) - /\/\/\d/.test(a)).map(u => `<div><a class="link" href="${esc(u)}">${esc(u)}</a></div>`).join('')}
+        <small class="muted">Type it in the browser on any device in the same network. People with a personal link do not need it.</small></dd>
       <dt>Database folder</dt><dd class="mono">${esc(i.dataDir)}</dd>
       <dt>Backup folder</dt><dd class="mono">${esc(i.backupDir)}${i.extraBackupDirs.map(d => `<div>+ ${esc(d)}</div>`).join('')}</dd>
       <dt>Automatic backup</dt><dd>Every ${i.backupIntervalHours} hours when data changed, and at every server start</dd>
@@ -1738,11 +1742,11 @@ function accountMenu() {
     <p class="hint">For your security you are logged out automatically after ${ME.sessionIdleMinutes} minutes without activity.
       Always log out when you leave a shared PC.</p>`, {
     extra: `<a class="btn" href="#/account" data-act="closeModal">${ic('eye')}What I can do</a>
-      <button type="button" class="btn" data-act="changePassword">${ic('edit')}Change Password</button>
+      ${ME.login === 'link' ? '' : `<button type="button" class="btn" data-act="changePassword">${ic('edit')}Change Password</button>`}
       <button type="button" class="btn danger" data-act="logout">${ic('arrowLeft')}Log Out</button>`
   });
 }
-const permGroupsHTML = (perms, input) => ME.permissions.map(([g, list]) => `<fieldset class="perm-group">
+const permGroupsHTML = (perms, input) => ME.permissions.map(([g, list]) => `<fieldset class="perm-group${(ME.adminPerms || []).includes(list[0][0]) ? ' perm-admin' : ''}">
     <legend>${input ? `<label class="check"><input type="checkbox" data-group="${esc(g)}"> ${esc(g)}</label>` : esc(g)}</legend>
     ${list.map(([p, l]) => input
       ? `<label class="check"><input type="checkbox" name="perm" value="${p}" ${perms.includes(p) ? 'checked' : ''}> ${esc(l)}</label>`
@@ -1750,7 +1754,7 @@ const permGroupsHTML = (perms, input) => ME.permissions.map(([g, list]) => `<fie
   </fieldset>`).join('');
 function viewAccount() {
   return `<div class="page-head"><h2>My Permissions</h2><span class="muted">${esc(ME.full_name)} · ${esc(ME.role || 'Custom')}</span>
-    <div class="actions"><button class="btn" data-act="changePassword">${ic('edit')}Change Password</button></div></div>
+    <div class="actions">${ME.login === 'link' ? '' : `<button class="btn" data-act="changePassword">${ic('edit')}Change Password</button>`}</div></div>
   <div class="card mb"><div class="card-h">${ic('building')}<h3>Break areas</h3></div>
     <p>${allAreas() ? 'You can work with <b>all break areas</b>.' : `You can only see and work with: <b>${ME.areas.map(id => esc((area(id) || { name: id }).name)).join(', ') || 'none'}</b>`}</p></div>
   <div class="card"><div class="card-h">${ic('check')}<h3>What your account may do</h3><span class="hint">Set by the system administrator</span></div>
@@ -1758,7 +1762,7 @@ function viewAccount() {
 }
 
 /* ============================== Users & permissions (administrator) ============================== */
-let USERS = { users: [], permissions: [], roles: {} };
+let USERS = { users: [], permissions: [], profiles: [], adminPerms: [] };
 const ago = ts => {
   if (!ts) return 'Never';
   const m = Math.round((new Date() - new Date(ts)) / 60000);
@@ -1767,21 +1771,26 @@ const ago = ts => {
 function viewUsers() {
   return `<div class="page-head"><h2>Users &amp; Permissions</h2><span class="muted" id="userCount"></span>
     <div class="actions">${can('logs.security') ? `<button class="btn" data-act="securityLog">${ic('activity')}Logins &amp; Security Log</button>` : ''}
-      <button class="btn primary" data-act="userEdit">${ic('plus')}Add User</button></div></div>
+      <button class="btn" data-act="profileList">${ic('check')}Profiles</button>
+      <button class="btn primary" data-act="userEdit">${ic('plus')}Add Person</button></div></div>
   <div id="usersRO"></div>
   <div class="card"><div data-async="users"><p class="muted">Loading…</p></div></div>
-  <p class="hint">Every user logs in with a personal user name and password. Everything each user does is recorded in the Activity Log with their name.
-    Disable or delete an account as soon as the person leaves – their history stays in the logs.</p>`;
+  <p class="hint">Everything each person does is recorded with their name. A person can log in with their own <b>personal link</b>
+    (no user name or password) or with a user name and password. When somebody leaves, disable or delete their account –
+    their history stays in the logs.</p>`;
 }
 function userRowsHTML() {
-  return `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Name</th><th>User name</th><th>Role</th><th>Break areas</th><th class="num">Permissions</th><th>Status</th><th>Last login</th><th></th></tr></thead><tbody>
+  return `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Name</th><th>Profile</th><th>Logs in with</th><th>Status</th><th>Last login</th><th></th></tr></thead><tbody>
     ${USERS.users.map(u => `<tr class="click" data-act="userEdit" data-uid="${u.id}">
-      <td><b>${esc(u.full_name)}</b>${u.title ? `<br><small class="muted">${esc(u.title)}</small>` : ''}</td><td class="mono">${esc(u.username)}</td>
-      <td>${esc(u.role || 'Custom')}</td><td>${u.areas == null ? 'All' : u.areas.length}</td><td class="num">${u.perms.length} / ${USERS.permissions.flatMap(g => g[1]).length}</td>
+      <td><b>${esc(u.full_name)}</b><br><small class="muted">${esc(u.username)}${u.title ? ' · ' + esc(u.title) : ''}</small></td>
+      <td>${esc(u.role || 'Custom')}${u.areas == null ? '' : `<br><small class="muted">${u.areas.length} break area(s) only</small>`}</td>
+      <td>${u.login === 'link' ? `<span class="badge ${u.link_on ? 'b-blue' : 'b-gray'}">${ic('link')}Personal link${u.link_on ? '' : ' (off)'}</span>`
+        : `Password${u.link_on ? ' <span class="badge b-blue">+ link</span>' : ''}`}</td>
       <td class="nowrap">${u.active ? badge('Active') : badge('Inactive')} ${u.online ? '<span class="badge b-green" title="Logged in now">● Online</span>' : ''}
-        ${u.locked ? '<span class="badge b-red">Locked</span>' : ''} ${u.must_change ? '<span class="badge b-orange" title="Must choose a new password at the next login">New password</span>' : ''}</td>
+        ${u.locked ? '<span class="badge b-red">Locked</span>' : ''} ${u.must_change && u.login !== 'link' ? '<span class="badge b-orange" title="Must choose a new password at the next login">New password</span>' : ''}</td>
       <td class="nowrap" title="${esc(u.last_login || '')} ${esc(u.last_ip || '')}">${ago(u.last_login)}</td>
-      <td><button class="btn sm" data-act="userEdit" data-uid="${u.id}">${ic('edit')}Edit</button></td></tr>`).join('')}
+      <td class="nowrap">${u.link_on && USERS.authority ? `<button class="btn sm" data-act="userLink" data-uid="${u.id}">${ic('link')}Link</button>` : ''}
+        <button class="btn sm" data-act="userEdit" data-uid="${u.id}">${ic('edit')}Edit</button></td></tr>`).join('')}
   </tbody></table></div>`;
 }
 const genPassword = () => {
@@ -1789,83 +1798,213 @@ const genPassword = () => {
   crypto.getRandomValues(a);
   return [...a].map(x => c[x % c.length]).join('').replace(/^(.{4})(.{4})(.{2})$/, '$1-$2-$3') + '7';
 };
+
+/* permission check boxes with "Select all" / "Clear all" and a profile list that fills them in one click */
+function permPicker(perms, profile) {
+  const opts = [...USERS.profiles.map(p => [p.name, p.name]), ['Custom', 'Custom (own choice)']];
+  return `<div class="perm-bar">
+      <label class="fld">Profile<select name="role">${options(opts, profile)}</select></label>
+      <button type="button" class="btn sm" data-act="permAll" data-on="1">${ic('check')}Select all</button>
+      <button type="button" class="btn sm" data-act="permAll" data-on="0">${ic('x')}Clear all</button>
+      <span class="hint">Choosing a profile ticks the boxes for you. "Select all" gives everything except the administrator rights.</span></div>
+    <div class="perm-grid">${permGroupsHTML(perms, true)}</div>`;
+}
+function wirePermPicker(form, profiles) {
+  const boxes = () => $$('input[name=perm]', form);
+  const sync = () => $$('fieldset.perm-group', form).forEach(g => {
+    const bs = $$('input[name=perm]:not(:disabled)', g), on = bs.filter(b => b.checked).length, all = $('input[data-group]', g);
+    if (all) { all.checked = bs.length > 0 && on === bs.length; all.indeterminate = on > 0 && on < bs.length; }
+  });
+  const matchProfile = () => {
+    const sel = form.role;
+    if (!sel) return;
+    const cur = boxes().filter(x => x.checked).map(x => x.value).sort().join();
+    const hit = profiles.find(p => p.name === sel.value && [...p.perms].sort().join() === cur) || profiles.find(p => [...p.perms].sort().join() === cur);
+    sel.value = hit ? hit.name : 'Custom';
+  };
+  const setAll = (on, list) => boxes().forEach(b => {  // "Select all" leaves out the administrator rights: they are ticked on purpose only
+    if (!b.disabled) b.checked = list ? list.includes(b.value) : on && !USERS.adminPerms.includes(b.value);
+  });
+  form.addEventListener('change', e => {
+    const t = e.target;
+    if (t.name === 'role') { const p = profiles.find(x => x.name === t.value); if (p) setAll(true, p.perms); }
+    else if (t.dataset.group) { $$('input[name=perm]', t.closest('fieldset')).forEach(b => { if (!b.disabled) b.checked = t.checked; }); matchProfile(); }
+    else if (t.name === 'perm') matchProfile();
+    sync();
+  });
+  form._permAll = on => { setAll(on); matchProfile(); sync(); };
+  form._permSync = () => { matchProfile(); sync(); };
+  sync();
+}
+
 function userEdit(uid) {
   const u = uid ? USERS.users.find(x => x.id === uid) : null;
-  const perms = u ? u.perms : USERS.roles['Data Entry'];
+  const def = USERS.profiles.find(p => p.id === 'full-access') || USERS.profiles.find(p => !p.admin) || { name: 'Custom', perms: [] };
+  const perms = u ? u.perms : def.perms;
   const scoped = u && u.areas != null;
-  const roleOpts = [...Object.keys(USERS.roles), 'Custom'];
-  const form = modal(u ? `User – ${esc(u.full_name)}` : 'Add User', `<div class="form-grid">
-      <label>Full name *<input name="full_name" required value="${esc(u ? u.full_name : '')}" placeholder="e.g. Sara Mostafa"></label>
-      <label>User name * <span class="hint">(for logging in)</span><input name="username" required value="${esc(u ? u.username : '')}" autocapitalize="none" spellcheck="false" placeholder="e.g. sara.m"></label>
-      <label>Job title / department<input name="title" value="${esc(u ? u.title || '' : '')}" placeholder="e.g. HR Specialist"></label>
-      ${u ? `<label>Account<select name="active">${options([['1', 'Active – can log in'], ['0', 'Disabled – cannot log in']], u.active ? '1' : '0')}</select></label>`
-        : `<label>Temporary password *<span style="display:flex;gap:6px"><input name="password" required value="${genPassword()}" style="flex:1" class="mono">
-          <button type="button" class="btn sm" data-act="genPw">New</button></span></label>`}
-      <label class="full check"><input type="checkbox" name="must_change" ${!u || u.must_change ? 'checked' : ''}> Must choose a new password at the next login (recommended)</label>
-      <label class="full">Notes<input name="notes" value="${esc(u ? u.notes || '' : '')}" placeholder="optional"></label>
+  const link = u ? u.login === 'link' : true;
+  const form = modal(u ? `${esc(u.full_name)}` : 'Add Person', `<div class="form-grid">
+      <label>Name *<input name="full_name" required value="${esc(u ? u.full_name : '')}" placeholder="e.g. Sara Mostafa"></label>
+      <label>Job title<input name="title" value="${esc(u ? u.title || '' : '')}" placeholder="optional, e.g. HR Specialist"></label>
+      ${u ? `<label>Account<select name="active">${options([['1', 'Active – can log in'], ['0', 'Disabled – cannot log in']], u.active ? '1' : '0')}</select></label>` : ''}
     </div>
-    <h4 class="sec-h">${ic('building')} Break areas this user can see and work with</h4>
-    <div class="filters"><label class="check"><input type="radio" name="scope" value="all" ${scoped ? '' : 'checked'}> All break areas (also new ones)</label>
-      <label class="check"><input type="radio" name="scope" value="some" ${scoped ? 'checked' : ''}> Only the selected break areas</label></div>
-    <div class="area-picks ${scoped ? '' : 'hidden'}">${DB.areas.map(a => `<label class="check"><input type="checkbox" name="area" value="${a.id}" ${scoped && u.areas.includes(a.id) ? 'checked' : ''}> ${esc(a.name)} <span class="muted">${esc(a.location)}</span></label>`).join('')
-      || '<p class="muted">No break areas yet.</p>'}</div>
-    <h4 class="sec-h">${ic('check')} Permissions – what this user can see and do
-      <span class="sp"></span><label class="fld" style="flex-direction:row;align-items:center;gap:6px">Quick role<select name="role">${options(roleOpts, u ? (u.role || 'Custom') : 'Data Entry')}</select></label></h4>
-    <div class="perm-grid">${permGroupsHTML(perms, true)}</div>
-    ${u ? `<p class="hint">Created ${esc((u.created_at || '').replace('T', ' '))} by ${esc(u.created_by || '-')} · Last changed ${esc((u.updated_at || '').replace('T', ' '))} by ${esc(u.updated_by || '-')}
-      · Password set ${esc((u.pw_changed_at || '').replace('T', ' '))} · Last login ${esc((u.last_login || 'never').replace('T', ' '))} ${esc(u.last_ip || '')}</p>` : ''}`, {
-    submit: u ? 'Save Changes' : 'Create User', wide: true, cls: 'user-modal',
-    extra: u ? `<button type="button" class="btn" data-act="userReset" data-uid="${u.id}">${ic('edit')}Reset Password</button>
+    <h4 class="sec-h">${ic('link')} How does this person log in?</h4>
+    <div class="login-choice">
+      <label class="check"><input type="radio" name="login" value="link" ${link ? 'checked' : ''}> <span><b>Personal link</b> – no user name or password. The easiest way.
+        Everything they do is recorded with their name.</span></label>
+      <label class="check"><input type="radio" name="login" value="password" ${link ? '' : 'checked'}> <span><b>User name and password</b> – needed for administrators.</span></label>
+    </div>
+    <div class="form-grid pw-fields ${link ? 'hidden' : ''}">
+      <label>User name *<input name="username" value="${esc(u ? u.username : '')}" autocapitalize="none" spellcheck="false" placeholder="e.g. sara.m"></label>
+      ${!u || u.login === 'link' ? `<label>Temporary password *<span style="display:flex;gap:6px"><input name="password" value="${genPassword()}" style="flex:1" class="mono">
+          <button type="button" class="btn sm" data-act="genPw">New</button></span></label>
+        <label class="full check"><input type="checkbox" name="must_change" checked> They choose their own password at the first login (recommended)</label>`
+        : `<p class="hint">To give a new password use <b>Reset Password</b> below.</p>`}
+    </div>
+    <h4 class="sec-h">${ic('check')} What may this person open and do?</h4>
+    ${permPicker(perms, u ? (u.role || 'Custom') : def.name)}
+    <details class="more"${scoped || (u && u.notes) ? ' open' : ''}><summary>More options</summary>
+      <h4 class="sec-h">${ic('building')} Break areas</h4>
+      <div class="filters"><label class="check"><input type="radio" name="scope" value="all" ${scoped ? '' : 'checked'}> All break areas (also new ones)</label>
+        <label class="check"><input type="radio" name="scope" value="some" ${scoped ? 'checked' : ''}> Only the selected break areas</label></div>
+      <div class="area-picks ${scoped ? '' : 'hidden'}">${DB.areas.map(a => `<label class="check"><input type="checkbox" name="area" value="${a.id}" ${scoped && u.areas.includes(a.id) ? 'checked' : ''}> ${esc(a.name)} <span class="muted">${esc(a.location)}</span></label>`).join('')
+        || '<p class="muted">No break areas yet.</p>'}</div>
+      <label class="fld" style="margin-top:10px">Notes<input name="notes" value="${esc(u ? u.notes || '' : '')}" placeholder="optional"></label>
+      ${u ? `<p class="hint">Created ${esc((u.created_at || '').replace('T', ' '))} by ${esc(u.created_by || '-')} · Last changed ${esc((u.updated_at || '').replace('T', ' '))} by ${esc(u.updated_by || '-')}
+        · Last login ${esc((u.last_login || 'never').replace('T', ' '))} ${esc(u.last_ip || '')}</p>` : ''}
+    </details>`, {
+    submit: u ? 'Save' : 'Create', wide: true, cls: 'user-modal',
+    extra: u ? `${u.link_on ? `<button type="button" class="btn" data-act="userLink" data-uid="${u.id}">${ic('link')}Show Link</button>` : ''}
+      ${u.login !== 'link' ? `<button type="button" class="btn" data-act="userReset" data-uid="${u.id}">${ic('edit')}Reset Password</button>` : ''}
       ${u.locked ? `<button type="button" class="btn" data-act="userUnlock" data-uid="${u.id}">${ic('check')}Unlock</button>` : ''}
       ${u.online ? `<button type="button" class="btn" data-act="userLogout" data-uid="${u.id}">${ic('arrowLeft')}Log Out Now</button>` : ''}
       ${can('logs.activity') ? `<button type="button" class="btn" data-act="userActivity" data-uid="${u.id}">${ic('activity')}Activity</button>` : ''}
       ${u.id !== ME.id ? `<button type="button" class="btn danger" data-act="userDelete" data-uid="${u.id}">${ic('trash')}Delete</button>` : ''}` : '',
     async onSubmit(d, f) {
-      const perms = $$('input[name=perm]:checked', f).map(x => x.value);
+      const perms = $$('input[name=perm]:checked', f).filter(x => !x.disabled).map(x => x.value);
       const areas = d.scope === 'some' ? $$('input[name=area]:checked', f).map(x => x.value) : null;
-      if (areas && !areas.length && !confirm('No break area is selected – this user will not see any break area. Continue?')) return false;
-      if (!perms.length && !confirm('No permission is selected – this user will not be able to see anything. Continue?')) return false;
-      const body = { id: u ? u.id : undefined, ver: u ? u.ver : undefined, full_name: d.full_name, username: d.username.trim(), title: d.title,
-        notes: d.notes, role: d.role, perms, areas, active: u ? d.active === '1' : true, must_change: !!d.must_change, password: d.password };
-      try { await api('POST', '/api/users/save', body); }
+      const byLink = d.login === 'link';
+      if (!byLink && !String(d.username || '').trim()) { f.username.focus(); toast('Enter a user name', true); return false; }
+      if (!byLink && f.password && !String(d.password || '').trim()) { f.password.focus(); toast('Enter a temporary password', true); return false; }
+      if (areas && !areas.length && !confirm('No break area is selected – this person will not see any break area. Continue?')) return false;
+      if (!perms.length && !confirm('Nothing is ticked – this person will not be able to open anything. Continue?')) return false;
+      const body = { id: u ? u.id : undefined, ver: u ? u.ver : undefined, full_name: d.full_name, username: byLink && !u ? '' : String(d.username || '').trim(),
+        title: d.title, notes: d.notes || '', role: d.role, perms, areas, active: u ? d.active === '1' : true, login: d.login,
+        must_change: byLink ? false : f.must_change ? !!d.must_change : u.must_change, password: d.password };
+      let res;
+      try { res = await api('POST', '/api/users/save', body); }
       catch (e) { toast(e.message, true, 7000); return false; }
-      if (!u) {
-        modal('User created', `<p><b>${esc(d.full_name)}</b> can now log in on any PC in the network with:</p>
+      await ASYNC.users($('[data-async=users]'));
+      if (res.token) { linkModal(res.full_name, res.token, !u); return false; }
+      if (!u || (u.login === 'link' && !byLink)) {
+        modal(u ? 'Password set' : 'Person added', `<p><b>${esc(d.full_name)}</b> can now log in on any PC in the network with:</p>
           <dl class="kv"><dt>Address</dt><dd class="mono">${esc(BASE_URL)}</dd><dt>User name</dt><dd class="mono">${esc(body.username)}</dd><dt>Password</dt><dd class="mono">${esc(d.password)}</dd></dl>
-          <p class="hint">Give the password to the person privately. ${body.must_change ? 'They must choose their own password at the first login.' : ''} It is not shown again.</p>`);
-        await ASYNC.users($('[data-async=users]'));
+          <p class="hint">Give the password to the person privately. ${body.must_change ? 'They choose their own password at the first login.' : ''} It is not shown again.</p>`);
         return false;
       }
-      toast('User saved');
+      toast('Saved');
       if (u.id === ME.id) { ME = await api('GET', '/api/me'); }
     }
   });
-  const sync = () => {
-    $$('fieldset.perm-group', form).forEach(g => {
-      const boxes = $$('input[name=perm]', g), on = boxes.filter(b => b.checked).length;
-      const all = $('input[data-group]', g); all.checked = on === boxes.length; all.indeterminate = on > 0 && on < boxes.length;
-    });
-  };
-  const matchRole = () => {
-    const cur = $$('input[name=perm]:checked', form).map(x => x.value).sort().join();
-    form.role.value = Object.keys(USERS.roles).find(r => [...USERS.roles[r]].sort().join() === cur) || 'Custom';
+  wirePermPicker(form, USERS.profiles);
+  const loginMode = () => {
+    const byLink = form.login.value === 'link';
+    $('.pw-fields', form).classList.toggle('hidden', byLink);
+    const adm = $$('input[name=perm]', form).find(b => b.value === 'users.manage');
+    if (adm) {
+      if (byLink) adm.checked = false;
+      adm.disabled = byLink;
+      adm.closest('label').title = byLink ? 'Not possible with a personal link – administrators log in with a password' : '';
+    }
+    form._permSync();
   };
   form.addEventListener('change', e => {
-    const t = e.target;
-    if (t.name === 'role' && USERS.roles[t.value]) $$('input[name=perm]', form).forEach(b => (b.checked = USERS.roles[t.value].includes(b.value)));
-    else if (t.dataset.group) { $$('input[name=perm]', t.closest('fieldset')).forEach(b => (b.checked = t.checked)); matchRole(); }
-    else if (t.name === 'perm') matchRole();
-    if (t.name === 'scope') $('.area-picks', form).classList.toggle('hidden', t.value !== 'some');
-    sync();
+    if (e.target.name === 'login') loginMode();
+    if (e.target.name === 'scope') $('.area-picks', form).classList.toggle('hidden', e.target.value !== 'some');
   });
-  sync();
+  loginMode();
+}
+
+/* the personal link of a person: link, QR code and copy button */
+const personLink = token => BASE_URL.replace(/[#?].*$/, '').replace(/\/+$/, '') + '/k/' + token;
+function linkModal(name, token, fresh) {
+  const url = personLink(token);
+  modal(fresh ? `${esc(name)} is ready` : `Personal link – ${esc(name)}`, `<p>${fresh ? 'Send this link to' : 'This is the personal link of'} <b>${esc(name)}</b>.
+      Opening it logs them in straight away under their own name – no user name, no password, nothing to install.</p>
+    <input class="mono" readonly value="${esc(url)}" data-select-all style="width:100%">
+    <div class="qr-box" style="max-width:220px;margin:12px auto">${qrSVG(url)}</div>
+    <ul class="hint tight"><li>Open it once on their PC or phone and save it as a bookmark – next time one click is enough.</li>
+      <li>It works while this PC is switched on and in the same network.</li>
+      <li>Treat it like a key: whoever has it works under this name. If it gets into the wrong hands, open the person and choose
+        <b>New link</b> (the old one stops working at once).</li></ul>`,
+  { extra: `<button type="button" class="btn" data-act="copyLink" data-url="${esc(url)}">${ic('copy')}Copy link</button>` });
+  const inp = $('#modal input[data-select-all]');
+  if (inp) { inp.addEventListener('focus', () => inp.select()); inp.select(); }
+}
+async function userLinkShow(uid, renew) {
+  const u = USERS.users.find(x => x.id === uid);
+  if (!u) return;
+  if (renew && !confirm(`Make a new link for ${u.full_name}?\n\nThe old link stops working at once on every PC. Give the new link to ${u.full_name}.`)) return;
+  try {
+    if (renew) await api('POST', '/api/quick-links/set', { id: uid, on: true });
+    const l = (await api('GET', '/api/quick-links')).users.find(x => x.id === uid);
+    if (!l || !l.token) return toast('This person has no link.', true);
+    await ASYNC.users($('[data-async=users]'));
+    linkModal(u.full_name, l.token, false);
+    $('#modal .modal-f').insertAdjacentHTML('afterbegin', `<button type="button" class="btn" data-act="userLinkNew" data-uid="${uid}">${ic('sync')}New link</button>`);
+  } catch (e) { toast(e.message, true, 7000); }
+}
+
+/* profiles: named sets of permissions, e.g. "Visitor" */
+function profileList() {
+  modal('Profiles', `<p class="hint">A profile is a ready-made set of permissions, e.g. <b>Visitor</b>. Choose it when you add a person and
+      all the right boxes are ticked. When you change a profile, everybody who has it can be updated at once.</p>
+    <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Profile</th><th class="num">Permissions</th><th class="num">People</th><th></th></tr></thead><tbody>
+    ${USERS.profiles.map(p => `<tr><td><b>${esc(p.name)}</b>${p.admin ? ' <span class="badge b-orange">administrator rights</span>' : ''}</td>
+      <td class="num">${p.perms.length} / ${USERS.permissions.flatMap(g => g[1]).length}</td><td class="num">${p.users}</td>
+      <td class="nowrap">${p.locked ? '<small class="muted">always everything</small>'
+        : `<button type="button" class="btn sm" data-act="profileEdit" data-id="${p.id}">${ic('edit')}Edit</button>
+           <button type="button" class="btn sm" data-act="profileDelete" data-id="${p.id}" title="Delete this profile">${ic('trash')}</button>`}</td></tr>`).join('')}
+    </tbody></table></div>`, { wide: true, extra: `<button type="button" class="btn primary" data-act="profileEdit">${ic('plus')}New Profile</button>` });
+}
+function profileEdit(id) {
+  const p = id ? USERS.profiles.find(x => x.id === id) : null;
+  const form = modal(p ? `Profile – ${esc(p.name)}` : 'New Profile', `<div class="form-grid">
+      <label>Profile name *<input name="name" required value="${esc(p ? p.name : '')}" placeholder="e.g. Visitor"></label>
+      ${p && p.users ? `<label class="check" style="align-self:end"><input type="checkbox" name="apply" checked> Also update the ${p.users} person(s) who have this profile</label>` : ''}
+    </div>
+    <div class="perm-bar"><button type="button" class="btn sm" data-act="permAll" data-on="1">${ic('check')}Select all</button>
+      <button type="button" class="btn sm" data-act="permAll" data-on="0">${ic('x')}Clear all</button>
+      <span class="hint">Tick what people with this profile may open and do.</span></div>
+    <div class="perm-grid">${permGroupsHTML(p ? p.perms : [], true)}</div>`, {
+    submit: 'Save Profile', wide: true, cls: 'user-modal',
+    async onSubmit(d, f) {
+      const perms = $$('input[name=perm]:checked', f).map(x => x.value);
+      let r;
+      try { r = await api('POST', '/api/profiles/save', { id: p ? p.id : undefined, name: d.name, perms, apply: !!d.apply }); }
+      catch (e) { toast(e.message, true, 7000); return false; }
+      toast(r.updated ? `Profile saved – ${r.updated} person(s) updated` : 'Profile saved');
+      await ASYNC.users($('[data-async=users]'));
+      profileList();
+      return false;
+    }
+  });
+  wirePermPicker(form, []);
+}
+async function profileDelete(id) {
+  const p = USERS.profiles.find(x => x.id === id);
+  if (!p || !confirm(`Delete the profile "${p.name}"?${p.users ? `\n\nThe ${p.users} person(s) who have it keep their permissions.` : ''}`)) return;
+  try { await api('POST', '/api/profiles/delete', { id }); } catch (e) { return toast(e.message, true, 7000); }
+  toast('Profile deleted');
+  await ASYNC.users($('[data-async=users]'));
+  profileList();
 }
 ASYNC.users = async el => {
   USERS = await api('GET', '/api/users');
-  el.innerHTML = userRowsHTML();
+  if (el) el.innerHTML = userRowsHTML();
   const ro = $('#usersRO');
   if (ro) ro.innerHTML = USERS.authority ? '' : `<p class="err-box info">${ic('alert')} ${esc(USERS.authorityHint)}</p>`;
-  const c = $('#userCount'); if (c) c.textContent = USERS.users.length + ' users · ' + USERS.users.filter(u => u.online).length + ' online now';
+  const c = $('#userCount'); if (c) c.textContent = USERS.users.length + ' people · ' + USERS.users.filter(u => u.online).length + ' online now';
 };
 async function userAction(action, uid, confirmText, done) {
   const u = USERS.users.find(x => x.id === uid);
@@ -1943,6 +2082,12 @@ const ACT = {
   reloadPage: () => location.reload(),
   genPw: (d, el) => { el.closest('label').querySelector('input').value = genPassword(); },
   userEdit: d => userEdit(d.uid),
+  userLink: d => userLinkShow(d.uid, false),
+  userLinkNew: d => userLinkShow(d.uid, true),
+  profileList,
+  profileEdit: d => profileEdit(d.id),
+  profileDelete: d => profileDelete(d.id),
+  permAll: (d, el) => { const f = el.closest('form'); if (f && f._permAll) f._permAll(d.on === '1'); },
   userReset: d => userReset(d.uid),
   userUnlock: d => userAction('unlock', d.uid, '', '{name} unlocked'),
   userLogout: d => userAction('logout', d.uid, 'Log {name} out on all PCs now?', '{name} was logged out'),

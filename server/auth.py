@@ -45,8 +45,9 @@ import replica
 from journal import PRIORITY, password_proof_message
 
 # (group, [(permission, label)]) - the order is the order shown on the user screen
+ADMIN_GROUP = 'Administrator rights - only for administrators'
 PERMISSIONS = [
-    ('Pages - what the user can see', [
+    ('Pages - what the person can open', [
         ('dashboard.view', 'Dashboard'),
         ('areas.view', 'Break Areas list and profiles'),
         ('equipment.view', 'Furniture & Equipment page'),
@@ -100,34 +101,45 @@ PERMISSIONS = [
         ('print', 'Print lists and reports / save as PDF'),
         ('report.full', 'Complete database export (all data and logs)'),
     ]),
-    ('Logs & Monitoring', [
+    ('Settings & Backups', [
         ('logs.view', 'Data changes log (who changed what)'),
-        ('logs.activity', 'User activity and errors log (only together with "Manage users")'),
-        ('logs.security', 'Logins and security log (only together with "Manage users")'),
-    ]),
-    ('Administration', [
         ('settings.view', 'Settings page and server information'),
         ('settings.edit', 'Change general settings (name, locations, targets)'),
         ('backups.manage', 'See and create backups'),
-        ('backups.restore', 'Restore a backup (all data goes back in time)'),
         ('trash.restore', 'Recycle Bin: see and restore deleted records'),
+    ]),
+    (ADMIN_GROUP, [
+        ('users.manage', 'Manage people, links, profiles and permissions'),
+        ('logs.activity', 'See what each person did and clicked (activity log)'),
+        ('logs.security', 'See logins and the security log'),
+        ('backups.restore', 'Restore a backup (all data goes back in time)'),
         ('data.import', 'Import old data, load or delete all sample data'),
-        ('users.manage', 'Manage users, passwords and permissions'),
     ]),
 ]
 ALL = [p for _, ps in PERMISSIONS for p, _ in ps]
 PAGES = ['dashboard.view', 'areas.view', 'equipment.view', 'transactions.view', 'maintenance.view', 'surveys.view']
-_admin_only = {'users.manage', 'backups.restore', 'data.import', 'logs.security', 'logs.activity'}
-ROLES = {
-    'Administrator': ALL,
-    'Manager': [p for p in ALL if p not in _admin_only],
-    'Data Entry': PAGES + ['inventory.edit', 'issues.create', 'issues.followup', 'maintenance.create', 'maintenance.complete',
-                           'inspections.create', 'surveys.create', 'surveys.edit', 'files.upload', 'files.download', 'export.excel', 'print'],
-    'Maintenance Team': ['dashboard.view', 'areas.view', 'maintenance.view', 'issues.create', 'issues.followup',
-                         'maintenance.complete', 'inspections.create', 'files.upload', 'files.download', 'print'],
-    'Viewer': PAGES + ['reports.view', 'files.download', 'print', 'report.register', 'report.inventory', 'report.history',
-                       'report.issues', 'report.inspections', 'report.satisfaction', 'report.locations'],
-}
+ADMIN_PERMS = {p for g, ps in PERMISSIONS if g == ADMIN_GROUP for p, _ in ps}
+WORK = [p for p in ALL if p not in ADMIN_PERMS]
+# ready-made profiles (id, name, permissions); the administrator can change or delete them and make new ones
+BUILTIN_PROFILES = [
+    ('full-access', 'Full access', WORK),
+    ('administrator', 'Administrator', ALL),
+    ('data-entry', 'Data Entry', PAGES + ['inventory.edit', 'issues.create', 'issues.followup', 'maintenance.create', 'maintenance.complete',
+                                         'inspections.create', 'surveys.create', 'surveys.edit', 'files.upload', 'files.download',
+                                         'export.excel', 'print']),
+    ('maintenance', 'Maintenance Team', ['dashboard.view', 'areas.view', 'maintenance.view', 'issues.create', 'issues.followup',
+                                         'maintenance.complete', 'inspections.create', 'files.upload', 'files.download', 'print']),
+    ('viewer', 'Viewer', PAGES + ['reports.view', 'files.download', 'print', 'report.register', 'report.inventory', 'report.history',
+                                 'report.issues', 'report.inspections', 'report.satisfaction', 'report.locations']),
+    ('visitor', 'Visitor', ['dashboard.view', 'areas.view']),
+]
+LOCKED_PROFILE = 'administrator'  # always has every right, so there is always a way to manage the system
+OLD_ROLE_NAMES = {'Manager': 'Full access'}  # profile names of earlier versions
+
+
+def role_name(r):
+    return OLD_ROLE_NAMES.get(r or '', r or 'Custom')
+
 
 ITERATIONS = 600_000
 USERNAME_RE = re.compile(r'^[A-Za-z0-9._-]{3,32}$')
@@ -152,8 +164,10 @@ class NotAuthority(Forbidden):
 T, J, B = 'text', 'json', 'bool'
 USER_FIELDS = [('username', T), ('full_name', T), ('title', T), ('pw_hash', T), ('pw_pub', T), ('perms', J), ('areas', J), ('role', T),
                ('active', B), ('deleted', B), ('must_change', B), ('pw_changed_at', T), ('notes', T), ('created_at', T),
-               ('created_by', T), ('updated_at', T), ('updated_by', T), ('link_hash', T), ('link_nonce', T), ('link_at', T), ('link_by', T)]
+               ('created_by', T), ('updated_at', T), ('updated_by', T), ('link_hash', T), ('link_nonce', T), ('link_at', T), ('link_by', T), ('login', T)]
 USER_FIELD_NAMES = {f for f, _ in USER_FIELDS}
+PROFILE_FIELDS = [('name', T), ('perms', J), ('deleted', B), ('updated_at', T), ('updated_by', T)]
+PROFILE_FIELD_NAMES = {f for f, _ in PROFILE_FIELDS}
 
 
 def _col(kind, v):
@@ -238,9 +252,11 @@ class Auth:
             CREATE TABLE IF NOT EXISTS security_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, user TEXT, ip TEXT, event TEXT, target TEXT, detail TEXT);
             CREATE INDEX IF NOT EXISTS ix_security_ts ON security_log(ts);
+            CREATE TABLE IF NOT EXISTS profiles (
+                id TEXT PRIMARY KEY, name TEXT, perms TEXT, deleted INTEGER NOT NULL DEFAULT 0, updated_at TEXT, updated_by TEXT);
         ''')
         have = {r[1] for r in self.conn.execute('PRAGMA table_info(users)')}
-        for col in ('pw_pub', 'link_hash', 'link_nonce', 'link_at', 'link_by'):
+        for col in ('pw_pub', 'link_hash', 'link_nonce', 'link_at', 'link_by', 'login'):
             if col not in have:
                 self.conn.execute(f'ALTER TABLE users ADD COLUMN {col} TEXT')
         if 'via' not in {r[1] for r in self.conn.execute('PRAGMA table_info(sessions)')}:
@@ -349,6 +365,9 @@ class Auth:
         out['locked'] = bool(u['locked_until'] and _parse(u['locked_until']) > datetime.now())
         out['locked_until'] = u['locked_until'] if out['locked'] else None
         out['failed'] = u['failed']
+        out['role'] = role_name(u['role'])
+        out['login'] = 'link' if u.get('login') == 'link' else 'password'
+        out['link_on'] = bool(u.get('link_hash'))
         if online is not None:
             out['online'] = online
         return out
@@ -645,6 +664,105 @@ class Auth:
             rows = [self._user(r) for r in self.conn.execute('SELECT * FROM users WHERE deleted=0 ORDER BY full_name COLLATE NOCASE')]
         return [self.public(u, on.get(u['id'])) for u in rows]
 
+    # ------------------------------------------------------------ profiles (ready-made sets of permissions)
+    def profiles(self, c=None):
+        """Every profile: the ready-made ones (possibly changed by the administrator) and the administrator's own."""
+        with self.lock:
+            c = c or self.conn
+            rows = {r['id']: r for r in c.execute('SELECT * FROM profiles')}
+            used = {}
+            for r in c.execute('SELECT role FROM users WHERE deleted=0'):
+                used[role_name(r['role'])] = used.get(role_name(r['role']), 0) + 1
+        out = []
+
+        def add(pid, name, perms, builtin):
+            perms = ALL if pid == LOCKED_PROFILE else sorted(p for p in perms if p in ALL)
+            out.append({'id': pid, 'name': name, 'perms': list(perms), 'builtin': builtin, 'locked': pid == LOCKED_PROFILE,
+                        'admin': 'users.manage' in perms, 'users': used.get(name, 0)})
+        for pid, name, perms in BUILTIN_PROFILES:
+            r = rows.pop(pid, None)
+            if r is None:
+                add(pid, name, perms, True)
+            elif not r['deleted'] or pid == LOCKED_PROFILE:
+                add(pid, r['name'] or name, json.loads(r['perms']) if r['perms'] else perms, True)
+        for r in sorted(rows.values(), key=lambda r: (r['name'] or '').lower()):
+            if not r['deleted'] and r['name']:
+                add(r['id'], r['name'], json.loads(r['perms'] or '[]'), False)
+        return out
+
+    def save_profile(self, actor, ip, d):
+        """Creates or changes a profile; with apply, everybody who has this profile gets the new permissions (on every PC)."""
+        if not self.node.is_authority:
+            raise NotAuthority(self.authority_hint())
+        pid = str(d.get('id') or '') or None
+        name = re.sub(r'\s+', ' ', str(d.get('name') or '')).strip()[:40]
+        perms = sorted({p for p in (d.get('perms') or []) if p in ALL})
+        apply = bool(d.get('apply', True))
+        if not name:
+            raise AuthError('Give the profile a name, e.g. "Visitor".')
+        if name.lower() == 'custom':
+            raise AuthError('"Custom" is used for people with their own set of permissions. Choose another name.')
+        ts, res = now(), {}
+
+        def check(c):
+            profs = self.profiles(c)
+            cur = next((p for p in profs if p['id'] == pid), None) if pid else None
+            if pid and not cur:
+                raise AuthError('This profile no longer exists.')
+            if cur and cur['locked']:
+                raise AuthError('The Administrator profile always has every right. It cannot be changed.')
+            if any(p['name'].lower() == name.lower() and p['id'] != pid for p in profs):
+                raise AuthError(f'There is already a profile called "{name}".')
+            new_id = pid or uuid.uuid4().hex
+            ops = [{'e': 'profiles', 'id': new_id, 'op': 'update' if cur else 'insert',
+                    's': {'name': name, 'perms': perms, 'deleted': False, 'updated_at': ts, 'updated_by': actor['display']},
+                    'c': {'name': [cur['name'] if cur else '', name], 'perms': [cur['perms'] if cur else [], perms]}}]
+            res['n'] = 0
+            if cur and apply:
+                users = [self._user(r) for r in c.execute('SELECT * FROM users WHERE deleted=0')]
+                hit = [u for u in users if role_name(u['role']) == cur['name']]
+                admins_after = [u for u in users if u['active'] and ('users.manage' in perms if u in hit else 'users.manage' in u['perms'])]
+                if not admins_after:
+                    raise AuthError('At least one active person must keep the right to manage people and permissions.')
+                for u in hit:
+                    if u['id'] == actor['id'] and 'users.manage' not in perms:
+                        raise AuthError('You have this profile yourself. You cannot remove your own right to manage people and permissions.')
+                    if 'users.manage' in perms and (u.get('login') == 'link' or u.get('link_hash')):
+                        raise AuthError(f'{u["full_name"]} has this profile and logs in with a personal link. People with a link cannot '
+                                        'manage people and permissions. Switch off their link first, or remove that right.')
+                    if sorted(u['perms']) != perms or u['role'] != name:
+                        ops.append({'e': 'users', 'id': u['id'], 'op': 'update', 's': {'perms': perms, 'role': name, 'updated_at': ts,
+                                                                                         'updated_by': actor['display']},
+                                    'c': {'perms': [sorted(u['perms']), perms], 'role': [u['role'], name]}})
+                        res['n'] += 1
+            res['id'] = new_id
+            return ops
+        self._write(actor, ip, 'Profile ' + name, [], check=check)
+        self.log(actor['display'], ip, 'profile-saved', name, f'{len(perms)} permission(s); updated for {res["n"]} person(s)')
+        return {'id': res['id'], 'updated': res['n']}
+
+    def delete_profile(self, actor, ip, pid):
+        """The profile disappears; the people who had it keep their permissions (shown as "Custom")."""
+        if not self.node.is_authority:
+            raise NotAuthority(self.authority_hint())
+        ts, res = now(), {}
+
+        def check(c):
+            cur = next((p for p in self.profiles(c) if p['id'] == pid), None)
+            if not cur:
+                raise AuthError('This profile no longer exists.')
+            if cur['locked']:
+                raise AuthError('The Administrator profile cannot be deleted.')
+            res['name'] = cur['name']
+            ops = [{'e': 'profiles', 'id': pid, 'op': 'delete', 's': {'name': cur['name'], 'perms': cur['perms'], 'deleted': True,
+                                                                       'updated_at': ts, 'updated_by': actor['display']}}]
+            for r in c.execute('SELECT id, role FROM users WHERE deleted=0'):
+                if role_name(r['role']) == cur['name']:
+                    ops.append({'e': 'users', 'id': r['id'], 'op': 'update', 'noaudit': True, 's': {'role': 'Custom'}})
+            return ops
+        self._write(actor, ip, 'Delete profile', [], check=check)
+        self.log(actor['display'], ip, 'profile-deleted', res['name'], 'People who had it keep their permissions')
+
     def _admins(self, c, exclude=None):
         n = 0
         for r in c.execute('SELECT id, perms FROM users WHERE deleted=0 AND active=1'):
@@ -659,6 +777,7 @@ class Auth:
         title = str(d.get('title') or '').strip()[:80]
         notes = str(d.get('notes') or '').strip()[:500]
         role = str(d.get('role') or 'Custom')[:40]
+        login = 'link' if d.get('login') == 'link' else 'password'
         perms = sorted({p for p in (d.get('perms') or []) if p in ALL})
         areas = d.get('areas')
         areas = None if areas is None else sorted({str(a)[:120] for a in areas})
@@ -666,17 +785,35 @@ class Auth:
         must_change = bool(d.get('must_change', True))
         if not full_name:
             raise AuthError('Enter the full name.')
-        if not USERNAME_RE.match(username):
+        if username and not USERNAME_RE.match(username) or not username and (uid or login == 'password'):
             raise AuthError('User name: 3-32 letters, numbers, dot, dash or underscore (no spaces).')
+        if login == 'link' and 'users.manage' in perms:
+            raise AuthError('People who log in with a personal link cannot manage people and permissions (administrator right). '
+                            'Remove that right, or let this person log in with a user name and password.')
         if not self.node.is_authority:
             raise NotAuthority(self.authority_hint())
         ts = now()
         res = {}
         new_row = {'username': username, 'full_name': full_name, 'title': title, 'perms': perms, 'areas': areas, 'role': role,
-                   'active': active, 'must_change': must_change, 'notes': notes, 'updated_at': ts, 'updated_by': actor['display']}
+                   'active': active, 'must_change': must_change, 'notes': notes, 'login': login, 'updated_at': ts, 'updated_by': actor['display']}
+
+        def new_link(user_id):
+            nonce = secrets.token_hex(8)
+            res['token'] = self.link_token(user_id, nonce)
+            return {'link_hash': _token_hash(res['token']), 'link_nonce': nonce, 'link_at': ts, 'link_by': actor['display']}
 
         def check(c):
-            dup = c.execute('SELECT id, deleted FROM users WHERE username=?', (username,)).fetchone()
+            if not username:  # personal link only: the user name is made from the name (it is only shown in the logs)
+                base = re.sub(r'[^a-z0-9]+', '.', full_name.lower()).strip('.')[:24] or 'person'
+                base = base if len(base) >= 3 else base + '.person'
+                n, cand = 1, base
+                while c.execute('SELECT 1 FROM users WHERE username=?', (cand,)).fetchone():
+                    n += 1
+                    cand = f'{base}{n}'
+                new_row['username'] = cand
+                dup = None
+            else:
+                dup = c.execute('SELECT id, deleted FROM users WHERE username=?', (username,)).fetchone()
             if dup and dup['id'] != uid:
                 raise AuthError(f'The user name "{username}" is already used' + (' by a deleted user.' if dup['deleted'] else '.'))
             if uid:
@@ -689,21 +826,43 @@ class Auth:
                     raise AuthError('You cannot disable yourself or remove your own right to manage users.')
                 if (not active or 'users.manage' not in perms) and 'users.manage' in old['perms'] and not self._admins(c, exclude=uid):
                     raise AuthError('At least one active user must keep the right to manage users.')
+                old_login = 'link' if old.get('login') == 'link' else 'password'
                 cur = {'username': old['username'], 'full_name': old['full_name'], 'title': old['title'], 'perms': sorted(old['perms']),
                        'areas': old['areas'], 'role': old['role'], 'active': bool(old['active']), 'must_change': bool(old['must_change']),
-                       'notes': old['notes']}
-                changes = {f: [cur[f], v] for f, v in new_row.items() if f not in ('updated_at', 'updated_by') and cur.get(f) != v}
+                       'notes': old['notes'], 'login': old_login}
+                row, extra = dict(new_row), []
+                if login == 'link':
+                    row['must_change'] = False
+                    if not old.get('link_hash'):
+                        row.update(new_link(uid))
+                elif old_login == 'link':  # from now on with a password: the link is switched off
+                    password = d.get('password') or ''
+                    self.check_password(password, username, full_name)
+                    row.update({'pw_hash': hash_password(password), 'pw_pub': account_pub(password, uid), 'must_change': True, 'pw_changed_at': ts,
+                                'link_hash': '', 'link_nonce': '', 'link_at': '', 'link_by': ''})
+                    extra.append({'e': 'userCommands', 'id': uuid.uuid4().hex, 'op': 'insert', 'noaudit': True, 's': {'cmd': 'logout-link', 'user': uid}})
+                changes = {f: [cur[f], row[f]] for f in cur if cur.get(f) != row.get(f)}
+                if 'pw_hash' in row:
+                    changes['pw_hash'] = ['', '']
                 res['old'] = old
-                return [{'e': 'users', 'id': uid, 'op': 'update', 's': new_row, 'c': changes}]
-            password = d.get('password') or ''
-            self.check_password(password, username, full_name)
+                return [{'e': 'users', 'id': uid, 'op': 'update', 's': row, 'c': changes}] + extra
             res['uid'] = new_id = uuid.uuid4().hex
+            if login == 'link':  # no password at all: a long random one nobody knows
+                password = secrets.token_urlsafe(24)
+            else:
+                password = d.get('password') or ''
+                self.check_password(password, username, full_name)
             row = {**new_row, 'pw_hash': hash_password(password), 'pw_pub': account_pub(password, new_id), 'deleted': False, 'pw_changed_at': ts, 'created_at': ts,
                    'created_by': actor['display']}
+            if login == 'link':
+                row['must_change'] = False
+            audit = dict(row)
+            if login == 'link':
+                row.update(new_link(new_id))
             res['old'] = None
-            return [{'e': 'users', 'id': new_id, 'op': 'insert', 's': row, 'r': {'id': new_id, **row}}]
+            return [{'e': 'users', 'id': new_id, 'op': 'insert', 's': row, 'r': {'id': new_id, **audit}}]
 
-        self._write(actor, ip, ('Change user ' if uid else 'Create user ') + username, [], check=check)
+        self._write(actor, ip, ('Change user ' if uid else 'Create user ') + (username or full_name), [], check=check)
         old = res['old']
         uid = uid or res['uid']
         new = self.get(uid) or self._user(self.conn.execute('SELECT * FROM users WHERE id=?', (uid,)).fetchone())
@@ -727,7 +886,12 @@ class Auth:
                 self.log(actor['display'], ip, 'user-changed', new['display'], '; '.join(ch))
             if old['active'] and not new['active']:
                 self.log(actor['display'], ip, 'user-disabled', new['display'], 'All open sessions on every PC are ended')
-        return self.public(new)
+        if res.get('token'):
+            self.log(actor['display'], ip, 'link-created', new['display'], 'Personal link created (logs in without a password)')
+        out = self.public(new)
+        if res.get('token'):
+            out['token'] = res['token']
+        return out
 
     def reset_password(self, actor, ip, uid, password):
         u = self.get(uid)
@@ -862,6 +1026,16 @@ class UserFolder:
                 if f in USER_FIELD_NAMES:
                     self.reg.write('users', uid, f, env, PRIORITY[env['kind']], env['hlc'], v)
             self.materialize(uid, env)
+        elif e == 'profiles':
+            if not isinstance(uid, str) or not uid:
+                raise ValueError('bad profile id')
+            for f, v in sorted((op.get('s') or {}).items()):
+                if f in PROFILE_FIELD_NAMES:
+                    self.reg.write('profiles', uid, f, env, PRIORITY[env['kind']], env['hlc'], v)
+            win = self.reg.resolve(self.reg.entries('profiles', uid), {})
+            vals = {f: _col(k, win[f].value) if f in win else None for f, k in PROFILE_FIELDS}
+            self.conn.execute('INSERT OR REPLACE INTO profiles (id, name, perms, deleted, updated_at, updated_by) VALUES (?,?,?,?,?,?)',
+                              (uid, vals['name'], vals['perms'], vals['deleted'] or 0, vals['updated_at'], vals['updated_by']))
         elif e == 'userCommands':
             s = op.get('s') or {}
             if s.get('cmd') == 'unlock':

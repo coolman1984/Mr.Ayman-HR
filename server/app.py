@@ -27,7 +27,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)  # the portable (embedded) Python does not add the script folder itself
 
 import xlsx  # noqa: E402
-from auth import ALL, PERMISSIONS, ROLES, AuthError, Forbidden  # noqa: E402
+from auth import ADMIN_PERMS, ALL, PERMISSIONS, AuthError, Forbidden  # noqa: E402
 from store import BadRequest, Conflict, now  # noqa: E402
 from sync import SyncService  # noqa: E402
 from system import System  # noqa: E402
@@ -355,7 +355,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def me(self):
         u = self.u
-        return {**AUTH.public(u), 'display': u['display'], 'permissions': PERMISSIONS, 'roles': ROLES,
+        return {**AUTH.public(u), 'display': u['display'], 'permissions': PERMISSIONS, 'adminPerms': sorted(ADMIN_PERMS),
                 'sessionIdleMinutes': CFG['session_idle_minutes'], 'minPasswordLength': AUTH.min_len, 'admin': is_admin(u), 'viaLink': bool(u.get('via_link')),
                 'node': {'id': NODE.id, 'name': NODE.name, 'role': NODE.role, 'authority': NODE.is_authority}}
 
@@ -442,7 +442,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(200, self.conflict_list())
         if p == '/api/users':
             self.need('users.manage')
-            return self.send(200, {'users': AUTH.list_users(), 'permissions': PERMISSIONS, 'roles': ROLES, 'authority': NODE.is_authority,
+            return self.send(200, {'users': AUTH.list_users(), 'permissions': PERMISSIONS, 'profiles': AUTH.profiles(), 'adminPerms': sorted(ADMIN_PERMS),
+                                   'authority': NODE.is_authority,
                                    'authorityHint': '' if NODE.is_authority else AUTH.authority_hint()})
         if p == '/api/export.xlsx':
             self.need('report.full')
@@ -625,6 +626,13 @@ class Handler(BaseHTTPRequestHandler):
         if p == '/api/conflicts/resolve':
             self.need_admin()
             return self.send(200, self.resolve_conflict(self.json_body()))
+        if p in ('/api/profiles/save', '/api/profiles/delete'):
+            self.need('users.manage')
+            d = self.json_body()
+            if p.endswith('save'):
+                return self.send(200, AUTH.save_profile(self.u, self.ip, d))
+            AUTH.delete_profile(self.u, self.ip, str(d.get('id') or ''))
+            return self.send(200, {'ok': True})
         if p.startswith('/api/users/'):
             self.need('users.manage')
             d = self.json_body()
