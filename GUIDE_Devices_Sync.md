@@ -39,22 +39,23 @@ With only one PC the light is not shown to anybody.
 
 ## 3. Installing a second PC
 
-1. On the new PC copy the program folder **without** the `data` folder (and without `backups`).
-   *Never copy the `data` folder to another PC – the system would detect it and ask what to do.*
-2. Start **start.bat** on the new PC. Windows may ask to allow Python through the firewall: allow it on the
-   **private / domain** network (the PCs talk to each other on port **8443**).
-3. The browser opens. Choose **Join an existing system**.
-4. On the **administrator PC** open **Devices & Sync → Add a PC**. It shows one **code**
+1. On the new PC run **BAMS-Setup.exe** (the same file as on the administrator PC). Keep "Start with Windows"
+   ticked, so the PC always shares its changes.
+2. The browser opens. Choose **Join an existing system**.
+3. On the **administrator PC** open **Devices & Sync → Add a PC**. It shows one **code**
    (works once, for 15 minutes).
-5. On the new PC type the code and a name for the PC (e.g. “HR Office”), then press **Join**.
+4. On the new PC type the code and a name for the PC (e.g. "HR Office"), then press **Join**.
    It shows a **6-digit number**. (Only if the new PC cannot find the administrator PC by itself it asks for its
    address, e.g. `192.168.1.10`.)
-6. On the administrator PC the new PC appears under **PCs asking to join** with a number.
+5. On the administrator PC the new PC appears under **PCs asking to join** with a number.
    **Approve only if both numbers are the same.**
-7. The new PC copies the user accounts and all the data (a few minutes the first time), then shows the login
-   screen. Everybody logs in with their usual user name and password.
+6. The new PC copies the user accounts and all the data (a few minutes the first time), then shows the login
+   screen. Everybody logs in with their usual user name and password, or their personal link.
 
 Nobody can join without a code *and* your approval. An unknown PC on the network cannot read or send data.
+*Never copy the data folder (`C:\ProgramData\BAMS`) to another PC – the system would detect it and ask what to do.*
+
+People who only use a **personal link** need nothing installed – a browser in the same network is enough.
 
 ---
 
@@ -141,12 +142,13 @@ Entries from before the upgrade are marked “before upgrade”.
 | A user cannot change their password on their PC (message about the administrator PC) | Only for accounts from before the upgrade: log in once on the administrator PC (or change the password there). |
 | A PC is broken / lost | Devices & Sync → **Remove**. Install a new PC and add it (section 3). |
 | The data folder was copied to another PC | The system asks on that PC: *same computer* (continue) or *copy on a new PC* (the copied data is set aside, the PC joins as a new PC). |
-| The administrator PC is lost for good | Only possible if the **administrator key** was exported (below): run `python server\nodectl.py import-authority <file>` on another PC. Without it user management cannot be changed any more (all other work continues). |
+| The administrator PC is lost for good | Only possible if the **administrator key** was exported (below): run `BAMS.exe tool import-authority <file>` on another PC. Without it user management cannot be changed any more (all other work continues). |
 | A new version of the program | Install it on **every PC that has the program** (devices that only use a link need nothing). Until a PC is updated it keeps working, but the changes of the updated PCs wait there (Warnings shows "uses a newer version") – nothing is lost. |
-| Database file damaged | `python server\nodectl.py rebuild` re-creates it from the history (the damaged file is kept). |
+| Database file damaged | `BAMS.exe tool rebuild` re-creates it from the history (the damaged file is kept). |
 
-**Export the administrator key once** (on the administrator PC, program stopped):
-`runtime\python\python.exe server\nodectl.py export-authority E:\bams-admin-key.json` – choose a passphrase of at
+**Export the administrator key once** (on the administrator PC, program stopped, command window as administrator):
+`"C:\Program Files\BAMS\BAMS.exe" tool export-authority E:\bams-admin-key.json` (portable version:
+`runtime\python\python.exe server\nodectl.py export-authority E:\bams-admin-key.json`) – choose a passphrase of at
 least 12 characters. Keep the file and the passphrase in a safe place, separately.
 
 ---
@@ -160,4 +162,4 @@ least 12 characters. Keep the file and the passphrase in a safe place, separatel
 | `device_name` | computer name | Name of this PC shown to the administrator. |
 | `peer_addresses` | `{}` | Optional fixed addresses `{"<PC id>": "192.168.1.20:8443"}` when the addresses in Devices & Sync are not usable. |
 
-Restart start.bat after changing it.
+The file is `C:\\ProgramData\\BAMS\\config.json`. Restart the program after changing it.

@@ -1,0 +1,75 @@
+---
+name: bams-development
+description: Project knowledge for the Break Area Management System (BAMS) - architecture, file map, invariants, how to test, build the Windows installer and release, and the pitfalls learned so far. Load it before changing anything in this repository, and update it whenever something new is learned.
+---
+
+# BAMS – how this program works and how to change it safely
+
+Read `CLAUDE.md` (rules) first. This skill is the working knowledge; `DEVELOPMENT_HISTORY.md` is the history.
+**Update this file in the same pull request whenever you learn a new rule, pitfall, file or command.**
+
+## What it is
+
+A factory web app for break areas (inventory, issues, maintenance, inspections, surveys, photos, reports) used by
+non-technical people. Python standard library only (no pip packages at runtime) + SQLite + plain JavaScript.
+Runs on one PC or on several PCs that each keep all data and share changes (offline-first).
+
+Two ways to run:
+- **Installed** (normal): `BAMS-Setup.exe` → `C:\Program Files\BAMS\BAMS.exe` (Nuitka-compiled, pages inside),
+  data in `%ProgramData%\BAMS` (`BAMS_HOME`). Entry `server/bams_main.py`.
+- **Portable / development**: `start.bat` or `python server/app.py`, everything in the program folder.
+
+## File map
+
+| File | Role |
+|---|---|
+| `server/app.py` | HTTP server, routes, permission checks per request, static pages (`serve_static`: from `_assets` when installed) |
+| `server/auth.py` | people, passwords (PBKDF2), sessions, permissions (`PERMISSIONS`, `ADMIN_PERMS`), personal links, profiles, `UserFolder` |
+| `server/store.py` | business data: `commit` → changeset, specs per entity, conflicts, restore |
+| `server/journal.py` | signed hash-chained changesets, receive rules (`_check`), logs (audit/activity/security), alerts; `SCHEMA` |
+| `server/replica.py` | deterministic fold: registers, counters (inventory qty), deletes, conflict flags, markers |
+| `server/sync.py` | TLS sync between PCs, pairing, peers, attachments, warnings (`_quiet_pcs`); `SCHEMA_VERSION` |
+| `server/node.py` | PC identity, keys, authority key (administrator PC only), machine fingerprint (clone detection) |
+| `server/system.py`, `backup.py` | start-up, upgrade, backups, compensating restore |
+| `server/nodectl.py` | maintenance tools (`BAMS.exe tool …`) |
+| `server/version.py` | VERSION, developer, copyright – the build reads it |
+| `js/app.js`, `js/devices.js` | whole UI (views, `ACT` actions, `modal`, `esc` for every value) |
+| `tools/` | `make_assets.py`, `make_icon.py`, `build_windows.py` |
+| `installer/bams.iss` | Inno Setup script (install + update, firewall, autostart, old data import) |
+| `.github/workflows/build.yml` | tests + Windows build + release on tag `v*` |
+
+## Invariants (never break)
+
+- PCs exchange changesets only, never DB files. Every change is signed by its PC; user/permission/profile/device
+  changes are `admin` changesets signed with the authority key (administrator PC only).
+- Fold is deterministic on every PC; dependencies (`deps`) come from what was folded (markers), not received.
+- Deletes are durable, history is never rolled back, restore = new compensating change.
+- A personal link never carries any `ADMIN_PERMS` (checked in `save_user`, `save_profile`, `link_set`,
+  `link_allowed`, and in `session()` for every request).
+- Tokens/passwords/keys never in logs (`Handler.log_path` hides `/k/…`).
+- A new field or entity that older PCs would drop → raise `journal.SCHEMA` and `sync.SCHEMA_VERSION`.
+- Sharing cannot be switched off.
+- UI: English only, plain words; administrators see sync details, normal users only "Please tell the administrator".
+
+## Tests
+
+`cd tests && python3 -m unittest test_unit test_convergence` (fast), `test_multinode` (real processes, ~3 min),
+`test_e2e_browser` (Playwright/Chromium). Harness: `tests/harness.py` (`Server`, `Client`, `make_authority`, `pair`,
+`TcpProxy` to unplug a PC). Scenario map in `TASKS.md`. Add a regression test for every fix.
+
+## Build and release
+
+See `docs/BUILD_AND_RELEASE.md`. Bump `server/version.py`, update `DEVELOPMENT_HISTORY.md` +
+`docs/RELEASE_NOTES.md`, merge, tag `vX.Y.Z` → GitHub builds and publishes `BAMS-Setup-X.Y.Z.exe`.
+Check a local compile on Linux: `pip install --target <dir> nuitka ordered-set zstandard patchelf`, then
+`python -m nuitka --standalone … server/bams_main.py` (see `tools/build_windows.py` for the options).
+
+## Pitfalls learned (add new ones here)
+
+- Don't edit `server/` or `js/` while multi-PC/browser tests run.
+- `pkill -f` / `ps | grep` also match your own shell command → kill by process name or PID.
+- `<meta name="referrer" content="no-referrer">` makes form posts send `Origin: null` (refused by the CSRF check).
+- New replicated fields need `ALTER TABLE` for old databases and a schema raise (see invariants).
+- A new change after a link/profile change must be tested on a second PC after `converged()`.
+- Inno Setup: never delete `{app}\*` by wildcard; start the program with `runasoriginaluser`.
+- Keep the review → fix → regression-test loop; independent reviews found real bugs every time.
