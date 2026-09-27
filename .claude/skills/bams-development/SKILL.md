@@ -5,7 +5,8 @@ description: Project knowledge for the Break Area Management System (BAMS) - arc
 
 # BAMS – how this program works and how to change it safely
 
-Read `CLAUDE.md` (rules) first. This skill is the working knowledge; `DEVELOPMENT_HISTORY.md` is the history.
+Read `CLAUDE.md` (rules) first. This skill is the working knowledge; `DEVELOPMENT_HISTORY.md` is the history;
+`IDEAS.md` is the book of reusable ideas (for other projects too).
 **Update this file in the same pull request whenever you learn a new rule, pitfall, file or command.**
 
 ## What it is
