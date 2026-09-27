@@ -1,5 +1,5 @@
 # Tests on every change, and builds the Windows installer BAMS-Setup-<version>.exe.
-# A tag v<version> (for example v2.2.0) also publishes the installer as a GitHub release.
+# A new version (server/version.py) merged into main is published once as a GitHub release with its installer.
 # See docs/BUILD_AND_RELEASE.md.
 name: Test and build
 
@@ -71,9 +71,17 @@ jobs:
           name: BAMS-Setup
           path: dist/BAMS-Setup-*.exe
           retention-days: 30
-      - name: Publish the release (tags only)
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Publish the release (a new version on main, or a tag v*)
+        # every version (server/version.py) that reaches main is published once under Releases, with its installer
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" dist/BAMS-Setup-*.exe --title "Break Area Management System $GITHUB_REF_NAME" --notes-file docs/RELEASE_NOTES.md
+        run: |
+          v=$(python -c "import sys; sys.path.insert(0, 'server'); from version import VERSION; print(VERSION)")
+          if gh release view "v$v" > /dev/null 2>&1; then
+            echo "Release v$v already exists - raise VERSION in server/version.py to publish a new one."
+            exit 0
+          fi
+          gh release create "v$v" dist/BAMS-Setup-*.exe --target "$GITHUB_SHA" \
+            --title "Break Area Management System $v" --notes-file docs/RELEASE_NOTES.md

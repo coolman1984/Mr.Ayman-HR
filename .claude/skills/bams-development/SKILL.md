@@ -60,7 +60,8 @@ Two ways to run:
 ## Build and release
 
 See `docs/BUILD_AND_RELEASE.md`. Bump `server/version.py`, update `DEVELOPMENT_HISTORY.md` +
-`docs/RELEASE_NOTES.md`, merge, tag `vX.Y.Z` → GitHub builds and publishes `BAMS-Setup-X.Y.Z.exe`.
+`docs/RELEASE_NOTES.md`, merge → GitHub builds and publishes `BAMS-Setup-X.Y.Z.exe` as release `vX.Y.Z`
+(once per version). This session cannot push tags (git proxy 403) – releases come from the workflow on main.
 Check a local compile on Linux: `pip install --target <dir> nuitka ordered-set zstandard patchelf`, then
 `python -m nuitka --standalone … server/bams_main.py` (see `tools/build_windows.py` for the options).
 
@@ -81,3 +82,4 @@ Check a local compile on Linux: `pip install --target <dir> nuitka ordered-set z
 - Before login: 64 kB requests and max 10 failed logins per minute per address (`too_many_failures`).
 - Tests must build the situation they check (e.g. write a `.part` file) instead of relying on timing; CI machines
   are faster/slower than the dev machine. CI checkout needs `fetch-depth: 0` (upgrade tests read old commits).
+- Tags cannot be pushed from the Claude session (403): the workflow publishes the release on main by itself.
