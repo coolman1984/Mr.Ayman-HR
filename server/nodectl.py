@@ -27,7 +27,7 @@ from node import write_atomic  # noqa: E402
 
 
 def load_cfg():
-    root = os.path.dirname(HERE)
+    root = os.environ.get('BAMS_HOME') or os.path.dirname(HERE)  # installed program: %ProgramData%\BAMS
     path = os.environ.get('BAMS_CONFIG') or os.path.join(root, 'config.json')
     cfg = {}
     if os.path.exists(path):

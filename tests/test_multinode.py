@@ -4,6 +4,7 @@ TCP proxy that the test can cut to simulate network failures."""
 import hashlib
 import json
 import os
+import shutil
 import sqlite3
 import time
 import unittest
@@ -927,6 +928,67 @@ class T33_PeopleAndProfiles(Base):
         self.converged()
         viewer.login('logviewer', 'Look-only77')
         self.assertFalse([x for x in viewer.get('/api/audit?limit=1000')['rows'] if x['entity'] in ('users', 'profiles', 'nodes')])
+
+
+class T34_InstalledMode(unittest.TestCase):
+    """The installed program (BAMS.exe = server/bams_main.py with the web pages packed inside): data, settings and
+    backups live in BAMS_HOME (not in the program folder), the pages come from inside the program, nothing else of
+    the program folder can be fetched, the maintenance tools work, a second start does not start a second server."""
+
+    def test_installed_mode(self):
+        import subprocess
+        import sys
+        import tempfile
+        import urllib.request
+        from harness import Client, free_port
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        tmp = tempfile.mkdtemp(prefix='bams-installed-')
+        home, packed = os.path.join(tmp, 'ProgramData', 'BAMS'), os.path.join(tmp, 'packed')
+        os.makedirs(home)
+        os.makedirs(packed)
+        subprocess.check_call([sys.executable, os.path.join(root, 'tools', 'make_assets.py'), os.path.join(packed, '_assets.py')],
+                              stdout=subprocess.DEVNULL)
+        port = free_port()
+        with open(os.path.join(home, 'config.json'), 'w') as f:
+            json.dump({'port': port, 'sync_port': free_port(), 'open_browser': True, 'host': '127.0.0.1'}, f)
+        env = {**os.environ, 'BAMS_HOME': home, 'PYTHONPATH': packed, 'BAMS_MACHINE_ID': 'installed-test'}
+        main = os.path.join(root, 'server', 'bams_main.py')
+        proc = subprocess.Popen([sys.executable, main, '--background'], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            base = f'http://127.0.0.1:{port}'
+            c = Client(base)
+            st = wait_until(lambda: self._try(c), 30, what='installed program started')
+            self.assertTrue(st['about']['installed'])
+            self.assertTrue(st['about']['version'])
+            with open(os.path.join(root, 'js', 'app.js'), 'rb') as f:
+                self.assertEqual(c.get('/js/app.js'), f.read())  # from inside the program
+            self.assertIn(b'Break Area', c.get('/'))
+            for bad in ('/js/../server/app.py', '/js/%2e%2e/server/app.py', '/css/../config.json', '/lib/../LICENSE.txt'):
+                with self.assertRaises(ApiError) as e:
+                    c.get(bad)
+                self.assertEqual(e.exception.code, 404, bad)
+            make_authority(type('S', (), {'client': lambda self: c})())
+            self.assertTrue(os.path.exists(os.path.join(home, 'data', 'auth.db')))
+            self.assertTrue(os.path.exists(os.path.join(home, 'data', 'bams.db')))
+            self.assertFalse(os.path.exists(os.path.join(root, 'server', 'data')))
+            # a second start (desktop icon while it already runs) ends by itself and does not disturb the first
+            second = subprocess.run([sys.executable, main, '--background'], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60)
+            self.assertEqual(second.returncode, 0)
+            self.assertTrue(self._try(c))
+        finally:
+            proc.terminate()
+            proc.wait(20)
+        # the maintenance tools find the data in BAMS_HOME
+        out = subprocess.run([sys.executable, main, 'tool', 'verify'], env=env, capture_output=True, text=True, timeout=120)
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    @staticmethod
+    def _try(c):
+        try:
+            return c.get('/api/auth/status')
+        except Exception:
+            return None
 
 
 if __name__ == '__main__':

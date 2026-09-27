@@ -40,9 +40,9 @@ from urllib.parse import parse_qs, quote, urlparse
 
 import ed25519
 from journal import canonical, now
+from version import VERSION as APP_VERSION
 
 PROTOCOL = 1
-APP_VERSION = '2.1'
 SCHEMA_VERSION = 3
 INVITE_MINUTES = 15
 OFFLINE_ERRORS = (ConnectionRefusedError, ConnectionResetError, ConnectionAbortedError, TimeoutError, socket.timeout, OSError)
