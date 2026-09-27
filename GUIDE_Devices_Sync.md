@@ -68,11 +68,25 @@ People who only use a **personal link** need nothing installed – a browser in 
 | Online – *Same data ✓* | Reachable, and the data was confirmed identical. |
 | Online – *n changes to send / receive* | Busy sharing. |
 | Switched off / not reachable – *last seen …* | Normal when the PC is off. It catches up when it comes back. |
-| Problem | See the text and **Problems & Alerts**. |
+| Problem | See the text and **Warnings**. |
 
 Buttons: **Share Now** (contact all PCs immediately), **Check Records** (checks that no old record was changed or
 deleted), **Add a PC**, **Edit** (name, address after an IP change), **Remove** (a lost, replaced or retired PC:
 it can no longer exchange data; everything it did before stays).
+
+**Backup administrator PC** (delegation – for when the administrator PC is off or you are away):
+
+* Next to a trusted PC press **Make backup admin**. At its next contact it receives a copy of the administrator key
+  over the encrypted connection (the key never travels in any other way). From then on people with administrator
+  rights can add people, change permissions and links there too, also while the administrator PC is switched off.
+* **End backup admin** takes it back: the PC deletes its copy of the key at its next contact.
+* Give the rights to a person as well (a deputy): GUIDE_Users_Permissions.md, section 7.
+* Every step is in the security log (*Backup administrator PC chosen*, *Administrator key sent to backup PC*, …).
+
+**Save the administrator key (once)** – a card at the top of Devices & Sync on the administrator PC. Choose a
+passphrase of at least 12 characters; a file `BAMS-administrator-key.json` is downloaded. Keep it on a USB stick in
+a safe place and the passphrase somewhere else. Only with it can a new PC become the administrator PC if the old one
+is lost for good. This works only on the administrator PC itself, never from another device.
 
 **Personal links** – an extra, faster way to log in (optional):
 
@@ -128,7 +142,9 @@ Entries from before the upgrade are marked “before upgrade”.
 * **Restore** brings the data back to the backup **on all PCs**. It is saved as one new change: the history is
   never rolled back, user accounts are not touched, and a change another PC made meanwhile (that this PC had
   not received yet) is kept. A safety backup is taken first, so a restore can always be undone.
-* Replication is **not** a backup: keep the automatic backups and the `extra_backup_dirs` copy.
+* Replication is **not** a backup: keep the automatic backups and a **second backup folder** on a USB drive or
+  another disk (Settings → Backups → *Choose a second backup folder*, on the PC itself). The Backups card warns while
+  there is none, and shows when the last copy failed.
 
 ---
 
@@ -136,17 +152,18 @@ Entries from before the upgrade are marked “before upgrade”.
 
 | Situation | What happens / what to do |
 |---|---|
-| Administrator PC switched off | Everybody works and shares data. Users, passwords and permissions can be changed again when it is back. |
+| Administrator PC switched off | Everybody works and shares data. Users, passwords and permissions can be changed again when it is back – or at once on a **backup administrator PC** (section 4). |
 | A user was disabled while a PC was off | That PC applies it as soon as it reconnects (the person is logged out there). |
 | A PC gets a new IP address | Nothing – it tells the others by itself when it connects to them. If a PC is never reached, Devices & Sync → Edit → Address. |
 | A user cannot change their password on their PC (message about the administrator PC) | Only for accounts from before the upgrade: log in once on the administrator PC (or change the password there). |
 | A PC is broken / lost | Devices & Sync → **Remove**. Install a new PC and add it (section 3). |
 | The data folder was copied to another PC | The system asks on that PC: *same computer* (continue) or *copy on a new PC* (the copied data is set aside, the PC joins as a new PC). |
-| The administrator PC is lost for good | Only possible if the **administrator key** was exported (below): run `BAMS.exe tool import-authority <file>` on another PC. Without it user management cannot be changed any more (all other work continues). |
+| The administrator PC is lost for good | If there is a **backup administrator PC**, it already has the key: nothing is lost. Otherwise only possible if the **administrator key** was saved (below): run `BAMS.exe tool import-authority <file>` on another PC. Without it user management cannot be changed any more (all other work continues). |
 | A new version of the program | Install it on **every PC that has the program** (devices that only use a link need nothing). Until a PC is updated it keeps working, but the changes of the updated PCs wait there (Warnings shows "uses a newer version") – nothing is lost. |
 | Database file damaged | `BAMS.exe tool rebuild` re-creates it from the history (the damaged file is kept). |
 
-**Export the administrator key once** (on the administrator PC, program stopped, command window as administrator):
+**Save the administrator key once**: Devices & Sync → *Save the administrator key* (section 4). The same with a
+command window (program stopped, as administrator):
 `"C:\Program Files\BAMS\BAMS.exe" tool export-authority E:\bams-admin-key.json` (portable version:
 `runtime\python\python.exe server\nodectl.py export-authority E:\bams-admin-key.json`) – choose a passphrase of at
 least 12 characters. Keep the file and the passphrase in a safe place, separately.

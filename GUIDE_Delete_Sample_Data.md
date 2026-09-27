@@ -1,8 +1,8 @@
 # Guide: Deleting the Sample Data
 
-The system starts filled with sample data (22 break areas with furniture, photos, issues, maintenance,
-inspections, transactions and 8 months of satisfaction surveys) so everyone can see how it works.
-When you start real use, remove it in one of the two ways below.
+At the very first start the administrator chooses **Start with my real data** (empty) or **Try it with sample data
+first** (22 break areas with furniture, photos, issues, maintenance, inspections, transactions and 8 months of
+satisfaction surveys). If you tried it with sample data, remove it before real use in one of the two ways below.
 
 > **Nothing is lost by mistake.** Every delete is recorded in the **Activity Log** (who, when, from which PC)
 > and can be undone from **Settings → Recycle Bin → Restore**.
@@ -13,7 +13,7 @@ When you start real use, remove it in one of the two ways below.
 
 1. Open **Settings** (left menu).
 2. In the **Server & Database** box, find **Start real use**.
-3. Click **Delete All Sample Data**.
+3. Click **Delete Sample Data** (shown only while sample data is there).
 4. Type `DELETE` and press **OK**.
 
 Result: all break areas with their inventory, photos, documents, issues, maintenance, inspections,
@@ -55,7 +55,8 @@ Notes:
 
 ## Bring the whole sample back
 
-If the database is empty, the Dashboard and Settings show **Load Sample Data**.
+If there are no break areas at all, the Dashboard and Settings show **Load Sample Data** (with a question first).
+It is never loaded by itself, and never on top of real data.
 
 ## Go back to an earlier moment
 

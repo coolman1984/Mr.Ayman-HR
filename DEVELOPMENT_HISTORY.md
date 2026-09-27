@@ -7,6 +7,45 @@ Version numbers: `server/version.py`. Pull requests: github.com/coolman1984/Mr.A
 
 ---
 
+## 2.3.0 – Help page, delegation, safer first start and backups (2026-09-27)
+
+**Why**: the owner uses the installed `BAMS.exe` and still saw "start.bat" in screens; asked for a user guide under
+Settings, a way to give administrator rights to somebody while away, and a whole-program review for missing
+essentials.
+
+**What changed**
+- **Help & User Guide** page (`js/help.js`, route `#/help`, left menu + Settings card): questions and answers per
+  topic with search; administrator topics only for people who manage users. Every screen change must update its
+  answer there.
+- **Delegation**: a person gets administrator rights with the *Administrator* profile (user name and password), and a
+  second PC can become a **backup administrator PC** (`Devices & Sync → Make backup admin`). It receives the
+  administrator key over the pinned TLS sync connection (`/sync/authority`, only to a PC whose roster role is
+  `backup`), can then sign people/permission changes, and deletes the key when the role ends (`Node.drop_backup_key`).
+- **Save the administrator key** from the screen (`/api/devices/export-key`, on the administrator PC itself only,
+  passphrase ≥ 12, same sealed format as `nodectl export-authority`), with a reminder card until done.
+- **Second backup folder** from Settings (`/api/backups/folder`, administrators on the PC itself only, refused inside
+  the data folder, tested by writing, stored in `config.json`, a backup is copied at once). Warning while backups
+  are on one disk only.
+- First start: the administrator chooses empty or sample data (no automatic sample data any more). *Delete Sample
+  Data* only while sample data is there (`settings.sampleData` or sample ids/names); *Load Sample Data* only when
+  there are no break areas.
+- Installed-program texts: no start.bat / reset_admin.bat; "cannot reach the program" help; login shows the site
+  name (no fixed SAMSUNG) and a hint for personal-link users; logout message for link users.
+- A failed save keeps the dialog open (the text is not lost). Activity Log page needs one of the log permissions.
+- Full Excel export: the *User Activity Log* sheet only for administrators; account/device/profile records never.
+- Add Person is greyed out on PCs that cannot manage people; security log labels for the new events.
+- Browser test updated (first-start choice, Help page), new `T36_BackupAdminPC`, `T37_AdminSafety`.
+
+**Mistakes and lessons**
+- The product review found the program still spoke about the portable version everywhere. Lesson: when the way of
+  delivery changes, search **all** user-visible texts (`js/`, server messages, tools, guides) for the old way.
+- Loading sample data by itself on the first start made it hard to tell real from sample data. Ask once instead.
+- A top-level `const` in a new classic script shares one global scope with `app.js`: keep names specific
+  (`hb`, `HELP_F`) to avoid a clash that stops the whole page.
+- Links (`<a>`) with `data-act` are ignored by the click handler unless they have `data-href` – use buttons for
+  in-page actions.
+- The browser test assumed automatic sample data; every change of the first screens must update that test.
+
 ## 2.2.0 – permanent release on GitHub (2026-09-27)
 
 - Every version that reaches `main` is now published once under **Releases** (`v<version>` with its

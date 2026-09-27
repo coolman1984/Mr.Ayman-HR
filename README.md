@@ -19,10 +19,14 @@ changes with them automatically and encrypted over the company network – see *
 Program: `C:\Program Files\BAMS` (compiled). Data, settings and backups: `C:\ProgramData\BAMS`.
 Developers: `docs/BUILD_AND_RELEASE.md`, rules in `CLAUDE.md`, history in `DEVELOPMENT_HISTORY.md`.
 
+**Help inside the program:** the **Help** page (left menu, also Settings → *Help & User Guide*) answers the usual
+questions of users and administrators in plain words, with a search box.
+
 ## Users, passwords and permissions
 
-- **First start:** open `http://localhost:8080/` **on the server PC itself** and create the administrator account
-  (this is not possible from other PCs, so nobody else can claim it).
+- **First start:** open the program on the administrator PC itself and create the administrator account (this is not
+  possible from other PCs, so nobody else can claim it). Then choose an empty system or sample data to try it;
+  sample data is removed in one step with **Settings → Delete Sample Data**.
 - Everybody logs in with a personal user name and password. The administrator manages accounts in
   **Users & Permissions**: add, disable, delete, reset password, unlock, log out now.
 - For each user the administrator ticks exactly what they may **see** (pages, survey results, logs) and **do**
@@ -38,7 +42,10 @@ Developers: `docs/BUILD_AND_RELEASE.md`, rules in `CLAUDE.md`, history in `DEVEL
   automatic logout after 30 minutes without activity (12 hours at most); new users must choose their own
   password at the first login. These values can be changed in `config.json`.
 - **Administrator password lost?** On the administrator PC run `"C:\Program Files\BAMS\BAMS.exe" tool reset-admin`
-  in a command window (portable version: **reset_admin.bat**) – it prints a new temporary password.
+  in a command window as administrator (program stopped; portable version: **reset_admin.bat**) – it prints a new
+  temporary password. A deputy administrator can also reset it.
+- **Deputy administrator / delegation:** give a trusted person the profile *Administrator* (user name and password) and,
+  for times when the administrator PC is off, make a second PC a **backup administrator PC** (Devices & Sync).
 - User accounts live in `data/auth.db`. Restoring a data backup never changes them (a copy is saved with every
   backup as `auth_<time>.db`).
 - With several PCs, users and permissions are managed on the **administrator PC** (the PC where the first
@@ -75,14 +82,14 @@ Installed program: the folders below are in `C:\ProgramData\BAMS`. Portable vers
 - Nothing is erased. Deleted records are only marked and can be restored in **Settings → Recycle Bin**.
 - If two people change the same record at the same time on the same PC, the second one is told to refresh instead of
   overwriting. Changes made at the same time on *different* PCs are merged by fixed rules and shown in
-  **Devices & Sync → Conflicts** when a person should look at them.
+  **Devices & Sync → To decide** when a person should look at them.
 - Every change is part of a chained, signed history that is copied to every PC: editing or deleting old entries is detected
-  (**Devices & Sync → Check History**).
+  (**Devices & Sync → Check Records**).
 - Backups: at every server start, every 6 hours when data changed, before any import or restore, and on demand
   (**Settings → Backup Now**). Each backup is checked for integrity. Restoring saves the current data first and is
   saved as a new change (history and logs are never rolled back; with several PCs all PCs follow).
-- Put a network drive in `extra_backup_dirs` in `config.json` to keep a second copy on another machine, e.g.
-  `"extra_backup_dirs": ["\\\\fileserver\\share\\BAMS-Backups"]`.
+- Keep a second copy on a USB drive or another disk: **Settings → Backups → Choose a second backup folder** (on the PC
+  itself). It is stored as `extra_backup_dirs` in `config.json`.
 
 ## Settings (`config.json`)
 
@@ -94,7 +101,8 @@ Restart the program after changing it.
 
 ## Upgrading from the single-server version
 
-Replace the program files (`server`, `js`, `css`, `index.html`, `lib`, `*.bat`) and start **start.bat** as usual.
+Run **BAMS-Setup.exe**; on its first install it offers to bring the data of the old portable folder (the one with
+`start.bat`). Portable (developers): replace the program files and start `start.bat` as usual.
 On the first start the existing data is backed up (`bams_…_pre-upgrade.db`), checked, and prepared for several PCs;
 all records, users, logs, photos and backups are kept. The PC becomes the administrator PC.
 

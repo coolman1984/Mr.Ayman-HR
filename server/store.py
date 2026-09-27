@@ -629,7 +629,7 @@ class Store:
         return out
 
     # ------------------------------------------------------------ export
-    def export_sheets(self):
+    def export_sheets(self, admin=False):
         with self.lock:
             c = self.conn
             areas = {r['id']: r['name'] for r in c.execute('SELECT id, name FROM areas')}
@@ -679,10 +679,12 @@ class Store:
             sheets.append(('Data Changes Log', ['#', 'Time', 'User', 'PC', 'IP', 'Action', 'Table', 'Record ID', 'Break Area', 'Operation', 'Changes'],
                            [[r['id'], r['ts'], r['user'], names.get(r['node'], r['node']), r['ip'], r['label'], r['entity'], r['entity_id'],
                              areas.get(r['area_id'], r['area_id']), r['op'], r['changes'] if r['op'] == 'update' else (r['after'] or r['before'])]
-                            for r in j.conn.execute("SELECT * FROM audit WHERE entity != 'users' ORDER BY ts, id")]))
-            sheets.append(('User Activity Log', ['#', 'Time', 'User', 'PC', 'IP', 'Type', 'Action', 'Target', 'Page', 'Detail'],
-                           [[r['id'], r['ts'], r['user'], names.get(r['node'], r['node']), r['ip'], r['type'], r['action'], r['target'], r['page'], r['detail']]
-                            for r in j.conn.execute('SELECT * FROM activity ORDER BY ts, id')]))
+                            for r in j.conn.execute("SELECT * FROM audit WHERE entity NOT IN ('users', 'nodes', 'userCommands', 'profiles') "
+                                                    "ORDER BY ts, id")]))
+            if admin:  # what each person clicked is for administrators only (like on the screen)
+                sheets.append(('User Activity Log', ['#', 'Time', 'User', 'PC', 'IP', 'Type', 'Action', 'Target', 'Page', 'Detail'],
+                               [[r['id'], r['ts'], r['user'], names.get(r['node'], r['node']), r['ip'], r['type'], r['action'], r['target'], r['page'],
+                                 r['detail']] for r in j.conn.execute('SELECT * FROM activity ORDER BY ts, id')]))
         return sheets
 
     def counts(self):

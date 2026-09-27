@@ -645,3 +645,31 @@ details.more > summary { cursor: pointer; font-weight: 600; color: var(--navy); 
 ul.tight { margin: 6px 0 0; padding-left: 18px; }
 ul.tight li { margin: 3px 0; }
 .about-line { margin-top: 14px; font-size: 11px; color: var(--muted); text-align: center; line-height: 1.5; }
+
+/* ---------- Help & User Guide ---------- */
+.help-card { display: flex; align-items: center; gap: 14px; text-decoration: none; color: inherit; border-left: 4px solid var(--blue-2); }
+.help-card > .ic { width: 28px; height: 28px; color: var(--blue-2); flex: none; }
+.help-card div { flex: 1; display: flex; flex-direction: column; gap: 3px; }
+.help-card small { color: var(--muted); line-height: 1.45; }
+.help-top .search { display: flex; }
+.help-top .search input { width: 100%; }
+.help-toc { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.help-chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line, #e4e7ec); background: #fff; border-radius: 999px;
+  padding: 5px 11px; font: inherit; font-size: 12.5px; cursor: pointer; color: var(--navy); }
+.help-chip:hover { background: #f2f6fc; }
+.help-chip .ic { width: 14px; height: 14px; }
+.help-sec { scroll-margin-top: 70px; }
+details.help-q { border-top: 1px solid var(--line, #eef0f3); }
+details.help-q:first-of-type { border-top: 0; }
+details.help-q > summary { cursor: pointer; padding: 10px 2px; font-weight: 600; color: #1d2939; }
+details.help-q > summary:hover { color: var(--blue-2); }
+.help-a { padding: 0 2px 12px 18px; line-height: 1.6; color: #344054; }
+.help-a ul, .help-a ol { margin: 6px 0; padding-left: 20px; }
+.link-hint { margin-top: 12px; text-align: center; }
+.bk-folder { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 10px; margin-bottom: 12px; border: 1px solid var(--line); }
+.bk-folder > .ic { width: 20px; height: 20px; flex: none; }
+.bk-folder div { flex: 1; display: flex; flex-direction: column; gap: 2px; }
+.bk-folder small { color: var(--muted); }
+.bk-folder.ok { background: #f0fdf4; border-color: #bbf7d0; } .bk-folder.ok > .ic { color: #16a34a; }
+.bk-folder.warn, .bk-folder.bad { background: #fff7ed; border-color: #fed7aa; } .bk-folder.warn > .ic, .bk-folder.bad > .ic { color: #ea580c; }
+.btn:disabled { opacity: .5; cursor: not-allowed; }

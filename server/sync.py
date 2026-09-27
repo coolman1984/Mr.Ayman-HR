@@ -1016,6 +1016,7 @@ class SyncService:
                        'port': self.port, 'addresses': local_ips(), 'vv': self.journal.vv()},
                 'nodes': out, 'summary': self.summary(), 'missing_files': sorted(self.missing)[:200],
                 'journal': self.journal.stats(), 'last_verify': self.journal.meta('last_verify'), 'alerts': self.journal.alerts(),
+                'key_saved': self.journal.meta('key_saved'),
                 'requests': self.join_requests() if self.node.is_authority else []}
 
     def _housekeeping(self):

@@ -125,7 +125,7 @@ def cmd_reset_admin():
     import uuid
     if not s.node.is_authority:
         if s.node.role == 'member':
-            print('This PC is not the administrator PC. Run reset_admin.bat on the administrator PC.')
+            print('This PC is not the administrator PC. Run this on the administrator PC (or a backup administrator PC).')
             return 1
         s.node.become_authority()
         me = s.node
@@ -156,7 +156,7 @@ def cmd_reset_admin():
                'created_at': ts, 'created_by': 'reset-admin', 'updated_at': ts, 'updated_by': 'reset-admin'}
         ops = [{'e': 'users', 'id': uid, 'op': 'insert', 's': row, 'r': {'id': uid, **row}}]
     a._write('reset-admin', '127.0.0.1', 'Emergency administrator password reset', ops)
-    a.log('Server PC', '127.0.0.1', 'admin-reset', name, 'Emergency password reset on the administrator PC (reset_admin.bat)')
+    a.log('Server PC', '127.0.0.1', 'admin-reset', name, 'Emergency password reset on the administrator PC (maintenance tool)')
     print('=' * 64)
     print(' Administrator access restored')
     print(f' User name:          {name}')
@@ -202,7 +202,7 @@ def main(argv):
     from system import lock_data
     lock = lock_data(load_cfg()[1])  # noqa: F841 - kept until the command ends
     if lock is None:
-        print('The program is running on this PC. Stop it first (Task Manager -> BAMS.exe, or close its window), then try again.')
+        print('The program is running on this PC. Stop it first (Task Manager -> Details -> BAMS.exe -> End task), then try again.')
         return 3
     cmds = {'status': cmd_status, 'verify': cmd_verify, 'rebuild': cmd_rebuild, 'reset-admin': cmd_reset_admin}
     if argv[:1] and argv[0] in cmds and len(argv) == 1:

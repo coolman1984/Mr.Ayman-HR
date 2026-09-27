@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import sqlite3
+import tempfile
 import time
 import unittest
 
@@ -1129,6 +1130,74 @@ class T36_BackupAdminPC(Base):
             self.clients[1].post('/api/users/save', {'username': 'too.late', 'full_name': 'Too Late', 'password': 'Late-pass77', 'perms': [], 'areas': None})
         self.assertEqual(e.exception.code, 403)
         self.assertFalse(os.path.exists(os.path.join(self.servers[1].data_dir, 'node', 'authority.key')))
+
+
+class T37_AdminSafety(unittest.TestCase):
+    """Version 2.3: second backup folder, saving the administrator key from the screen, Excel export without the
+    activity log for non-administrators, sample data only on request."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.S = Server('safety').start()
+        cls.ac = make_authority(cls.S)
+        cls.ac.post('/api/commit', {'label': 'data', 'ops': [area_op('Q1', 'Quay One')]})
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.S.cleanup()
+
+    def test_second_backup_folder(self):
+        ac = self.ac
+        self.assertEqual(ac.get('/api/backups/folder')['dirs'], [])
+        for bad in ('relative\\folder', os.path.join(self.S.data_dir, 'copies')):
+            with self.assertRaises(ApiError) as e:
+                ac.post('/api/backups/folder', {'path': bad})
+            self.assertEqual(e.exception.code, 400, bad)
+        usb = os.path.join(tempfile.mkdtemp(prefix='bams-usb-'), 'BAMS-Backups')
+        try:
+            r = ac.post('/api/backups/folder', {'path': usb})
+            self.assertTrue(r['ok'], r)
+            self.assertTrue(os.path.exists(os.path.join(usb, 'db', r['name'])), 'a backup is copied at once')
+            with open(self.S.cfg_path, encoding='utf-8') as f:
+                self.assertEqual(json.load(f)['extra_backup_dirs'], [usb])
+            name = ac.post('/api/backups')['name']
+            self.assertTrue(os.path.exists(os.path.join(usb, 'db', name)), 'every later backup too')
+            self.assertEqual(ac.get('/api/backups/folder')['dirs'], [usb])
+            ac.post('/api/backups/folder', {'path': ''})
+            self.assertEqual(ac.get('/api/backups/folder')['dirs'], [])
+            with open(self.S.cfg_path, encoding='utf-8') as f:
+                self.assertEqual(json.load(f)['extra_backup_dirs'], [])
+        finally:
+            shutil.rmtree(os.path.dirname(usb), ignore_errors=True)
+
+    def test_save_administrator_key(self):
+        ac = self.ac
+        self.assertFalse(ac.get('/api/devices')['key_saved'])
+        with self.assertRaises(ApiError) as e:
+            ac.post('/api/devices/export-key', {'passphrase': 'too short'})
+        self.assertEqual(e.exception.code, 400)
+        box = ac.post('/api/devices/export-key', {'passphrase': 'a long passphrase 2026'})
+        with open(os.path.join(self.S.data_dir, 'node', 'authority.key')) as f:
+            seed = f.read().strip()
+        self.assertNotIn(seed, json.dumps(box), 'the key is never sent readable')
+        import nodectl
+        self.assertEqual(nodectl.unseal(box, 'a long passphrase 2026').hex(), seed)
+        self.assertTrue(ac.get('/api/devices')['key_saved'])
+
+    def test_export_activity_log_only_for_administrators(self):
+        import io
+        import zipfile
+        ac = self.ac
+
+        def sheets(c):
+            z = zipfile.ZipFile(io.BytesIO(c.get('/api/export.xlsx')))
+            return z.read('xl/workbook.xml').decode()
+        self.assertIn('User Activity Log', sheets(ac))
+        ac.post('/api/users/save', {'username': 'report.reader', 'full_name': 'Report Reader', 'password': 'Quarter-77x', 'must_change': False,
+                                    'perms': ['dashboard.view', 'areas.view', 'report.full', 'logs.activity'], 'areas': None})
+        rc = self.S.client()
+        rc.login('report.reader', 'Quarter-77x')
+        self.assertNotIn('User Activity Log', sheets(rc))
 
 
 if __name__ == '__main__':

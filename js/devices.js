@@ -82,7 +82,7 @@ ASYNC.devices = async el => {
   if (DTAB.tab === 'history') return devHistory(el);
   if (DTAB.tab === 'links') return devLinks(el);
   if (DTAB.tab === 'problems') { el.innerHTML = devProblems(); return; }
-  el.innerHTML = devSummary() + devRequests() + devTable() + devThisPC();
+  el.innerHTML = devSummary() + devKeyCard() + devRequests() + devTable() + devThisPC();
 };
 
 function devSummary() {
@@ -95,6 +95,17 @@ function devSummary() {
       <div><h3>${esc(label)}</h3><p class="muted">${esc(tip)}</p>
         ${others.length ? `<p><b>${s.online}</b> of <b>${others.length}</b> other PC(s) reachable now · data confirmed identical with <b>${agree}</b>
           ${s.files_missing ? ` · <b>${s.files_missing}</b> photo(s)/document(s) still being copied` : ''}</p>` : ''}</div></div></div>`;
+}
+
+/* the administrator key on a USB stick: without it, a lost administrator PC means nobody can manage people any more */
+function devKeyCard() {
+  if (DEV.me.role !== 'authority') return '';
+  if (DEV.key_saved) return `<p class="hint">${ic('shield')} Administrator key saved on ${esc(fmt(DEV.key_saved.slice(0, 10)))}.
+    <a href="#/devices" data-act="devSaveKey">Save it again</a></p>`;
+  return `<div class="card mb attention"><div class="card-h">${ic('shield')}<h3>Save the administrator key (once)</h3></div>
+    <p>If this PC breaks or is lost, the saved key lets another PC take over managing people and permissions.
+      Save it on a USB stick and keep the stick and the passphrase in two different safe places.</p>
+    <button class="btn primary" data-act="devSaveKey">${ic('download')}Save Administrator Key</button></div>`;
 }
 
 function devRequests() {
@@ -118,7 +129,7 @@ function peerLine(n) {
   if (st.state === 'online') {
     const out = st.pending_out || 0, inn = st.pending_in || 0;
     extra = out || inn ? `<small>${out ? out + ' change(s) to send' : ''}${out && inn ? ' · ' : ''}${inn ? inn + ' to receive' : ''}</small>`
-      : st.agree === true ? '<small class="ok-txt">Same data ✓</small>' : st.agree === false ? '<small class="bad-txt">Data differs – see Problems</small>' : '';
+      : st.agree === true ? '<small class="ok-txt">Same data ✓</small>' : st.agree === false ? '<small class="bad-txt">Data differs – see Warnings</small>' : '';
   } else if (st.state === 'offline') extra = `<small>last seen ${agoTs(st.last_seen)}</small>`;
   else if (st.state === 'error') extra = `<small class="bad-txt" title="${esc(st.last_error || '')}">${esc(short(st.last_error || '', 70))}</small>`;
   return `<span class="badge ${c}">${l}</span>${extra ? '<br>' + extra : ''}`;
@@ -267,7 +278,7 @@ Object.assign(ACT, {
     toast('Checking the complete history…', false, 20000);
     try {
       const r = await api('POST', '/api/devices/verify', { all: true });
-      toast(r.ok ? `History checked: ${r.checked.toLocaleString()} changes, no problems` : `${r.problemCount} problem(s) found – see Problems & Alerts`, !r.ok, 8000);
+      toast(r.ok ? `History checked: ${r.checked.toLocaleString()} changes, no problems` : `${r.problemCount} problem(s) found – see Warnings`, !r.ok, 8000);
       rerender();
     } catch (e) { toast(e.message, true); }
   },
@@ -307,6 +318,25 @@ Object.assign(ACT, {
     if (!confirm(`Remove ${n.name} from the system?\n\nIt can no longer exchange data with the other PCs. Everything it did until now stays in the data and the history.\nUse this when a PC is replaced, lost or must not be used any more.`)) return;
     try { await api('POST', '/api/devices/revoke', { id: n.id }); toast(`${n.name} removed`); rerender(); }
     catch (e) { toast(e.message, true, 7000); }
+  },
+  devSaveKey() {
+    modal('Save the administrator key', `<p>Choose a passphrase of at least 12 characters. Write it on paper and keep it apart from the file.
+        Without the passphrase the file is useless – also for a thief.</p>
+      <div class="form-grid"><label class="full">Passphrase<input name="p1" type="password" minlength="12" required autocomplete="new-password"></label>
+      <label class="full">Repeat the passphrase<input name="p2" type="password" required autocomplete="new-password"></label></div>
+      <p class="hint">The file is saved in your Downloads folder as BAMS-administrator-key.json. Copy it to a USB stick.
+        To use it later on another PC, the developer or IT runs <b>BAMS.exe tool import-authority</b> with the file.</p>`, {
+      submit: 'Save Key',
+      async onSubmit(v) {
+        if (v.p1.length < 12) { toast('The passphrase must have at least 12 characters.', true); return false; }
+        if (v.p1 !== v.p2) { toast('The two passphrases are different.', true); return false; }
+        try {
+          const box = await api('POST', '/api/devices/export-key', { passphrase: v.p1 });
+          download('BAMS-administrator-key.json', JSON.stringify(box, null, 2), 'application/json');
+        } catch (e) { toast(e.message, true, 8000); return false; }
+        toast('Administrator key saved in Downloads – copy it to a USB stick');
+      }
+    });
   },
   async devBackup(d) {
     const n = DEV.nodes.find(x => x.id === d.id), on = d.on === '1';

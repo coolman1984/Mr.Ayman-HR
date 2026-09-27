@@ -52,8 +52,20 @@ class BrowserFlow(unittest.TestCase):
             a.fill('input[name=password]', 'Strong-pass1')
             a.fill('input[name=password2]', 'Strong-pass1')
             a.get_by_role('button', name='Create Administrator').click()
-            a.wait_for_selector('text=Break Area 01', timeout=30000)  # sample data loaded on the very first start
+            # first start: the administrator chooses empty or sample data (sample data is never loaded by itself)
+            a.get_by_text('Try it with sample data first').click()
+            a.wait_for_selector('text=Break Area 01', timeout=30000)
             self.shot(a, '01-admin-dashboard')
+            # ---- Help & User Guide: from Settings, admin answers included, search works
+            a.goto(self.A.base + '/#/settings')
+            a.wait_for_selector('text=Delete Sample Data')
+            a.locator('a.help-card').click()
+            a.wait_for_selector('text=How do I add a person?')
+            a.wait_for_selector('text=How do I give someone administrator rights (a deputy)?')
+            a.fill('#helpQ', 'sample data')
+            a.wait_for_selector('text=How do I delete the sample data?')
+            self.assertEqual(a.locator('text=How do I add a person?').count(), 0, 'search filters the answers')
+            self.shot(a, '01b-help')
             self.assertTrue(a.locator('#syncInd').is_hidden(), 'no sync light while only one PC exists')
             # ---- Devices & Sync: add a PC
             a.goto(self.A.base + '/#/devices')
@@ -203,7 +215,8 @@ class BrowserFlow(unittest.TestCase):
             a.fill('input[name=username]', ADMIN[0])
             a.fill('input[name=password]', ADMIN[1])
             a.get_by_role('button', name='Log In').click()
-            a.wait_for_selector('#syncInd', state='attached', timeout=30000)
+            a.get_by_text('Start with my real data').click()  # first start: empty system, no sample data
+            a.wait_for_selector('text=Add First Break Area', timeout=30000)
             a.goto(self.A.base + '/#/users')
             a.get_by_role('button', name='Add Person').click()
             a.wait_for_selector('#modal.open input[name=full_name]')
