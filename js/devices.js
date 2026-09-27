@@ -75,19 +75,18 @@ EXTRA_VIEWS.devices = () => {
 
 ASYNC.devices = async el => {
   DEV = await api('GET', '/api/devices');
-  $('#devAdd').innerHTML = DEV.me.role === 'authority' ? `<button class="btn primary" data-act="devInvite">${ic('plus')}Add a PC</button>` : '';
   $('#devSub').textContent = `This PC: ${DEV.me.name}${DEV.me.role === 'authority' ? (DEV.me.backup ? ' (backup administrator PC)' : ' (administrator PC)') : ''}`;
   syncIndicator(DEV.summary);
   if (DTAB.tab === 'conflicts') return devConflicts(el);
   if (DTAB.tab === 'history') return devHistory(el);
   if (DTAB.tab === 'links') return devLinks(el);
   if (DTAB.tab === 'problems') { el.innerHTML = devProblems(); return; }
-  el.innerHTML = devSummary() + devKeyCard() + devRequests() + devTable() + devThisPC();
+  el.innerHTML = devSummary() + devKeyCard() + devTable() + devThisPC();
 };
 
 function devSummary() {
   const s = DEV.summary, others = DEV.nodes.filter(n => !n.self && n.status === 'active');
-  const [label, tip] = s.state === 'single' ? ['Only this PC', 'No other PC has been added yet. Use "Add a PC" to share the data with other PCs.'] : (SYNC_TEXT[s.state] || SYNC_TEXT.pending);
+  const [label, tip] = s.state === 'single' ? ['Only this PC', 'No other PC yet. To add one: install the program on it, open it and choose "Join an existing system" – it joins by itself.'] : (SYNC_TEXT[s.state] || SYNC_TEXT.pending);
   const cls = { ok: 'green', pending: 'blue', offline: 'gray', problem: 'red', single: 'gray' }[s.state] || 'gray';
   const agree = others.filter(n => n.status_now.agree === true).length;
   return `<div class="card mb dev-sum s-${s.state}"><div class="dev-sum-in">
@@ -106,18 +105,6 @@ function devKeyCard() {
     <p>If this PC breaks or is lost, the saved key lets another PC take over managing people and permissions.
       Save it on a USB stick and keep the stick and the passphrase in two different safe places.</p>
     <button class="btn primary" data-act="devSaveKey">${ic('download')}Save Administrator Key</button></div>`;
-}
-
-function devRequests() {
-  const reqs = (DEV.requests || []).filter(r => r.status === 'pending');
-  if (!reqs.length) return '';
-  return `<div class="card mb attention"><div class="card-h">${ic('plug')}<h3>PCs asking to join</h3></div>
-    <p class="hint">The new PC shows a number. Approve only if it is the same number as here.</p>
-    <table class="tbl"><thead><tr><th>PC name</th><th>Address</th><th>Asked</th><th>Confirmation number</th><th></th></tr></thead><tbody>
-    ${reqs.map(r => `<tr><td><b>${esc(r.name)}</b></td><td class="mono">${esc(r.ip)}</td><td>${agoTs(r.created_at)}</td><td class="mono big-code">${esc(r.confirm)}</td>
-      <td class="nowrap"><button class="btn sm primary" data-act="devDecide" data-id="${r.id}" data-ok="1">${ic('check')}Approve</button>
-        <button class="btn sm" data-act="devDecide" data-id="${r.id}" data-ok="0">${ic('x')}Reject</button></td></tr>`).join('')}
-    </tbody></table></div>`;
 }
 
 function peerLine(n) {
@@ -282,23 +269,7 @@ Object.assign(ACT, {
       rerender();
     } catch (e) { toast(e.message, true); }
   },
-  async devInvite() {
-    let r;
-    try { r = await api('POST', '/api/devices/invite', {}); } catch (e) { return toast(e.message, true, 7000); }
-    modal('Add a PC', `<ol class="steps">
-        <li>On the new PC install the program (<b>BAMS-Setup.exe</b>), open it and choose <b>Join an existing system</b>.</li>
-        <li>Type this code there:<p class="big-code mono code-box">${r.code.split('-').reduce((o, g, i) => o + (i && i % 5 === 0 ? '<br>' : i ? ' ' : '') + esc(g), '')}</p></li>
-        <li>Come back here and press <b>Approve</b> when the new PC appears.</li></ol>
-      <p class="hint">The code works once, for 15 minutes. Nobody can join without your approval.</p>`,
-    { extra: `<button type="button" class="btn" data-act="copyLink" data-url="${esc(r.code)}">${ic('copy')}Copy code</button>` });
-    const poll = setInterval(() => { if (!$('#modal').classList.contains('open')) { clearInterval(poll); rerender(); } }, 1500);
-  },
-  async devDecide(d) {
-    const ok = d.ok === '1';
-    if (ok && !confirm('Is the confirmation number the same on the new PC\'s screen?\n\nOnly then approve.')) return;
-    try { await api('POST', '/api/devices/decide', { id: d.id, approve: ok }); toast(ok ? 'PC added – the data is being copied to it' : 'Request rejected'); rerender(); }
-    catch (e) { toast(e.message, true, 7000); }
-  },
+
   devEdit(d) {
     const n = DEV.nodes.find(x => x.id === d.id);
     modal(`PC – ${esc(n.name)}`, `<div class="form-grid">
@@ -375,7 +346,7 @@ function showSetup(local, st) {
   authScreen(`<h2>Welcome – set up this PC</h2>
     <div class="setup-choice">
       <button class="choice" data-act="setupCreate">${ic('user')}<b>This is the first (or only) PC</b><small>Create the administrator account. This PC becomes the administrator PC.</small></button>
-      <button class="choice" data-act="setupJoin">${ic('plug')}<b>Join an existing system</b><small>The system already runs on the administrator PC. You need its address and a pairing code from the administrator.</small></button>
+      <button class="choice" data-act="setupJoin">${ic('plug')}<b>Join an existing system</b><small>The program already runs on the administrator PC. This PC finds it in the network by itself and copies all data.</small></button>
     </div>`);
 }
 function showCreate() {
@@ -394,35 +365,28 @@ function showCreate() {
 }
 function showJoin(name) {
   authScreen(`<h2>Join an existing system</h2>
-    <p class="muted">Ask the administrator for the code (on the administrator PC: <b>Devices &amp; Sync → Add a PC</b>).</p>
+    <p class="muted" id="joinFind">Looking for the administrator PC in the network…</p>
+    <div id="joinFound"></div>
     <form class="auth-form" data-form="join">
-      <label>Code<input name="code" required class="mono" autocapitalize="characters" spellcheck="false" placeholder="XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX"></label>
       <label>Name of this PC<input name="name" required placeholder="e.g. HR Office PC" value="${esc(name || '')}"></label>
-      <label class="hidden" id="joinAddr">Administrator PC address (only if asked)<input name="address" class="mono" placeholder="e.g. 192.168.1.10"></label>
+      <label>Administrator PC address<input name="address" id="joinAddress" class="mono" required placeholder="e.g. 192.168.1.10"></label>
       <p class="auth-msg" id="authMsg"></p>
       <button class="btn primary">${ic('plug')}Join</button>
       <button type="button" class="btn" data-act="reloadPage">${ic('arrowLeft')}Back</button>
     </form>`);
+  api('POST', '/api/join/discover', {}).then(r => {
+    const f = r.found || [], box = $('#joinFind');
+    if (!box) return;
+    if (!f.length) { box.textContent = 'The administrator PC was not found by itself. Type its address below (shown on the administrator PC in Settings).'; return; }
+    box.textContent = f.length === 1 ? 'Administrator PC found:' : 'Choose the administrator PC:';
+    $('#joinFound').innerHTML = f.map(x => `<button type="button" class="choice" data-act="joinPick" data-address="${esc(x.address)}">${ic('check')}<b>${esc(x.name)}</b><small class="mono">${esc(x.address)}</small></button>`).join('');
+    $('#joinAddress').value = f[0].address;
+  }).catch(() => { const box = $('#joinFind'); if (box) box.textContent = 'Type the address of the administrator PC below (shown on the administrator PC in Settings).'; });
 }
 let JOIN_POLL;
-function showJoinWait(j) {
-  authScreen(`<h2>Waiting for the administrator</h2>
-    <p>The request was sent to <b>${esc((j.authority || {}).name || 'the administrator PC')}</b>. Ask the administrator to approve it in <b>Devices &amp; Sync</b>.</p>
-    <p>The administrator will see this number on the administrator PC:</p><p class="big-code mono" id="joinCode">${esc(j.confirm)}</p>
-    <p class="auth-msg" id="authMsg"></p>
-    <button type="button" class="btn" data-act="joinCancel">${ic('x')}Cancel</button>`);
-  clearInterval(JOIN_POLL);
-  JOIN_POLL = setInterval(async () => {
-    try {
-      const r = await api('GET', '/api/join/status');
-      if (r.status === 'approved') { clearInterval(JOIN_POLL); showReceiving(); }
-      else if (r.status === 'rejected' || r.status === 'none') { clearInterval(JOIN_POLL); authScreen(`<h2>The request was not approved</h2><p>Ask the administrator for a new pairing code.</p>
-        <button class="btn" data-act="reloadPage">${ic('restore')}Start again</button>`); }
-    } catch (e) { /* keep waiting */ }
-  }, 2000);
-}
+function showJoinWait() { showReceiving(); }
 function showReceiving() {
-  authScreen(`<h2>Approved – copying the data</h2><p>This PC now receives the user accounts and all data from the other PCs. This can take a few minutes the first time.</p>
+  authScreen(`<h2>Joined – copying the data</h2><p>This PC now receives the user accounts and all data from the other PCs. This can take a few minutes the first time.</p>
     <p class="muted" id="authMsg">Please wait…</p>`);
   clearInterval(JOIN_POLL);
   JOIN_POLL = setInterval(async () => {
@@ -448,6 +412,7 @@ function showMoved(st) {
 Object.assign(ACT, {
   setupCreate: () => showCreate(),
   setupJoin: () => showJoin(SETUP_NAME),
+  joinPick: d => { const a = $('#joinAddress'); if (a) a.value = d.address; },
   async joinCancel() { try { await api('POST', '/api/join/cancel', {}); } catch (e) { /* ignore */ } location.reload(); },
   async movedSame() { await api('POST', '/api/node/moved', { choice: 'same' }); location.reload(); },
   async movedNew() {
@@ -464,11 +429,10 @@ document.addEventListener('submit', async e => {
   msg.textContent = '';
   btn.disabled = true;
   try {
-    const r = await api('POST', '/api/join', { address: (d.address || '').trim(), code: d.code.trim(), name: d.name.trim() });
-    showJoinWait(r);
+    await api('POST', '/api/join', { address: (d.address || '').trim(), code: '', name: d.name.trim() });
+    showReceiving();
   } catch (err) {
     msg.textContent = err.message;
-    if (/reached|address/.test(err.message)) $('#joinAddr').classList.remove('hidden');  // the code's address did not work: let them type it
   }
   finally { btn.disabled = false; }
 });

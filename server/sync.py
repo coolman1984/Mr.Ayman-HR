@@ -250,7 +250,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(400, {'error': 'bad length'})
             n = int(raw)
             path = self.path.split('?')[0]
-            open_paths = ('/sync/challenge', '/sync/session', '/sync/join', '/sync/join-status')
+            open_paths = ('/sync/challenge', '/sync/session', '/sync/join', '/sync/join-status', '/sync/hello')
             if path in open_paths:
                 limit = 64 * 1024  # nothing large before a PC has proven who it is
             elif not svc.session_known(self.headers):
@@ -700,6 +700,9 @@ class SyncService:
             return 200, {'challenge': ch, 'node': self.node.id}, 'application/json', {}
         if p == '/sync/session' and method == 'POST':
             return self._session(json.loads(body or b'{}'), ip)
+        if p == '/sync/hello' and method == 'POST':  # a new PC looks for the administrator PC in the network
+            return 200, {'authority': self.node.is_authority and not self.node.info.get('backup'), 'name': self.node.name,
+                         'cluster': self.node.info.get('cluster_id')}, 'application/json', {}
         if p == '/sync/join' and method == 'POST':
             return self._join(json.loads(body or b'{}'), ip)
         if p == '/sync/join-status' and method == 'POST':
@@ -836,6 +839,8 @@ class SyncService:
 
     def _join(self, d, ip):
         fields = {k: str(d.get(k) or '') for k in ('node', 'name', 'pub', 'cert_fp', 'port')}
+        if d.get('open'):
+            return self._open_join(fields, ip)
         given = str(d.get('mac') or '')
         with self.journal.lock:
             invites = self.journal.conn.execute('SELECT * FROM invites WHERE used_at IS NULL AND expires_at >= ?', (now(),)).fetchall()
@@ -863,6 +868,38 @@ class SyncService:
                                                                              f'{ip}:{port}', ip, code, 'pending', now(), inv['secret_hash']))
         self.auth.log('(new PC)', ip, 'pairing-request', fields['name'], f'PC {fields["name"]} ({ip}) asks to join; confirmation number {code}')
         return 200, {'request': rid, 'confirm': code, 'authority': {'node': self.node.id, 'name': self.node.name}}, 'application/json', {}
+
+    def _open_join(self, fields, ip):
+        """A new PC joins with the administrator PC's address only: it is added at once, no code and no approval
+        (the owner's choice for a small, trusted team; Devices & Sync -> Remove takes a PC out again)."""
+        if not self.node.is_authority or self.node.info.get('backup'):
+            return 403, {'error': 'This is not the administrator PC. Choose the administrator PC.'}, 'application/json', {}
+        try:
+            ok = len(bytes.fromhex(fields['pub'])) == 32 and len(bytes.fromhex(fields['cert_fp'])) == 32 and len(fields['node']) == 12
+        except ValueError:
+            ok = False
+        if not ok:
+            return 400, {'error': 'The identity of this PC is invalid.'}, 'application/json', {}
+        known = self.journal.roster().get(fields['node'])
+        if known:  # asked again (the first answer was lost): give the same, already approved request back
+            with self.journal.lock:
+                r = self.journal.conn.execute("SELECT * FROM join_requests WHERE node_id=? AND status='approved' ORDER BY created_at DESC",
+                                              (fields['node'],)).fetchone()
+            if (not r or known.get('status') != 'active' or known.get('pub') != fields['pub']
+                    or known.get('cert_fp') != fields['cert_fp']):
+                return 400, {'error': 'This PC was removed from the system or is already registered.'}, 'application/json', {}
+            return 200, {'request': r['id'], 'secret': r['secret'], 'confirm': '', 'status': 'approved',
+                         'authority': {'node': self.node.id, 'name': self.node.name}}, 'application/json', {}
+        rid, secret = secrets.token_hex(8), secrets.token_hex(16)
+        port = fields['port'] if fields['port'].isdigit() else str(self.port)
+        name = fields['name'][:60] or ip
+        with self.journal.lock:
+            self.journal.conn.execute('INSERT INTO join_requests (id, invite_id, node_id, name, pub, cert_fp, address, ip, confirm, status, created_at, secret) '
+                                      'VALUES (?,?,?,?,?,?,?,?,?,?,?,?)', (rid, '', fields['node'], name, fields['pub'], fields['cert_fp'],
+                                                                             f'{ip}:{port}', ip, '', 'pending', now(), secret))
+        self.decide(rid, True, {'display': 'Automatic (new PC)', 'id': ''})
+        return 200, {'request': rid, 'secret': secret, 'confirm': '', 'status': 'approved',
+                     'authority': {'node': self.node.id, 'name': self.node.name}}, 'application/json', {}
 
     def _join_status(self, d):
         with self.journal.lock:
@@ -935,10 +972,76 @@ class SyncService:
                     self.sessions.pop(sid, None)
 
     # ------------------------------------------------------------ pairing: new PC side
+    def discover(self, hosts=None, port=None):
+        """Looks for the administrator PC in the local network (every address of this PC's /24 networks)."""
+        port = int(port or self.port)
+        if hosts is None:
+            hosts = []
+            for ip in local_ips():
+                base = ip.rsplit('.', 1)[0]
+                hosts += [f'{base}.{i}' for i in range(1, 255) if f'{base}.{i}' != ip]
+        found = []
+
+        def probe(h):
+            c = Connection(self, h, port, '', None, timeout=1.5)
+            try:
+                r = c.request('POST', '/sync/hello', {})
+                if r.get('authority'):
+                    found.append({'address': f'{h}:{port}', 'name': r.get('name') or h})
+            except Exception:  # nothing there, or not our program
+                pass
+            finally:
+                c.close()
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(64) as ex:
+            list(ex.map(probe, hosts))
+        return sorted(found, key=lambda f: f['address'])
+
+    def join_open(self, address, device_name):
+        """Joins the administrator PC at this address: added at once, no code, no approval."""
+        if self.node.role != 'unconfigured' or self.auth.has_users():
+            raise ValueError('This PC is already set up.')
+        a = str(address or '').strip()
+        web = '://' in a  # the web address shown in Settings (http://…:<web port>/): the PCs share on the sync port
+        a = a.split('://', 1)[-1].split('/', 1)[0]
+        h, _, p = a.rpartition(':')
+        host, port = (h, int(p)) if h and p.isdigit() and not web else ((h or a) if web else a, self.port)
+        if not host:
+            raise ValueError('Type the address of the administrator PC, for example 192.168.1.10.')
+        if device_name:
+            self.node.set_name(device_name)
+        fields = {'node': self.node.id, 'name': self.node.name, 'pub': self.node.pub.hex(), 'cert_fp': self.node.cert_fp, 'port': str(self.port)}
+        c = None
+        try:
+            for attempt, prt in enumerate(dict.fromkeys([int(port), self.port])):  # typed port first, then the usual sync port
+                c = Connection(self, host, prt, '', None, timeout=15)
+                try:
+                    r = c.request('POST', '/sync/join', {**fields, 'open': True})
+                    port, fp = prt, c.peer_fp
+                    break
+                except (Offline, SyncError):
+                    c.close()
+                    if prt == self.port or attempt:
+                        raise
+        except Offline:
+            raise ValueError('The administrator PC cannot be reached. Check that it is switched on, that the program runs there, and '
+                             'that both PCs are on the company network.')
+        except SyncError as e:
+            raise ValueError(str(e).split(': ', 1)[-1])
+        finally:
+            c.close()
+        pending = {'address': f'{host}:{port}', 'fp': fp, 'request': r['request'], 'secret': r['secret'], 'confirm': '',
+                   'authority': r.get('authority') or {}, 'since': now()}
+        self.journal.set_meta('join', pending)
+        self.join_progress()  # already approved: becomes a member and starts copying now
+        return {'confirm': '', 'authority': pending['authority'], 'status': 'approved'}
+
     def join(self, address, code, device_name):
         """address is optional: normally it is inside the code."""
         if self.node.role != 'unconfigured' or self.auth.has_users():
             raise ValueError('This PC is already set up.')
+        if not str(code or '').strip():
+            return self.join_open(address, device_name)
         host, port, secret, fp_prefix = decode_code(code)
         if address and str(address).strip():
             h, _, p = str(address).strip().rpartition(':')

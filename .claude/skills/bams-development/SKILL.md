@@ -96,6 +96,8 @@ Check a local compile on Linux: `pip install --target <dir> nuitka ordered-set z
 - The PC list (`nodes`) has several authors (administrator + backup PCs): `_fold_roster` keeps the newest change per
   field by (hlc, origin, cseq); a removal is final. Any new multi-author table needs the same.
 - Before merging, wait for the automatic PR reviews too (they may arrive after CI is green).
+- Since 2.4 new PCs join without code or approval (`join_open`, `_open_join`, `discover`, `/sync/hello`); the code
+  method is still in `sync.py` (used by the test harness `pair()`), but not in the screens.
 - The first start asks empty / sample data (`firstStartChoice`); browser tests must click the choice.
 - Script files share one global scope: no short top-level names in new JS files. `<a data-act>` needs `data-href`
   to reach `ACT` – use `<button>` for in-page actions.

@@ -1,5 +1,12 @@
 # What is new
 
+## 2.4.0
+
+- Two simple ways to work: a **personal link** (open it, nothing else) or **user name and password** on a PC with the
+  program installed.
+- A new PC joins by itself: install the program, choose **Join an existing system** – it finds the administrator PC
+  in the network. No code and no approval any more ("Add a PC" is gone).
+
 ## 2.3.1
 
 - Several PCs: when the administrator PC and a backup administrator PC change the same PC at the same time, every

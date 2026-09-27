@@ -240,6 +240,14 @@ role ended are accepted (they are concurrent with the ending; refusing them only
 would break convergence). Full revocation of a delegated key needs key rotation. The key can also be saved as a passphrase-sealed file from the screen on the administrator PC
 itself (`/api/devices/export-key`, same format as `nodectl export-authority`).
 
+**Open join (2.4, owner's choice for a small trusted team):** the pairing code and the approval are not used by
+the screens any more. A new PC finds the administrator PC with an unauthenticated `/sync/hello` on the sync port of
+every address of its networks, or is given the address, and sends `/sync/join` with `open: true`; the administrator
+PC enrols it at once (an ordinary signed roster change). The first TLS contact is trusted and its fingerprint pinned
+from then on (trust on first use). Consequence: any PC running the program in the company network can join and
+receive all data; removal stays possible (Devices & Sync → Remove). The code method (`create_invite`, `decide`)
+is kept for a stricter mode later.
+
 **Threat model – protected against:** unknown PCs on the LAN (cannot join or sync), passive
 sniffing of sync traffic (TLS 1.3), active MITM between PCs (pinned certificates), replay of
 sync requests (single-use challenges, per-session HMAC counters), a normal PC or user forging

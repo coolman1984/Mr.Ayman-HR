@@ -41,18 +41,16 @@ With only one PC the light is not shown to anybody.
 
 1. On the new PC run **BAMS-Setup.exe** (the same file as on the administrator PC). Keep "Start with Windows"
    ticked, so the PC always shares its changes.
-2. The browser opens. Choose **Join an existing system**.
-3. On the **administrator PC** open **Devices & Sync → Add a PC**. It shows one **code**
-   (works once, for 15 minutes).
-4. On the new PC type the code and a name for the PC (e.g. "HR Office"), then press **Join**.
-   It shows a **6-digit number**. (Only if the new PC cannot find the administrator PC by itself it asks for its
-   address, e.g. `192.168.1.10`.)
-5. On the administrator PC the new PC appears under **PCs asking to join** with a number.
-   **Approve only if both numbers are the same.**
-6. The new PC copies the user accounts and all the data (a few minutes the first time), then shows the login
-   screen. Everybody logs in with their usual user name and password, or their personal link.
+2. The program opens. Choose **Join an existing system**.
+3. The new PC looks for the administrator PC in the network by itself and fills in its address. If it is not found,
+   type the address (shown on the administrator PC in **Settings**, e.g. `192.168.1.10`).
+4. Type a name for the PC (e.g. "HR Office") and press **Join**.
+5. The new PC is added at once – **no code and no approval** – and copies the user accounts and all the data (a few
+   minutes the first time), then shows the login screen. Everybody logs in with their usual user name and password.
 
-Nobody can join without a code *and* your approval. An unknown PC on the network cannot read or send data.
+The administrator PC must be switched on while a new PC joins. Nothing has to be done on it.
+(Version 2.4, on the owner's request for a small trusted team: any PC with the program in the company network can
+join. To take a PC out: **Devices & Sync → Remove**.)
 *Never copy the data folder (`C:\ProgramData\BAMS`) to another PC – the system would detect it and ask what to do.*
 
 People who only use a **personal link** need nothing installed – a browser in the same network is enough.
@@ -71,7 +69,7 @@ People who only use a **personal link** need nothing installed – a browser in 
 | Problem | See the text and **Warnings**. |
 
 Buttons: **Share Now** (contact all PCs immediately), **Check Records** (checks that no old record was changed or
-deleted), **Add a PC**, **Edit** (name, address after an IP change), **Remove** (a lost, replaced or retired PC:
+deleted), **Edit** (name, address after an IP change), **Remove** (a lost, replaced or retired PC:
 it can no longer exchange data; everything it did before stays).
 
 **Backup administrator PC** (delegation – for when the administrator PC is off or you are away):
