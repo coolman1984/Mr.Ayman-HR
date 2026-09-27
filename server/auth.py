@@ -331,15 +331,15 @@ class Auth:
         return rec
 
     def authority_hint(self):
-        name = ''
-        if self.journal and self.node and self.node.info.get('authority_node'):
-            n = self.journal.roster().get(self.node.info['authority_node']) or {}
-            name = n.get('name') or ''
-            addr = (n.get('address') or '').split(':')[0]
-            if addr:
-                name += f' ({addr})'
-        return ('User accounts and permissions can only be changed on the administrator PC' + (f' "{name}"' if name else '') +
-                '. Open the system on that PC (or its address in the browser) to make this change.')
+        names = []
+        if self.journal and self.node:
+            for n in self.journal.roster().values():
+                if n.get('status') == 'active' and (n.get('role') in ('authority', 'backup') or n['id'] == self.node.info.get('authority_node')):
+                    addr = (n.get('address') or '').split(':')[0]
+                    names.append(f'"{n.get("name") or n["id"]}"' + (f' ({addr})' if addr else ''))
+        where = (' ' + ' or '.join(names)) if names else ''
+        return ('People, permissions and PCs can only be changed on the administrator PC' + (' or a backup administrator PC' if len(names) > 1 else '') +
+                where + '. Open the system on that PC (or its address in the browser) to make this change.')
 
     # ------------------------------------------------------------ helpers
     @staticmethod

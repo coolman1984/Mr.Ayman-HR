@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import sqlite3
+import tempfile
 import time
 import unittest
 
@@ -1093,6 +1094,130 @@ class T35_SecondReview(unittest.TestCase):
                              capture_output=True, text=True, timeout=60)
         self.assertEqual(out.returncode, 3, out.stdout + out.stderr)
         self.assertIn('running', out.stdout)
+
+
+class T36_BackupAdminPC(Base):
+    """Delegation: the administrator makes another PC a backup administrator PC. It receives the administrator key at its
+    next contact and can then manage people while the administrator PC is switched off; ending the role removes the key."""
+
+    def test_backup_admin_pc(self):
+        ac, pc1, pc2 = self.ac, self.clients[1], self.clients[2]
+        pc1_id = self.servers[1].node_id
+        with self.assertRaises(ApiError):  # only an administrator PC can hand out the role
+            pc2.post('/api/devices/backup', {'id': self.servers[2].node_id, 'on': True})
+        with self.assertRaises(ApiError) as e:  # before: pc1 cannot manage people
+            pc1.post('/api/users/save', {'username': 'early.bird', 'full_name': 'Early Bird', 'password': 'Early-pass31', 'perms': ['dashboard.view'], 'areas': None})
+        self.assertEqual(e.exception.code, 403)
+        ac.post('/api/devices/backup', {'id': pc1_id, 'on': True})
+        wait_until(lambda: pc1.get('/api/users')['authority'], 40, what='backup PC received the administrator key')
+        self.assertTrue(next(n for n in ac.get('/api/devices')['nodes'] if n['id'] == pc1_id)['backup'])
+        self.assertFalse(pc2.get('/api/users')['authority'])
+        # the administrator PC is switched off: people are still managed on the backup PC
+        self.servers[0].stop()
+        pc1.post('/api/users/save', {'username': 'deputy.made', 'full_name': 'Made On Backup', 'password': 'Spare-key52x', 'must_change': False,
+                                     'perms': ['dashboard.view', 'areas.view'], 'areas': None})
+        wait_until(lambda: any(u['username'] == 'deputy.made' for u in pc2.get('/api/users')['users']), 30, what='user from backup PC on pc2')
+        self.servers[2].client().login('deputy.made', 'Spare-key52x')
+        self.servers[0].start()
+        ac = self.relogin(0)
+        self.converged()
+        self.assertTrue(any(u['username'] == 'deputy.made' for u in ac.get('/api/users')['users']))
+        self.assertTrue(ac.post('/api/devices/verify', {'all': True})['ok'])
+        # the role ends: the key is deleted on pc1, it can no longer manage people
+        ac.post('/api/devices/backup', {'id': pc1_id, 'on': False})
+        wait_until(lambda: not self.clients[1].get('/api/users')['authority'], 40, what='backup role ended on pc1')
+        with self.assertRaises(ApiError) as e:
+            self.clients[1].post('/api/users/save', {'username': 'too.late', 'full_name': 'Too Late', 'password': 'Late-pass77', 'perms': [], 'areas': None})
+        self.assertEqual(e.exception.code, 403)
+        self.assertFalse(os.path.exists(os.path.join(self.servers[1].data_dir, 'node', 'authority.key')))
+
+    def test_z_removed_while_off(self):
+        """Review 2.3: a backup PC may not save the key or remove the administrator PC, and a backup PC that is removed
+        while switched off deletes the key when the others tell it (it never receives its own removal)."""
+        ac, pc2 = self.relogin(0), self.clients[2]
+        pc2_id, admin_id = self.servers[2].node_id, self.servers[0].node_id
+        ac.post('/api/devices/backup', {'id': pc2_id, 'on': True})
+        wait_until(lambda: pc2.get('/api/users')['authority'], 40, what='pc2 became backup PC')
+        with self.assertRaises(ApiError) as e:
+            pc2.post('/api/devices/export-key', {'passphrase': 'a long passphrase 2026'})
+        self.assertEqual(e.exception.code, 403)
+        with self.assertRaises(ApiError):
+            pc2.post('/api/devices/revoke', {'id': admin_id})
+        self.assertEqual(next(n for n in ac.get('/api/devices')['nodes'] if n['id'] == admin_id)['status'], 'active')
+        key = os.path.join(self.servers[2].data_dir, 'node', 'authority.key')
+        self.servers[2].stop()
+        ac.post('/api/devices/revoke', {'id': pc2_id})
+        self.assertTrue(os.path.exists(key))
+        self.servers[2].start()
+        wait_until(lambda: not os.path.exists(key), 60, what='removed backup PC deleted the key')
+
+
+class T37_AdminSafety(unittest.TestCase):
+    """Version 2.3: second backup folder, saving the administrator key from the screen, Excel export without the
+    activity log for non-administrators, sample data only on request."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.S = Server('safety').start()
+        cls.ac = make_authority(cls.S)
+        cls.ac.post('/api/commit', {'label': 'data', 'ops': [area_op('Q1', 'Quay One')]})
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.S.cleanup()
+
+    def test_second_backup_folder(self):
+        ac = self.ac
+        self.assertEqual(ac.get('/api/backups/folder')['dirs'], [])
+        for bad in ('relative\\folder', os.path.join(self.S.data_dir, 'copies'), '\\\\fileserver\\share\\bams', '//fileserver/share/bams'):
+            with self.assertRaises(ApiError) as e:
+                ac.post('/api/backups/folder', {'path': bad})
+            self.assertEqual(e.exception.code, 400, bad)
+        usb = os.path.join(tempfile.mkdtemp(prefix='bams-usb-'), 'BAMS-Backups')
+        try:
+            r = ac.post('/api/backups/folder', {'path': usb})
+            self.assertTrue(r['ok'], r)
+            self.assertTrue(os.path.exists(os.path.join(usb, 'db', r['name'])), 'a backup is copied at once')
+            with open(self.S.cfg_path, encoding='utf-8') as f:
+                self.assertEqual(json.load(f)['extra_backup_dirs'], [usb])
+            name = ac.post('/api/backups')['name']
+            self.assertTrue(os.path.exists(os.path.join(usb, 'db', name)), 'every later backup too')
+            self.assertEqual(ac.get('/api/backups/folder')['dirs'], [usb])
+            ac.post('/api/backups/folder', {'path': ''})
+            self.assertEqual(ac.get('/api/backups/folder')['dirs'], [])
+            with open(self.S.cfg_path, encoding='utf-8') as f:
+                self.assertEqual(json.load(f)['extra_backup_dirs'], [])
+        finally:
+            shutil.rmtree(os.path.dirname(usb), ignore_errors=True)
+
+    def test_save_administrator_key(self):
+        ac = self.ac
+        self.assertFalse(ac.get('/api/devices')['key_saved'])
+        with self.assertRaises(ApiError) as e:
+            ac.post('/api/devices/export-key', {'passphrase': 'too short'})
+        self.assertEqual(e.exception.code, 400)
+        box = ac.post('/api/devices/export-key', {'passphrase': 'a long passphrase 2026'})
+        with open(os.path.join(self.S.data_dir, 'node', 'authority.key')) as f:
+            seed = f.read().strip()
+        self.assertNotIn(seed, json.dumps(box), 'the key is never sent readable')
+        import nodectl
+        self.assertEqual(nodectl.unseal(box, 'a long passphrase 2026').hex(), seed)
+        self.assertTrue(ac.get('/api/devices')['key_saved'])
+
+    def test_export_activity_log_only_for_administrators(self):
+        import io
+        import zipfile
+        ac = self.ac
+
+        def sheets(c):
+            z = zipfile.ZipFile(io.BytesIO(c.get('/api/export.xlsx')))
+            return z.read('xl/workbook.xml').decode()
+        self.assertIn('User Activity Log', sheets(ac))
+        ac.post('/api/users/save', {'username': 'report.reader', 'full_name': 'Report Reader', 'password': 'Quarter-77x', 'must_change': False,
+                                    'perms': ['dashboard.view', 'areas.view', 'report.full', 'logs.activity'], 'areas': None})
+        rc = self.S.client()
+        rc.login('report.reader', 'Quarter-77x')
+        self.assertNotIn('User Activity Log', sheets(rc))
 
 
 if __name__ == '__main__':

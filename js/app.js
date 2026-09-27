@@ -26,12 +26,12 @@ const canSettingsPage = () => can('settings.view', 'backups.manage', 'backups.re
 /* route -> permission(s) needed to open it */
 const PAGE_PERMS = {
   dashboard: ['dashboard.view'], areas: ['areas.view'], area: ['areas.view'], equipment: ['equipment.view'], transactions: ['transactions.view'],
-  maintenance: ['maintenance.view'], reports: ['reports.view'], logs: ['logs.view', 'users.manage'], users: ['users.manage'],
+  maintenance: ['maintenance.view'], reports: ['reports.view'], logs: ['logs.view', 'logs.activity', 'logs.security'], users: ['users.manage'],
   devices: ['users.manage']
 };
 /* pages added by other scripts (js/devices.js): route -> function(route) returning HTML */
 const EXTRA_VIEWS = {};
-const canPage = top => top === 'settings' ? canSettingsPage() : top === 'account' ? true : can(...(PAGE_PERMS[top] || ['dashboard.view']));
+const canPage = top => top === 'settings' ? canSettingsPage() : top === 'account' || top === 'help' ? true : can(...(PAGE_PERMS[top] || ['dashboard.view']));
 const firstPage = () => ['dashboard', 'areas', 'maintenance', 'equipment', 'transactions', 'reports', 'logs', 'users', 'settings'].find(canPage) || 'account';
 
 /* ============================== Server API ============================== */
@@ -42,7 +42,7 @@ async function api(method, url, body, { raw = false, blob = false } = {}) {
   try {
     res = await fetch(url, { method, headers, body: body === undefined ? undefined : raw ? body : JSON.stringify(body) });
   } catch (e) {
-    throw new Error('Cannot reach the server. Check that the server window is open on the host PC.');
+    throw new Error('Cannot reach the program. Check that the PC with the program is switched on and in the network.');
   }
   if (!res.ok) {
     let msg = res.status + ' ' + res.statusText;
@@ -118,7 +118,7 @@ async function save(label = 'Change', { force = false } = {}) {
     return true;
   } catch (err) {
     track('save-failed', label, err.message);
-    closeModal();
+    // the window stays open, so nothing typed is lost: fix the problem and press the button again
     try { await load(); } catch (e) { /* keep the screen */ }
     rerender();
     toast('Not saved: ' + err.message, true, 8000);
@@ -478,6 +478,7 @@ function renderShell(route) {
       ${link('#/users', 'users', 'Users &amp; Permissions', top === 'users')}
       ${link('#/devices', 'sync', 'Devices &amp; Sync', top === 'devices', typeof devicesNavBadge === 'function' ? devicesNavBadge() : '')}
       ${link('#/settings', 'settings', 'Settings', top === 'settings')}
+      ${link('#/help', 'help', 'Help', top === 'help')}
     </div>
     <div class="side-foot"><b>Better Break Areas</b>for a better workplace.</div>`;
 }
@@ -585,14 +586,13 @@ function viewWelcome() {
   return `<div class="card welcome">
     <div class="kic">${ic('database')}</div>
     <h2>Welcome to the ${esc(setting('systemName'))}</h2>
-    <p>${allAreas() ? 'The database is empty. Start by adding your first break area, bring over the data from the old browser version, or load demo data to try the system.'
+    <p>${allAreas() ? 'There are no break areas yet. Start by adding your first break area – or load sample data to try the system first.'
       : 'No break areas are assigned to your account yet. Ask the system administrator to give you access to your break areas.'}</p>
     <div class="filters" style="justify-content:center">
       ${can('areas.create') && allAreas() ? `<a class="btn primary" href="#/areas/new">${ic('plus')}Add First Break Area</a>` : ''}
-      ${can('data.import') ? `<label class="btn">${ic('upload')}Import Old Version Backup (JSON)<input type="file" accept=".json,application/json" data-act-change="importBackup" hidden></label>
-      <button class="btn" data-act="loadDemo">${ic('database')}Load Sample Data</button>` : ''}
+      ${can('data.import') ? `<button class="btn" data-act="loadDemo">${ic('database')}Load Sample Data</button>` : ''}
+      <a class="btn" href="#/help">${ic('help')}Help</a>
     </div>
-    ${can('data.import') ? '<p class="hint">To move data from the old version: open the old index.html, go to Settings &rarr; Download Backup (JSON), then import that file here.</p>' : ''}
   </div>`;
 }
 
@@ -1299,7 +1299,7 @@ function qrModal(a) {
     <div style="max-width:260px;margin:0 auto">${qrSVG(url)}</div>
     <p style="word-break:break-all" class="muted">${esc(url)}</p>
     <p class="hint">Scanning opens this break area profile (contents, status, latest updates and history).
-    Phones must be on the same company network as the server PC.</p></div>`, {
+    Phones must be on the same company network as this PC.</p></div>`, {
     extra: `<button type="button" class="btn" data-act="copyLink" data-url="${esc(url)}">${ic('copy')}Copy Link</button>
       ${can('report.labels') ? `<button type="button" class="btn primary" data-act="printLabel" data-id="${a.id}">${ic('printer')}Print Label</button>` : ''}`
   });
@@ -1500,6 +1500,9 @@ function viewReports() {
 function viewSettings() {
   const s = DB.settings, ro = can('settings.edit') ? '' : 'disabled';
   return `<div class="page-head"><h2>Settings</h2></div>
+  <a class="card mb help-card" href="#/help">${ic('help')}<div><b>Help &amp; User Guide</b>
+    <small>How to add people (with a link or a user name and password), give someone administrator rights, delete the sample data,
+    backups, several PCs – and answers to common questions.</small></div><span class="btn sm primary">Open</span></a>
   <div class="grid2 mb">
     ${can('settings.view') ? `<form class="card" data-form="settings"><fieldset class="plain" ${ro}>
       <div class="card-h">${ic('settings')}<h3>General</h3></div>
@@ -1519,20 +1522,26 @@ function viewSettings() {
       <div class="card-h">${ic('database')}<h3>Server &amp; Database</h3></div>
       ${can('settings.view') ? '<div data-async="serverInfo"><p class="muted">Loading…</p></div>' : ''}
       <div class="filters" style="margin-top:12px">
-        ${can('report.full') && allAreas() ? `<button class="btn primary" data-act="fullExport">${ic('download')}Full Excel Export (all data + logs)</button>` : ''}
-        ${can('data.import') ? `<label class="btn">${ic('upload')}Import Old Version (JSON)<input type="file" accept=".json,application/json" data-act-change="importBackup" hidden></label>` : ''}
+        ${can('report.full') && allAreas() ? `<button class="btn primary" data-act="fullExport">${ic('download')}Full Excel Export</button>` : ''}
       </div>
-      ${can('data.import') && allAreas() ? `<div class="start-fresh">
-        <div><b>Start real use</b><small>The system comes filled with sample data so everyone can see how it works.
-          When you are ready, delete it all in one step and add your real break areas.</small></div>
-        ${DB.areas.length ? `<button class="btn danger" data-act="clearAll">${ic('trash')}Delete All Sample Data</button>`
-          : `<button class="btn" data-act="loadDemo">${ic('database')}Load Sample Data</button>`}
+      ${can('data.import') ? `<details class="more"><summary>Advanced: bring data from the very first version</summary>
+        <p class="hint">Only if the break areas were kept in the old single-file version (index.html): there Settings &rarr; Download Backup (JSON), then:</p>
+        <label class="btn">${ic('upload')}Import Old Version (JSON)<input type="file" accept=".json,application/json" data-act-change="importBackup" hidden></label></details>` : ''}
+      ${can('data.import') && allAreas() && hasSample() ? `<div class="start-fresh">
+        <div><b>Start real use</b><small>The sample break areas are only for trying the system.
+          When you are ready, delete them in one step and add your real break areas.</small></div>
+        <button class="btn danger" data-act="clearAll">${ic('trash')}Delete Sample Data</button>
+      </div>` : ''}
+      ${can('data.import') && allAreas() && !DB.areas.length ? `<div class="start-fresh">
+        <div><b>Try the system</b><small>Load sample break areas to see how everything works. Delete them later in one step.</small></div>
+        <button class="btn" data-act="loadDemo">${ic('database')}Load Sample Data</button>
       </div>` : ''}
     </div>
   </div>
   <div class="grid2">
     ${can('backups.manage', 'backups.restore') ? `<div class="card">
       <div class="card-h">${ic('restore')}<h3>Backups</h3><span class="sp"></span>${can('backups.manage') ? `<button class="btn sm primary" data-act="backupNow">${ic('download')}Backup Now</button>` : ''}</div>
+      ${can('backups.manage') ? '<div data-async="backupFolder"></div>' : ''}
       <div data-async="backups"><p class="muted">Loading…</p></div>
     </div>` : ''}
     ${can('trash.restore') && allAreas() ? `<div class="card">
@@ -1559,13 +1568,17 @@ const SECURITY_EVENTS = [['login', 'Logged in'], ['logout', 'Logged out'], ['log
   ['node-enrolled', 'PC added'], ['node-revoked', 'PC removed'], ['node-changed', 'PC changed'], ['node-confirmed', 'PC confirmed'],
   ['integrity-check', 'History check'], ['conflict-resolved', 'Conflict resolved'], ['change-rejected', 'Change refused'],
   ['login-link', 'Logged in with personal link'], ['login-link-failed', 'Wrong or old personal link'], ['link-created', 'Personal link made'],
-  ['link-removed', 'Personal link switched off'], ['profile-saved', 'Profile saved'], ['profile-deleted', 'Profile deleted']];
+  ['link-removed', 'Personal link switched off'], ['profile-saved', 'Profile saved'], ['profile-deleted', 'Profile deleted'],
+  ['backup-set', 'Backup administrator PC chosen'], ['backup-removed', 'Backup administrator PC ended'], ['backup-started', 'This PC became backup administrator PC'],
+  ['backup-ended', 'This PC is no longer backup administrator PC'], ['backup-key-sent', 'Administrator key sent to backup PC'],
+  ['authority-exported', 'Administrator key saved as a file'], ['authority-imported', 'Administrator key brought back'], ['backup-folder', 'Second backup folder changed']];
 const SEC_LABEL = Object.fromEntries(SECURITY_EVENTS);
-const SEC_BAD = /failed|blocked|locked|denied|reset|deleted|disabled/;
+const SEC_BAD = /failed|blocked|locked|denied|reset|deleted|disabled|authority-|key-sent/;
 let LOGDATA = { rows: [], total: 0, users: [] };
 
 function viewLogs() {
   const tabs = LOG_TABS.filter(canLogTab);
+  if (!tabs.length) return viewNoAccess();
   if (!tabs.some(t => t[0] === F.log.tab)) F.log = { ...F.log, tab: tabs[0][0], type: '', area: '' };
   const f = F.log, audit = f.tab === 'audit';
   const types = audit ? Object.entries(OP_BADGE).map(([k, [l]]) => [k, l]) : f.tab === 'security' ? SECURITY_EVENTS : ACTIVITY_TYPES;
@@ -1649,6 +1662,17 @@ const ASYNC = {
     ${i.lastBackupError ? `<p class="err-box">${ic('alert')} Last backup problem: ${esc(i.lastBackupError)}</p>` : ''}
     <div class="counts">${counts}</div>`;
   },
+  async backupFolder(el) {
+    const f = await api('GET', '/api/backups/folder');
+    const dir = f.dirs[0];
+    const btn = f.admin && f.local ? `<button class="btn sm" data-act="backupFolder" data-path="${esc(dir || '')}">${ic('settings')}${dir ? 'Change' : 'Choose a second backup folder'}</button>` : '';
+    el.innerHTML = dir
+      ? `<div class="bk-folder ${f.error ? 'bad' : 'ok'}">${ic(f.error ? 'alert' : 'check')}<div><b>Every backup is also copied to ${esc(dir)}</b>
+          ${f.error ? `<small>The last copy failed: ${esc(f.error)}. Check that the drive is connected.</small>` : '<small>A second copy, so a broken disk does not lose the backups.</small>'}</div>${btn}</div>`
+      : `<div class="bk-folder warn">${ic('alert')}<div><b>The backups are only on this PC's disk</b>
+          <small>If this disk breaks, the backups are lost with it. Choose a second folder on a USB drive or another disk.
+          ${f.admin && !f.local ? 'Do this on the PC with the program itself.' : ''}</small></div>${btn}</div>`;
+  },
   async backups(el) {
     const list = await api('GET', '/api/backups');
     const kind = { auto: 'Automatic', startup: 'Server start', manual: 'Manual', 'pre-import': 'Before import', 'pre-restore': 'Before restore', 'pre-upgrade': 'Before upgrade' };
@@ -1674,7 +1698,8 @@ const ASYNC = {
 function authScreen(html) {
   document.body.classList.add('locked');
   closeModal();
-  $('#auth').innerHTML = `<div class="auth-card"><div class="logo">${esc((DB && setting('logoText')) || 'SAMSUNG')}</div>${html}</div>`;
+  const short = (DB && setting('logoText')) || (ABOUT && ABOUT.logoText) || '';
+  $('#auth').innerHTML = `<div class="auth-card">${short ? `<div class="logo">${esc(short)}</div>` : ''}${html}</div>`;
   const first = $('#auth input');
   if (first) first.focus();
 }
@@ -1683,13 +1708,14 @@ const pwRules = () => `At least ${(ME && ME.minPasswordLength) || 8} characters 
 function showLogin(msg = '') {
   if (document.body.classList.contains('locked') && $('#loginForm')) { if (msg) $('#authMsg').textContent = msg; return; }
   ME = null;
-  authScreen(`<h2>Break Area Management System</h2><p class="muted">Log in with your user name and password.</p>
+  authScreen(`<h2>${esc((ABOUT && ABOUT.systemName) || 'Break Area Management System')}</h2><p class="muted">Log in with your user name and password.</p>
     <form id="loginForm" class="auth-form" data-form="login" autocomplete="on">
       <label>User name<input name="username" autocomplete="username" required autocapitalize="none" spellcheck="false"></label>
       <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
       <p class="auth-msg" id="authMsg">${esc(msg)}</p>
       <button class="btn primary">${ic('user')}Log In</button>
     </form>
+    <p class="hint link-hint">${ic('link')} <b>You use a personal link?</b> Just open your link again (your bookmark) – no user name or password needed.</p>
     <p class="hint">Forgot your password? Ask the system administrator to set a new one.</p>${aboutLine()}`);
 }
 /* showSetup(): first start of a PC - see js/devices.js (create the administrator or join another PC) */
@@ -1808,7 +1834,8 @@ function permPicker(perms, profile) {
       <label class="fld">Profile<select name="role">${options(opts, profile)}</select></label>
       <button type="button" class="btn sm" data-act="permAll" data-on="1">${ic('check')}Select all</button>
       <button type="button" class="btn sm" data-act="permAll" data-on="0">${ic('x')}Clear all</button>
-      <span class="hint">Choosing a profile ticks the boxes for you. "Select all" gives everything except the administrator rights.</span></div>
+      <span class="hint">Choosing a profile ticks the boxes for you. "Select all" gives everything except the administrator rights.
+        To make someone a <b>deputy administrator</b>, choose the profile <b>Administrator</b> (they log in with a user name and password).</span></div>
     <div class="perm-grid">${permGroupsHTML(perms, true)}</div>`;
 }
 function wirePermPicker(form, profiles) {
@@ -1939,7 +1966,8 @@ function linkModal(name, token, fresh) {
       Opening it logs them in straight away under their own name – no user name, no password, nothing to install.</p>
     <input class="mono" readonly value="${esc(url)}" data-select-all style="width:100%">
     <div class="qr-box" style="max-width:220px;margin:12px auto">${qrSVG(url)}</div>
-    <ul class="hint tight"><li>Open it once on their PC or phone and save it as a bookmark – next time one click is enough.</li>
+    <ul class="hint tight"><li>Open it once on their own PC or phone and save it as a bookmark – next time one click is enough.
+        Do not save it on a PC that other people use.</li>
       <li>It works while this PC is switched on and in the same network.</li>
       <li>Treat it like a key: whoever has it works under this name. If it gets into the wrong hands, open the person and choose
         <b>New link</b> (the old one stops working at once).</li></ul>`,
@@ -2010,6 +2038,8 @@ ASYNC.users = async el => {
   if (el) el.innerHTML = userRowsHTML();
   const ro = $('#usersRO');
   if (ro) ro.innerHTML = USERS.authority ? '' : `<p class="err-box info">${ic('alert')} ${esc(USERS.authorityHint)}</p>`;
+  const add = $('.page-head button[data-act=userEdit]');  // people can only be added on the administrator PC (or backup)
+  if (add) { add.disabled = !USERS.authority; add.title = USERS.authority ? '' : USERS.authorityHint || ''; }
   const c = $('#userCount'); if (c) c.textContent = USERS.users.length + ' people · ' + USERS.users.filter(u => u.online).length + ' online now';
 };
 async function userAction(action, uid, confirmText, done) {
@@ -2040,7 +2070,7 @@ function userReset(uid) {
 async function loadSample() {
   const seed = buildSeed();
   const { userName, userRole, ...settings } = seed.settings;
-  DB = { ...DB, settings: { ...DEFAULT_SETTINGS, ...settings }, itemTypes: seed.itemTypes, areas: seed.areas, history: seed.history };
+  DB = { ...DB, settings: { ...DEFAULT_SETTINGS, ...settings, sampleData: true }, itemTypes: seed.itemTypes, areas: seed.areas, history: seed.history };
   return save('Load sample data', { force: true });
 }
 
@@ -2083,7 +2113,7 @@ const ACT = {
     try { await api('POST', '/api/auth/logout', {}); } catch (e) { /* logged out anyway */ }
     DB = null; SNAP = {};
     location.hash = '';
-    showLogin('You have been logged out.');
+    showLogin(ME && ME.login === 'link' ? 'You have been logged out. Open your personal link to come back.' : 'You have been logged out.');
   },
   reloadPage: () => location.reload(),
   genPw: (d, el) => { el.closest('label').querySelector('input').value = genPassword(); },
@@ -2237,16 +2267,31 @@ const ACT = {
     } catch (e) { toast('Export failed: ' + e.message, true); }
   },
   async removeLogo() { DB.settings.logoImage = ''; if (await save('Remove logo image')) rerender(); },
+  startEmpty: () => { closeModal(); location.hash = '#/dashboard'; rerender(); },
+  async startSample() { closeModal(); if (await loadSample()) { rerender(); toast('Sample data loaded – delete it in Settings when you start real use'); } },
   async loadDemo() {
-    if (DB.areas.length && !confirm('Replace the current data with the sample data?')) return;
+    if (DB.areas.length) return toast('Sample data can only be loaded into an empty system.', true);
+    if (!confirm('Load the sample break areas to try the system? You can delete them later with "Delete Sample Data".')) return;
     if (await loadSample()) { rerender(); toast('Sample data loaded'); }
   },
   async clearAll() {
-    const n = DB.areas.length;
-    const answer = prompt(`This deletes ALL ${n} break areas with their inventory, photos, documents, issues, surveys and history, so you can start with your real data.\n\nA backup is made first, and everything stays restorable from the Recycle Bin.\n\nType DELETE to confirm:`);
+    const sample = new Set(DB.areas.filter(isSampleArea).map(a => a.id)), n = sample.size, real = DB.areas.length - n;
+    const answer = prompt(`This deletes the ${n} sample break areas with their inventory, photos, documents, issues, surveys and history, so you can start with your real data.${real ? `\n\nYour ${real} other break area(s) are kept.` : ''}\n\nA backup is made first, and everything stays restorable from the Recycle Bin.\n\nType DELETE to confirm:`);
     if ((answer || '').trim().toUpperCase() !== 'DELETE') return toast('Nothing was deleted');
-    DB.areas = []; DB.history = [];
-    if (await save(`Delete all data – start fresh (${n} break areas)`, { force: true })) { location.hash = '#/dashboard'; rerender(); toast('All data deleted – you can now add your real break areas'); }
+    DB.areas = DB.areas.filter(a => !sample.has(a.id)); DB.history = DB.history.filter(h => !sample.has(h.areaId)); DB.settings.sampleData = false;
+    if (await save(`Delete sample data – start real use (${n} break areas)`, { force: true })) { location.hash = '#/dashboard'; rerender(); toast('Sample data deleted – you can now add your real break areas'); }
+  },
+  backupFolder(d) {
+    modal('Second backup folder', `<p>Every backup is also copied into this folder. Use a USB drive that stays connected, or another disk of this PC.</p>
+      <label class="fld">Folder<input name="path" value="${esc(d.path || '')}" placeholder="for example E:\\BAMS-Backups" autocomplete="off"></label>
+      <p class="hint">Leave it empty to stop the second copy. A backup is made at once to check the folder.</p>`, {
+      onSubmit: async v => {
+        const r = await api('POST', '/api/backups/folder', { path: (v.path || '').trim() });
+        if (!(v.path || '').trim()) toast('The second backup folder is no longer used');
+        else if (r.ok) toast('Saved – the backups are now also copied to this folder');
+        else toast('The folder is saved, but the copy failed: ' + r.error, true, 9000);
+      }
+    });
   },
   async backupNow() {
     try { const r = await api('POST', '/api/backups', {}); toast('Backup created: ' + r.name); rerender(); }
@@ -2396,10 +2441,18 @@ setInterval(async () => {
 const serverDown = e => {
   document.body.classList.add('locked');
   $('#auth').innerHTML = `<div class="auth-card"><div class="kic red" style="margin:0 auto 10px">${ic('alert')}</div><h2>Cannot connect to the server</h2>
-    <p>${esc(e.message)}</p><p class="hint">Start the system with <b>start.bat</b> on the server PC, then open the address shown in its window.
-    Opening index.html directly from the folder does not work.</p><button class="btn" data-act="reloadPage">${ic('restore')}Try again</button></div>`;
+    <p>${esc(e.message)}</p><p class="hint">Open the program from the desktop icon (or the Start menu) on the PC where it is installed.
+    If it still does not open, restart that PC. From another device, check that the PC with the program is switched on and in the same network.</p><button class="btn" data-act="reloadPage">${ic('restore')}Try again</button></div>`;
 };
 /* After a successful login: load the data the user may see and show their start page */
+let FIRST_START = false;
+function firstStartChoice() {
+  FIRST_START = false;
+  modal('Welcome! How do you want to start?', `<div class="setup-choice">
+      <button type="button" class="choice" data-act="startEmpty">${ic('plus')}<b>Start with my real data</b><small>An empty system: add your break areas and people. Recommended for real use.</small></button>
+      <button type="button" class="choice" data-act="startSample">${ic('database')}<b>Try it with sample data first</b><small>22 sample break areas to see how everything works. Delete them later in one step (Settings).</small></button>
+    </div>`, { locked: true });
+}
 async function start() {
   if (ME.must_change) {
     authScreen(`<h2>Welcome, ${esc(ME.full_name)}</h2><p class="muted">Please choose your own password to continue.</p>`);
@@ -2411,12 +2464,13 @@ async function start() {
   if (!DB.initialized && !DB.areas.length && can('data.import')) {
     try {
       const r = await api('POST', '/api/first-run', {});
-      if (r.loadSample) await loadSample();
+      if (r.loadSample) FIRST_START = true; // asked below: start empty or try with sample data
       else await load(); // another PC is loading it right now
     } catch (e) { /* the welcome screen offers "Load Sample Data" */ }
   }
   if (!canPage(parseRoute()[0])) history.replaceState(null, '', '#/' + firstPage());
   render();
+  if (FIRST_START) firstStartChoice();
   if (typeof refreshSync === 'function') refreshSync();
   track('session', 'open', navigator.userAgent);
   try {
@@ -2435,6 +2489,10 @@ let LAST_ACTIVE = Date.now();
 setInterval(() => {
   if (ME && !document.hidden && Date.now() - LAST_ACTIVE < 4 * 60000) fetch('/api/me', { credentials: 'same-origin' }).catch(() => {});
 }, 4 * 60000);
+/* the sample break areas are still there (marked when loaded; older systems: recognised by their names) */
+/* sample break areas: the fixed ids ba01..ba22 with their sample names (real break areas get random ids) */
+const isSampleArea = a => /^ba\d\d$/.test(a.id) && /^Break Area \d\d$/.test(a.name);
+const hasSample = () => DB.settings.sampleData !== false && DB.areas.some(isSampleArea);
 let ABOUT = null;
 const aboutLine = () => ABOUT ? `<p class="about-line">Version ${esc(ABOUT.version)} · ${esc(ABOUT.copyright)}</p>` : '';
 async function boot() {

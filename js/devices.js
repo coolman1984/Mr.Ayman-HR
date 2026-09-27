@@ -76,13 +76,13 @@ EXTRA_VIEWS.devices = () => {
 ASYNC.devices = async el => {
   DEV = await api('GET', '/api/devices');
   $('#devAdd').innerHTML = DEV.me.role === 'authority' ? `<button class="btn primary" data-act="devInvite">${ic('plus')}Add a PC</button>` : '';
-  $('#devSub').textContent = `This PC: ${DEV.me.name}${DEV.me.role === 'authority' ? ' (administrator PC)' : ''}`;
+  $('#devSub').textContent = `This PC: ${DEV.me.name}${DEV.me.role === 'authority' ? (DEV.me.backup ? ' (backup administrator PC)' : ' (administrator PC)') : ''}`;
   syncIndicator(DEV.summary);
   if (DTAB.tab === 'conflicts') return devConflicts(el);
   if (DTAB.tab === 'history') return devHistory(el);
   if (DTAB.tab === 'links') return devLinks(el);
   if (DTAB.tab === 'problems') { el.innerHTML = devProblems(); return; }
-  el.innerHTML = devSummary() + devRequests() + devTable() + devThisPC();
+  el.innerHTML = devSummary() + devKeyCard() + devRequests() + devTable() + devThisPC();
 };
 
 function devSummary() {
@@ -95,6 +95,17 @@ function devSummary() {
       <div><h3>${esc(label)}</h3><p class="muted">${esc(tip)}</p>
         ${others.length ? `<p><b>${s.online}</b> of <b>${others.length}</b> other PC(s) reachable now · data confirmed identical with <b>${agree}</b>
           ${s.files_missing ? ` · <b>${s.files_missing}</b> photo(s)/document(s) still being copied` : ''}</p>` : ''}</div></div></div>`;
+}
+
+/* the administrator key on a USB stick: without it, a lost administrator PC means nobody can manage people any more */
+function devKeyCard() {
+  if (DEV.me.role !== 'authority' || DEV.me.backup) return '';  // only the administrator PC itself saves the key
+  if (DEV.key_saved) return `<p class="hint">${ic('shield')} Administrator key saved on ${esc(fmt(DEV.key_saved.slice(0, 10)))}.
+    <button type="button" class="btn sm" data-act="devSaveKey">Save it again</button></p>`;
+  return `<div class="card mb attention"><div class="card-h">${ic('shield')}<h3>Save the administrator key (once)</h3></div>
+    <p>If this PC breaks or is lost, the saved key lets another PC take over managing people and permissions.
+      Save it on a USB stick and keep the stick and the passphrase in two different safe places.</p>
+    <button class="btn primary" data-act="devSaveKey">${ic('download')}Save Administrator Key</button></div>`;
 }
 
 function devRequests() {
@@ -118,7 +129,7 @@ function peerLine(n) {
   if (st.state === 'online') {
     const out = st.pending_out || 0, inn = st.pending_in || 0;
     extra = out || inn ? `<small>${out ? out + ' change(s) to send' : ''}${out && inn ? ' · ' : ''}${inn ? inn + ' to receive' : ''}</small>`
-      : st.agree === true ? '<small class="ok-txt">Same data ✓</small>' : st.agree === false ? '<small class="bad-txt">Data differs – see Problems</small>' : '';
+      : st.agree === true ? '<small class="ok-txt">Same data ✓</small>' : st.agree === false ? '<small class="bad-txt">Data differs – see Warnings</small>' : '';
   } else if (st.state === 'offline') extra = `<small>last seen ${agoTs(st.last_seen)}</small>`;
   else if (st.state === 'error') extra = `<small class="bad-txt" title="${esc(st.last_error || '')}">${esc(short(st.last_error || '', 70))}</small>`;
   return `<span class="badge ${c}">${l}</span>${extra ? '<br>' + extra : ''}`;
@@ -129,14 +140,20 @@ function devTable() {
   return `<div class="card mb"><div class="card-h">${ic('monitor')}<h3>PCs in this system</h3></div>
     <div class="tbl-wrap"><table class="tbl"><thead><tr><th>PC</th><th>Status</th><th>Last shared</th><th>Added</th><th></th></tr></thead><tbody>
     ${DEV.nodes.map(n => `<tr class="${n.status === 'revoked' ? 'muted' : ''}">
-      <td><b>${esc(n.name)}</b>${n.authority ? ' <span class="badge b-purple" title="User accounts and permissions are managed here">Administrator PC</span>' : ''}</td>
+      <td><b>${esc(n.name)}</b>${n.authority ? ' <span class="badge b-purple" title="People, permissions and PCs are managed here">Administrator PC</span>'
+        : n.backup ? ' <span class="badge b-blue" title="Can also manage people, permissions and PCs – for example while the administrator PC is switched off">Backup administrator PC</span>' : ''}</td>
       <td>${peerLine(n)}</td>
       <td class="nowrap">${n.self ? '-' : agoTs((n.status_now || {}).last_ok)}</td>
       <td class="nowrap">${n.enrolled_at ? fmt(n.enrolled_at.slice(0, 10)) : '-'}</td>
       <td class="nowrap">${admin && n.status === 'active' ? `<button class="btn sm" data-act="devEdit" data-id="${n.id}">${ic('edit')}Edit</button>
-        ${n.self ? '' : `<button class="btn sm danger" data-act="devRevoke" data-id="${n.id}">${ic('trash')}Remove</button>`}` : ''}</td></tr>`).join('')}
+        ${n.self || n.authority ? '' : `<button class="btn sm" data-act="devBackup" data-id="${n.id}" data-on="${n.backup ? '0' : '1'}"
+            title="${n.backup ? 'This PC stops managing people and permissions' : 'This PC can also manage people and permissions, e.g. while the administrator PC is off'}">${ic('shield')}${n.backup ? 'End backup admin' : 'Make backup admin'}</button>`}
+        ${n.self || (DEV.me.backup && n.authority) ? '' : `<button class="btn sm danger" data-act="devRevoke" data-id="${n.id}">${ic('trash')}Remove</button>`}` : ''}</td></tr>`).join('')}
     </tbody></table></div>
-    ${admin ? '' : '<p class="hint">PCs can be added, changed or removed only on the administrator PC.</p>'}</div>`;
+    ${admin ? `<p class="hint"><b>Backup administrator PC:</b> a second PC that can also manage people, permissions and PCs – useful when the
+      administrator PC is switched off or the administrator is away. Choose a PC that only trusted people use. Anybody who should manage
+      people also needs the profile <b>Administrator</b> (Users &amp; Permissions).</p>`
+      : '<p class="hint">PCs can be added, changed or removed only on the administrator PC or a backup administrator PC.</p>'}</div>`;
 }
 
 function devThisPC() {
@@ -261,7 +278,7 @@ Object.assign(ACT, {
     toast('Checking the complete history…', false, 20000);
     try {
       const r = await api('POST', '/api/devices/verify', { all: true });
-      toast(r.ok ? `History checked: ${r.checked.toLocaleString()} changes, no problems` : `${r.problemCount} problem(s) found – see Problems & Alerts`, !r.ok, 8000);
+      toast(r.ok ? `History checked: ${r.checked.toLocaleString()} changes, no problems` : `${r.problemCount} problem(s) found – see Warnings`, !r.ok, 8000);
       rerender();
     } catch (e) { toast(e.message, true); }
   },
@@ -269,7 +286,7 @@ Object.assign(ACT, {
     let r;
     try { r = await api('POST', '/api/devices/invite', {}); } catch (e) { return toast(e.message, true, 7000); }
     modal('Add a PC', `<ol class="steps">
-        <li>On the new PC start the program (<b>start.bat</b>) and choose <b>Join an existing system</b>.</li>
+        <li>On the new PC install the program (<b>BAMS-Setup.exe</b>), open it and choose <b>Join an existing system</b>.</li>
         <li>Type this code there:<p class="big-code mono code-box">${r.code.split('-').reduce((o, g, i) => o + (i && i % 5 === 0 ? '<br>' : i ? ' ' : '') + esc(g), '')}</p></li>
         <li>Come back here and press <b>Approve</b> when the new PC appears.</li></ol>
       <p class="hint">The code works once, for 15 minutes. Nobody can join without your approval.</p>`,
@@ -302,6 +319,32 @@ Object.assign(ACT, {
     try { await api('POST', '/api/devices/revoke', { id: n.id }); toast(`${n.name} removed`); rerender(); }
     catch (e) { toast(e.message, true, 7000); }
   },
+  devSaveKey() {
+    modal('Save the administrator key', `<p>Choose a passphrase of at least 12 characters. Write it on paper and keep it apart from the file.
+        Without the passphrase the file is useless – also for a thief.</p>
+      <div class="form-grid"><label class="full">Passphrase<input name="p1" type="password" minlength="12" required autocomplete="new-password"></label>
+      <label class="full">Repeat the passphrase<input name="p2" type="password" required autocomplete="new-password"></label></div>
+      <p class="hint">The file is saved in your Downloads folder as BAMS-administrator-key.json. Copy it to a USB stick.
+        To use it later on another PC, the developer or IT runs <b>BAMS.exe tool import-authority</b> with the file.</p>`, {
+      submit: 'Save Key',
+      async onSubmit(v) {
+        if (v.p1.length < 12) { toast('The passphrase must have at least 12 characters.', true); return false; }
+        if (v.p1 !== v.p2) { toast('The two passphrases are different.', true); return false; }
+        try {
+          const box = await api('POST', '/api/devices/export-key', { passphrase: v.p1 });
+          download('BAMS-administrator-key.json', JSON.stringify(box, null, 2), 'application/json');
+        } catch (e) { toast(e.message, true, 8000); return false; }
+        toast('Administrator key saved in Downloads – copy it to a USB stick');
+      }
+    });
+  },
+  async devBackup(d) {
+    const n = DEV.nodes.find(x => x.id === d.id), on = d.on === '1';
+    if (on && !confirm(`Make "${n.name}" a backup administrator PC?\n\nFrom there, people with administrator rights can manage people, permissions and PCs – also while this PC is switched off.\nChoose a PC that only trusted people use.`)) return;
+    if (!on && !confirm(`"${n.name}" stops being a backup administrator PC. Continue?`)) return;
+    try { await api('POST', '/api/devices/backup', { id: n.id, on }); toast(on ? `${n.name} becomes a backup administrator PC at its next contact` : 'Done'); rerender(); }
+    catch (e) { toast(e.message, true, 7000); }
+  },
   async devAck(d) { try { await api('POST', '/api/devices/ack', { key: d.key }); rerender(); } catch (e) { toast(e.message, true); } },
   conflictKeep: d => { const c = CONFLICTS[+d.i]; resolveConflict({ entity: c.entity, id: c.id, action: 'value', field: d.f, value: JSON.parse(d.v) }, 'Conflict resolved on all PCs'); },
   conflictDel: d => { const c = CONFLICTS[+d.i]; resolveConflict({ entity: c.entity, id: c.id, action: 'keep-deleted' }, 'It stays deleted'); },
@@ -326,7 +369,7 @@ function showSetup(local, st) {
   if (node.join) return showJoinWait(node.join);
   if (!local) {
     return authScreen(`<h2>System not set up yet</h2><p class="muted">This PC must first be set up <b>on the PC itself</b>
-      (the PC running start.bat) by opening <b>http://localhost:${esc(location.port || '80')}/</b> there.</p>
+      (where the program is installed) by opening the program there, or <b>http://localhost:${esc(location.port || '80')}/</b>.</p>
       <button class="btn" data-act="reloadPage">${ic('restore')}Try again</button>`);
   }
   authScreen(`<h2>Welcome – set up this PC</h2>
@@ -410,7 +453,7 @@ Object.assign(ACT, {
   async movedNew() {
     if (!confirm('Set this PC up as a new PC? The copied data folder is kept in data/copied-<date> and not used any more.')) return;
     await api('POST', '/api/node/moved', { choice: 'new' });
-    authScreen(`<h2>Please restart</h2><p>Close the black server window and start <b>start.bat</b> again. Then choose “Join an existing system”.</p>`);
+    authScreen(`<h2>Please restart this PC</h2><p>Restart the computer, then open the program again (desktop icon) and choose “Join an existing system”.</p>`);
   }
 });
 document.addEventListener('submit', async e => {

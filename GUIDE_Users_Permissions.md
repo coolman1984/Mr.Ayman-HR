@@ -13,8 +13,11 @@ The administrator decides with simple tick boxes what each person may open and d
 
 ## 1. First start – create the administrator
 
-1. On the **administrator PC** (the PC running `start.bat`) the browser opens by itself.
+1. Install **BAMS-Setup.exe** on the **administrator PC** and open the program (desktop icon). Choose
+   **This is the first (or only) PC**.
 2. Enter your full name, a user name (e.g. `ayman`) and a password, then click **Create Administrator**.
+3. Choose **Start with my real data** (empty) or **Try it with sample data first**. Sample data is deleted later in
+   one step: **Settings → Delete Sample Data**.
 
 > This screen only works on the PC itself. Other PCs with the program are added later with **Devices & Sync →
 > Add a PC** (see GUIDE_Devices_Sync.md). People who only use a link do **not** need the program on their device.
@@ -123,11 +126,34 @@ to their own tick. This is checked by the server for every request, not only hid
 - 5 wrong passwords → account locked for 15 minutes.
 - Automatic logout after 30 minutes without activity, and after 12 hours in any case.
 - You cannot delete or disable yourself, and there is always at least one user who can manage users.
-- All values can be changed in `config.json` (restart `start.bat` afterwards).
+- All values can be changed in `C:\ProgramData\BAMS\config.json` (restart the program afterwards).
 
 ---
 
 ## 6. Administrator password lost
 
-On the **administrator PC** double-click **reset_admin.bat**. It shows a new temporary password for the
+First ask a **deputy administrator** (see 7.) to reset it in **Users & Permissions**. Otherwise, on the
+**administrator PC**: stop the program (Task Manager → Details → BAMS.exe → End task), open a command window as
+administrator and run `"C:\Program Files\BAMS\BAMS.exe" tool reset-admin`. It shows a new temporary password for the
 administrator account. Log in with it and choose a new password. This action is recorded in the security log.
+
+---
+
+## 7. A deputy administrator (when you are away)
+
+Give a trusted person administrator rights at any time, and take them back at any time:
+
+1. **Users & Permissions** → open the person.
+2. **Logs in with: User name and password** (administrator rights are never possible with a personal link) and give
+   a temporary password.
+3. Profile **Administrator** (or tick the orange *Administrator rights* yourself) → **Save**.
+
+People, permissions and PCs can only be changed on the **administrator PC** (from any browser in the network), because
+only that PC holds the administrator key. If that PC may be switched off while you are away, also make a second PC a
+**backup administrator PC** (Devices & Sync → *Make backup admin*, see GUIDE_Devices_Sync.md). The deputy can then
+manage people there too. Everything they do is recorded with their name.
+
+## 8. Help inside the program
+
+**Help** (left menu, also **Settings → Help & User Guide**) answers the usual questions in plain words, with a search
+box. Administrators also see the administrator topics.

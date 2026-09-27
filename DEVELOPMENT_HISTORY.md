@@ -7,6 +7,67 @@ Version numbers: `server/version.py`. Pull requests: github.com/coolman1984/Mr.A
 
 ---
 
+## 2.3.0 – Help page, delegation, safer first start and backups (2026-09-27)
+
+**Why**: the owner uses the installed `BAMS.exe` and still saw "start.bat" in screens; asked for a user guide under
+Settings, a way to give administrator rights to somebody while away, and a whole-program review for missing
+essentials.
+
+**What changed**
+- **Help & User Guide** page (`js/help.js`, route `#/help`, left menu + Settings card): questions and answers per
+  topic with search; administrator topics only for people who manage users. Every screen change must update its
+  answer there.
+- **Delegation**: a person gets administrator rights with the *Administrator* profile (user name and password), and a
+  second PC can become a **backup administrator PC** (`Devices & Sync → Make backup admin`). It receives the
+  administrator key over the pinned TLS sync connection (`/sync/authority`, only to a PC whose roster role is
+  `backup`), can then sign people/permission changes, and deletes the key when the role ends (`Node.drop_backup_key`).
+- **Save the administrator key** from the screen (`/api/devices/export-key`, on the administrator PC itself only,
+  passphrase ≥ 12, same sealed format as `nodectl export-authority`), with a reminder card until done.
+- **Second backup folder** from Settings (`/api/backups/folder`, administrators on the PC itself only, refused inside
+  the data folder, tested by writing, stored in `config.json`, a backup is copied at once). Warning while backups
+  are on one disk only.
+- First start: the administrator chooses empty or sample data (no automatic sample data any more). *Delete Sample
+  Data* only while sample data is there (`settings.sampleData` or sample ids/names); *Load Sample Data* only when
+  there are no break areas.
+- Installed-program texts: no start.bat / reset_admin.bat; "cannot reach the program" help; login shows the site
+  name (no fixed SAMSUNG) and a hint for personal-link users; logout message for link users.
+- A failed save keeps the dialog open (the text is not lost). Activity Log page needs one of the log permissions.
+- Full Excel export: the *User Activity Log* sheet only for administrators; account/device/profile records never.
+- Add Person is greyed out on PCs that cannot manage people; security log labels for the new events.
+- Browser test updated (first-start choice, Help page), new `T36_BackupAdminPC`, `T37_AdminSafety`.
+
+**Mistakes and lessons**
+- The product review found the program still spoke about the portable version everywhere. Lesson: when the way of
+  delivery changes, search **all** user-visible texts (`js/`, server messages, tools, guides) for the old way.
+- Loading sample data by itself on the first start made it hard to tell real from sample data. Ask once instead.
+- A top-level `const` in a new classic script shares one global scope with `app.js`: keep names specific
+  (`helpBold`, `HELP_F`) to avoid a clash that stops the whole page.
+- Links (`<a>`) with `data-act` are ignored by the click handler unless they have `data-href` – use buttons for
+  in-page actions.
+- The browser test assumed automatic sample data; every change of the first screens must update that test.
+
+**Independent review of 2.3 – found and fixed (regression tests `T36.test_z_removed_while_off`, `T37`)**
+- HIGH: a backup administrator PC removed while switched off kept the administrator key for ever – a removed PC
+  never receives its own removal (every PC refuses it). Now it deletes the key when a PC answers "removed", and
+  checks its role at every start.
+- A backup PC could save (export) the administrator key and could remove the administrator PC → both refused (also
+  in the tool), the buttons are hidden there.
+- After a key import on a former backup PC the `backup` mark stayed, so another backup PC could end its role and
+  delete the real key → the mark is cleared on import; the administrator PC can never get the backup role.
+- PCs added on a backup PC named the backup PC as administrator PC → they get the real one.
+- *Delete Sample Data* trusted a flag that could stay on after the sample areas were gone, and then deleted **all**
+  break areas → it appears only while sample break areas exist and deletes only those (real ones are kept).
+- Backup folder: network folders refused (backups contain the password hashes), links resolved (`realpath`),
+  other folders from `config.json` kept, a damaged `config.json` gives a clear message.
+- Two help answers named buttons that do not exist; a "Save it again" link did nothing (`<a data-act>`).
+
+**Lessons**
+- A revoked PC is cut off from exactly the message that tells it so: anything a PC must undo when removed has to
+  be triggered by the refusal itself (and checked again at start), not by the roster change.
+- "Delegated" copies of an authority must have fewer powers than the original (no export, cannot remove the
+  original), otherwise ending the delegation means nothing.
+- A delete-everything button must be tied to what it deletes (the sample records), never to a flag that can drift.
+
 ## 2.2.0 – permanent release on GitHub (2026-09-27)
 
 - Every version that reaches `main` is now published once under **Releases** (`v<version>` with its

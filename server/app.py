@@ -1,7 +1,7 @@
 """Break Area Management System - local web server.
 
 Runs with the Python standard library only (no pip install needed).
-Start it with start.bat; every PC on the network can then open the address
+Installed with BAMS-Setup.exe (portable: start.bat); every PC on the network can then open the address
 printed in the console window. Everybody must log in; what each user may see and
 do is set by the administrator (Users page) and checked here for every request.
 """
@@ -81,6 +81,44 @@ def load_config():
         with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
             json.dump(cfg, f, indent=2)
     return cfg
+
+
+def set_backup_folder(folder):
+    """Choose (or with '' remove) the second backup folder of this PC. Stored in config.json of this PC only."""
+    if folder:
+        folder = os.path.normpath(folder)
+        if folder.startswith(('\\\\', '//')):
+            raise BadRequest('Choose a USB drive or another disk of this PC, not a network folder (the backups contain the passwords).')
+        if not os.path.isabs(folder):
+            raise BadRequest('Type the full folder, for example E:\\BAMS-Backups.')
+        inside = [os.path.normcase(os.path.realpath(d)) for d in (HOME, DATA_DIR, BACKUPS.dir)]
+        f = os.path.normcase(os.path.realpath(folder))
+        if any(f == d or f.startswith(d + os.sep) for d in inside):
+            raise BadRequest('Choose a folder on another disk or a USB drive, not inside the program data.')
+        try:
+            os.makedirs(folder, exist_ok=True)
+            test = os.path.join(folder, '.bams-write-test')
+            with open(test, 'w') as fh:
+                fh.write('ok')
+            os.remove(test)
+        except OSError:
+            raise BadRequest('This folder cannot be used (not found or no permission to write). Check the drive and try again.')
+    dirs = ([folder] if folder else []) + [d for d in CFG.get('extra_backup_dirs', [])[1:] if d]  # the screen sets the first one
+    try:
+        cfg = {}
+        if os.path.exists(CONFIG_PATH):
+            with open(CONFIG_PATH, encoding='utf-8') as fh:
+                cfg = json.load(fh)
+        cfg['extra_backup_dirs'] = dirs
+        tmp = CONFIG_PATH + '.tmp'
+        with open(tmp, 'w', encoding='utf-8') as fh:
+            json.dump(cfg, fh, indent=2)
+        os.replace(tmp, CONFIG_PATH)
+    except (OSError, ValueError):
+        raise BadRequest('The setting could not be saved (config.json is damaged or cannot be written).')
+    CFG['extra_backup_dirs'] = dirs
+    BACKUPS.extra = [resolve(d) for d in dirs]
+    BACKUPS.last_error = ''
 
 
 def resolve(p):
@@ -195,6 +233,23 @@ def lan_urls(port):
     except OSError:
         pass
     return urls
+
+
+def site_names():
+    """System name and short name for the login screen (shown before anybody is logged in)."""
+    out = {}
+    try:
+        with STORE.lock:
+            for k, v in STORE.conn.execute("SELECT id, value FROM settings WHERE id IN ('systemName', 'logoText', 'factory')"):
+                try:
+                    v = json.loads(v)
+                except (TypeError, ValueError):
+                    pass
+                if isinstance(v, str) and v.strip():
+                    out[k] = v.strip()[:80]
+    except Exception:  # noqa: BLE001 - only cosmetics for the login screen
+        pass
+    return out
 
 
 class NotLoggedIn(Exception):
@@ -428,7 +483,7 @@ class Handler(BaseHTTPRequestHandler):
             u = AUTH.session(self.token, self.ip, touch=False)
             self.u = u
             return self.send(200, {'hasUsers': AUTH.has_users(), 'local': self.ip in LOCAL_IPS, 'me': self.me() if u else None,
-                                   'node': self.node_status(), 'about': ABOUT})
+                                   'node': self.node_status(), 'about': {**ABOUT, **site_names()}})
         if p == '/api/join/status':
             if self.ip not in LOCAL_IPS or AUTH.has_users() and NODE.role != 'member':
                 raise Forbidden('Only on this PC itself.')
@@ -455,6 +510,10 @@ class Handler(BaseHTTPRequestHandler):
         if p == '/api/backups':
             self.need('backups.manage', 'backups.restore')
             return self.send(200, BACKUPS.list())
+        if p == '/api/backups/folder':
+            self.need('backups.manage')
+            return self.send(200, {'dirs': BACKUPS.extra, 'error': BACKUPS.last_error, 'local': self.ip in LOCAL_IPS,
+                                   'admin': is_admin(self.u)})
         if p == '/api/trash':
             self.need('trash.restore')
             self.need_all_areas()
@@ -497,7 +556,7 @@ class Handler(BaseHTTPRequestHandler):
             self.need('report.full')
             if self.u['areas'] is not None:
                 raise Forbidden('The complete export contains all break areas; you only have access to some of them.')
-            data = xlsx.build(STORE.export_sheets())
+            data = xlsx.build(STORE.export_sheets(admin=is_admin(self.u) and self.can('logs.activity')))
             log.info('EXPORT full workbook by %s (%s)', self.user, self.ip)
             STORE.log_activity(self.user, self.ip, [{'type': 'export', 'action': 'Full Excel export', 'target': 'All data'}])
             return self.send(200, data, TYPES['.xlsx'], {'Content-Disposition': f'attachment; filename="BAMS_Full_Export_{datetime.now():%Y-%m-%d_%H%M}.xlsx"'})
@@ -570,7 +629,7 @@ class Handler(BaseHTTPRequestHandler):
             raise BadRequest('Choose same or new')
         if p == '/api/auth/setup':
             if self.ip not in LOCAL_IPS:
-                raise Forbidden('The first administrator account can only be created on the server PC itself.')
+                raise Forbidden('The first administrator account can only be created on the PC with the program itself.')
             d = self.json_body()
             AUTH.setup(d.get('username'), d.get('full_name'), d.get('password'), self.ip)
             token, self.u = AUTH.login(d.get('username'), d.get('password'), self.ip, self.headers.get('User-Agent', ''))
@@ -631,6 +690,17 @@ class Handler(BaseHTTPRequestHandler):
             log.info('BACKUP manual by %s: %s', self.user, name)
             STORE.log_activity(self.user, self.ip, [{'type': 'backup', 'action': 'Backup created', 'target': name}])
             return self.send(200, {'name': name})
+        if p == '/api/backups/folder':  # a second folder (USB drive, other disk) that gets a copy of every backup
+            self.need('backups.manage')
+            if not is_admin(self.u):
+                raise Forbidden('Only an administrator can choose the backup folder.')
+            if self.ip not in LOCAL_IPS:
+                raise Forbidden('For safety, choose the backup folder on this PC itself.')
+            folder = str(self.json_body().get('path') or '').strip().strip('"')
+            set_backup_folder(folder)
+            AUTH.log(self.u['display'], self.ip, 'backup-folder', folder or '-', 'Second backup folder set' if folder else 'Second backup folder removed')
+            name = BACKUPS.create('manual') if folder else ''
+            return self.send(200, {'ok': not BACKUPS.last_error, 'error': BACKUPS.last_error, 'name': name})
         if p == '/api/backups/restore':
             self.need('backups.restore')
             d = self.json_body()
@@ -655,6 +725,20 @@ class Handler(BaseHTTPRequestHandler):
             d = self.json_body()
             action = p[len('/api/devices/'):]
             try:
+                if action == 'export-key':  # the administrator key, protected by a passphrase, as a file for a USB stick
+                    if self.ip not in LOCAL_IPS:
+                        raise Forbidden('For safety, save the administrator key on the administrator PC itself.')
+                    if not NODE.is_authority or NODE.info.get('backup'):
+                        raise Forbidden('Only the administrator PC can save the administrator key.')
+                    pw = str(d.get('passphrase') or '')
+                    if len(pw) < 12:
+                        raise BadRequest('The passphrase must have at least 12 characters.')
+                    import nodectl
+                    box = nodectl.seal(NODE.authority_seed, pw, {'cluster': NODE.info.get('cluster_id'), 'authority_pub': NODE.info.get('authority_pub'),
+                                                                 'exported': now(), 'from': NODE.name})
+                    JOURNAL.set_meta('key_saved', now())
+                    AUTH.log(self.u['display'], self.ip, 'authority-exported', NODE.name, 'Administrator key saved as a file (passphrase protected)')
+                    return self.send(200, box, headers={'Content-Disposition': 'attachment; filename="BAMS-administrator-key.json"'})
                 if action == 'invite':
                     return self.send(200, SYNC.create_invite(self.user))
                 if action == 'decide':
@@ -663,6 +747,8 @@ class Handler(BaseHTTPRequestHandler):
                     SYNC.update_node(str(d.get('id')), self.u, name=d.get('name'), address=d.get('address'))
                 elif action == 'revoke':
                     SYNC.update_node(str(d.get('id')), self.u, revoke=True)
+                elif action == 'backup':
+                    SYNC.set_backup(str(d.get('id')), self.u, bool(d.get('on')))
                 elif action == 'sync-now':
                     for st in SYNC.status.values():
                         st['fails'] = 0

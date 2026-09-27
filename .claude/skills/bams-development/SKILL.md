@@ -34,9 +34,10 @@ Two ways to run:
 | `server/nodectl.py` | maintenance tools (`BAMS.exe tool …`) |
 | `server/version.py` | VERSION, developer, copyright – the build reads it |
 | `js/app.js`, `js/devices.js` | whole UI (views, `ACT` actions, `modal`, `esc` for every value) |
+| `js/help.js` | Help & User Guide (`#/help`): Q&A per topic, admin topics hidden from others – **update it with every screen change** |
 | `tools/` | `make_assets.py`, `make_icon.py`, `build_windows.py` |
 | `installer/bams.iss` | Inno Setup script (install + update, firewall, autostart, old data import) |
-| `.github/workflows/build.yml` | tests + Windows build + release on tag `v*` |
+| `.github/workflows/build.yml` | tests + Windows build; publishes release `v<version>` from `main` |
 
 ## Invariants (never break)
 
@@ -49,6 +50,9 @@ Two ways to run:
 - Tokens/passwords/keys never in logs (`Handler.log_path` hides `/k/…`).
 - A new field or entity that older PCs would drop → raise `journal.SCHEMA` and `sync.SCHEMA_VERSION`.
 - Sharing cannot be switched off.
+- The administrator key leaves the administrator PC only: sealed with a passphrase (`export-key`, on the PC itself) or
+  over the pinned TLS sync connection to a PC whose roster role is `backup` (`/sync/authority`).
+- Local-only actions (first setup, key export, backup folder) check `self.ip in LOCAL_IPS`.
 - UI: English only, plain words; administrators see sync details, normal users only "Please tell the administrator".
 
 ## Tests
@@ -83,3 +87,11 @@ Check a local compile on Linux: `pip install --target <dir> nuitka ordered-set z
 - Tests must build the situation they check (e.g. write a `.part` file) instead of relying on timing; CI machines
   are faster/slower than the dev machine. CI checkout needs `fetch-depth: 0` (upgrade tests read old commits).
 - Tags cannot be pushed from the Claude session (403): the workflow publishes the release on main by itself.
+- The installed program is the normal case: never mention `start.bat`/`reset_admin.bat` in user texts (portable is
+  for developers only). Search `js/`, server messages and guides when delivery changes.
+- A removed (revoked) PC never receives its removal: undo local powers on the refusal itself and at start
+  (`check_backup_role`, `Revoked` handler). A backup administrator PC cannot export the key or remove the administrator PC.
+- Sample data = break areas `ba01..ba22` named "Break Area NN" (`isSampleArea`); Delete Sample Data removes only those.
+- The first start asks empty / sample data (`firstStartChoice`); browser tests must click the choice.
+- Script files share one global scope: no short top-level names in new JS files. `<a data-act>` needs `data-href`
+  to reach `ACT` – use `<button>` for in-page actions.

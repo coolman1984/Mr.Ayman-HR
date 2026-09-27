@@ -335,6 +335,10 @@ class SyncService:
 
     # ------------------------------------------------------------ lifecycle
     def start(self):
+        try:
+            self.check_backup_role()
+        except Exception as e:  # never stop the start for this
+            self.log(f'backup role check failed: {e}')
         # sharing is always on: it cannot be switched off on a PC, so nobody can keep their changes away from the others
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         ctx.minimum_version = ssl.TLSVersion.TLSv1_2
@@ -477,6 +481,7 @@ class SyncService:
             else:
                 st['agree'] = None
             rep['files'] = self.fetch_files(c, peer)
+            self._collect_backup_key(c, peer)
             if pull_problem:
                 raise SyncError(pull_problem)  # everything else was still exchanged
             st.update(state='online', last_seen=now(), last_ok=now(), fails=0, last_error='', error_kind='')
@@ -485,6 +490,8 @@ class SyncService:
             st.update(state='offline', fails=st.get('fails', 0) + 1, last_error=str(e)[:300], error_kind='offline')
             rep['result'] = 'offline'
         except Revoked as e:
+            if self.node.drop_backup_key():  # a removed backup administrator PC never receives its removal: drop the key now
+                self.auth.log('This PC', '', 'backup-ended', self.node.name, 'This PC was removed: the administrator key was deleted here')
             self.journal.alert('revoked', 'The administrator removed this PC from the system. It no longer exchanges data with the other PCs.',
                                self.node.id, key='revoked|self')
             st.update(state='error', fails=st.get('fails', 0) + 1, last_error=str(e)[:300], error_kind='revoked')
@@ -528,13 +535,51 @@ class SyncService:
             except Exception as e:  # noqa: BLE001 - stored in the journal; the housekeeping applies it again shortly
                 self.log(f'applying received changes delayed ({type(part).__name__}): {e}')
 
+    def check_backup_role(self):
+        """At start: a backup administrator PC whose role ended (or that was removed) deletes the key."""
+        me = self.journal.roster().get(self.node.id)
+        if self.node.info.get('backup') and (not me or me.get('status') != 'active' or me.get('role') != 'backup') and self.node.drop_backup_key():
+            self.auth.log('This PC', '', 'backup-ended', self.node.name, 'No longer a backup administrator PC: the administrator key was deleted here')
+
     def _after_roster_change(self, accepted):
-        """React when the administrator revoked this PC or when it was enrolled."""
+        """React when the administrator revoked this PC, or started / ended its backup administrator role."""
         if any(r['env']['kind'] == 'admin' for r in accepted):
             me = self.journal.roster().get(self.node.id)
             if me and me.get('status') == 'revoked':
                 self.journal.alert('revoked', 'The administrator removed this PC from the system. It no longer exchanges data with the other PCs.',
                                    self.node.id, key='revoked|self')
+            if (not me or me.get('status') != 'active' or me.get('role') != 'backup') and self.node.drop_backup_key():
+                self.auth.log('This PC', '', 'backup-ended', self.node.name, 'No longer a backup administrator PC: the administrator key was deleted here')
+
+    def _collect_backup_key(self, c, peer):
+        """This PC was made a backup administrator PC: fetch the key from a PC that has it."""
+        me = self.journal.roster().get(self.node.id) or {}
+        if self.node.is_authority or me.get('role') != 'backup' or me.get('status') != 'active':
+            return
+        try:
+            r = c.request('POST', '/sync/authority', {})
+            self.node.install_backup_key(bytes.fromhex(r['seed']))
+        except (SyncError, Offline, ValueError, KeyError, TypeError):
+            return  # that PC does not have the key (or refused): the next administrator PC contact brings it
+        self.auth.log('This PC', '', 'backup-started', self.node.name, 'This PC is now a backup administrator PC')
+
+    def set_backup(self, node_id, actor, on):
+        """The administrator makes another PC a backup administrator PC (or ends it). A backup administrator PC can
+        manage people, permissions and PCs while the administrator PC is switched off."""
+        if not self.node.is_authority:
+            raise ValueError('Only an administrator PC can do this.')
+        n = self.journal.roster().get(node_id)
+        if not n or n.get('status') != 'active':
+            raise ValueError('Unknown or removed PC.')
+        if node_id in (self.node.id, self.node.info.get('authority_node')) or n.get('role') == 'authority':
+            raise ValueError('This is the administrator PC itself.')
+        if bool(on) == (n.get('role') == 'backup'):
+            return
+        self.auth._write(actor, '', ('Backup administrator PC: ' if on else 'End backup administrator PC: ') + (n.get('name') or node_id),
+                         [{'e': 'nodes', 'id': node_id, 'op': 'update', 'noaudit': True, 's': {'role': 'backup' if on else 'member'}}])
+        self.auth.log(actor['display'], '', 'backup-set' if on else 'backup-removed', n.get('name') or node_id,
+                      'Made a backup administrator PC (it receives the administrator key at its next contact)' if on
+                      else 'No longer a backup administrator PC (it deletes the administrator key)')
 
     # ------------------------------------------------------------ attachments (client side)
     def missing_files(self):
@@ -681,6 +726,14 @@ class SyncService:
             if acc:
                 self.sync_logger.write({'event': 'push-received', 'peer': peer, 'accepted': len(acc), 'deferred': deferred})
             return 200, {'accepted': len(acc), 'deferred': deferred, 'problems': problems, 'vv': self.journal.vv_hashes()}, 'application/json', {}
+        if p == '/sync/authority' and method == 'POST':
+            # a backup administrator PC collects the administrator key - only over this authenticated, pinned TLS session
+            n = self.journal.roster().get(peer) or {}
+            if not self.node.is_authority or n.get('role') != 'backup' or n.get('status') != 'active':
+                return 403, {'error': 'not a backup administrator PC'}, 'application/json', {}
+            self.auth.log('PC ' + (n.get('name') or peer), '', 'backup-key-sent', n.get('name') or peer,
+                          'The administrator key was handed to the backup administrator PC')
+            return 200, {'seed': self.node.authority_seed.hex()}, 'application/json', {}
         if p == '/sync/file' and method == 'GET':
             src = parse_qs(url.query).get('path', [''])[0]
             if not src.startswith('/files/'):
@@ -821,9 +874,15 @@ class SyncService:
             return 403, {'error': 'proof invalid'}, 'application/json', {}
         out = {'status': r['status']}
         if r['status'] == 'approved':
-            out.update(cluster=self.node.info['cluster_id'], authority_pub=self.node.info['authority_pub'], authority_node=self.node.id,
-                       authority_name=self.node.name, address_seen=r['address'])
+            out.update(cluster=self.node.info['cluster_id'], authority_pub=self.node.info['authority_pub'], authority_node=self.node.info.get('authority_node') or self.node.id,
+                       authority_name=self._authority_name(), address_seen=r['address'])
         return 200, out, 'application/json', {}
+
+    def _authority_name(self):
+        a = self.node.info.get('authority_node')
+        if not a or a == self.node.id:
+            return self.node.name
+        return (self.journal.roster().get(a) or {}).get('name') or self.node.name
 
     def join_requests(self):
         with self.journal.lock:
@@ -855,6 +914,8 @@ class SyncService:
             raise ValueError('Unknown PC')
         if node_id == self.node.id and revoke:
             raise ValueError('The administrator PC cannot remove itself.')
+        if revoke and self.node.info.get('backup') and (n.get('role') == 'authority' or node_id == self.node.info.get('authority_node')):
+            raise ValueError('A backup administrator PC cannot remove the administrator PC.')
         s = {}
         if name:
             s['name'] = str(name)[:60]
@@ -968,12 +1029,14 @@ class SyncService:
         for n in sorted(roster.values(), key=lambda x: (x['id'] != self.node.id, (x.get('name') or '').lower())):
             st = dict(self.peer_status(n['id'])) if n['id'] != self.node.id else {}
             st.pop('vv', None)
-            out.append({**n, 'self': n['id'] == self.node.id, 'authority': n['id'] == self.node.info.get('authority_node'),
+            out.append({**n, 'self': n['id'] == self.node.id, 'authority': n.get('role') == 'authority' or n['id'] == self.node.info.get('authority_node'),
+                        'backup': n.get('role') == 'backup',
                         'address': (self.overrides.get(n['id']) or n.get('address') or ''), 'status_now': st, 'contacted': n['id'] in peers})
         return {'me': {**self.node.public(), 'fingerprint': self.store.fingerprint(), 'app': APP_VERSION, 'schema': SCHEMA_VERSION,
                        'port': self.port, 'addresses': local_ips(), 'vv': self.journal.vv()},
                 'nodes': out, 'summary': self.summary(), 'missing_files': sorted(self.missing)[:200],
                 'journal': self.journal.stats(), 'last_verify': self.journal.meta('last_verify'), 'alerts': self.journal.alerts(),
+                'key_saved': self.journal.meta('key_saved'),
                 'requests': self.join_requests() if self.node.is_authority else []}
 
     def _housekeeping(self):

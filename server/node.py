@@ -167,8 +167,30 @@ class Node:
             raise ValueError('This key does not belong to this system.')
         write_atomic(os.path.join(self.dir, 'authority.key'), seed.hex())
         self.authority_seed = seed
-        self.info.update(role='authority', authority_node=self.id)
+        self.info.update(role='authority', authority_node=self.id, backup=False)
         self.save()
+
+    def install_backup_key(self, seed):
+        """Backup administrator PC: the administrator PC handed over its key, so people and permissions can also be
+        managed here while the administrator PC is switched off. Removed again when the administrator ends it."""
+        if ed25519.public_key(seed).hex() != self.info.get('authority_pub'):
+            raise ValueError('This key does not belong to this system.')
+        write_atomic(os.path.join(self.dir, 'authority.key'), seed.hex())
+        self.authority_seed = seed
+        self.info.update(role='authority', backup=True)
+        self.save()
+
+    def drop_backup_key(self):
+        """The administrator ended this PC's backup role (or removed the PC): the key is deleted here."""
+        if not self.info.get('backup'):
+            return False
+        p = os.path.join(self.dir, 'authority.key')
+        if os.path.exists(p):
+            os.remove(p)
+        self.authority_seed = None
+        self.info.update(role='member', backup=False)
+        self.save()
+        return True
 
     def new_epoch(self, reason):
         self.info.setdefault('old_replicas', []).append({'replica': self.replica, 'ended': _now(), 'reason': reason})
@@ -212,4 +234,5 @@ class Node:
 
     def public(self):
         return {'id': self.id, 'name': self.name, 'role': self.role, 'replica': self.replica, 'cluster': self.info.get('cluster_id'),
-                'authority_node': self.info.get('authority_node'), 'cert_fp': self.cert_fp, 'moved': self.moved}
+                'authority_node': self.info.get('authority_node'), 'cert_fp': self.cert_fp, 'moved': self.moved,
+                'backup': bool(self.info.get('backup'))}

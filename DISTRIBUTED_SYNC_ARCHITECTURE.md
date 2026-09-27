@@ -224,6 +224,18 @@ The administrator resolves one by choosing a value (a normal change that dominat
   Residual risk: the link is a bearer credential over LAN HTTP – whoever holds it acts as that person; the
   administrator replaces it with one click.
 
+**Delegation – backup administrator PC (2.3):** the administrator may give the roster role `backup` to one or more
+trusted, active PCs (an `admin` changeset like any device change). Such a PC asks the administrator PC for the
+authority seed over the existing pinned, mutually authenticated TLS session (`/sync/authority`); the administrator
+PC answers only if it holds the key itself and the requester's current roster role is `backup` and active. The PC
+then signs admin changesets with the same authority key (the key is the trust anchor, not the PC), marked
+`info.backup` so that it deletes the key again as soon as the roster no longer lists it as an active backup
+(`drop_backup_key`). Every hand-over is in the security log. Residual risk: while the role lasts, OS administrators
+of that PC can read the key, exactly as on the administrator PC – choose only a PC as trusted as that one. Two
+PCs signing admin changes offline at the same time is handled by the normal fold (last writer wins per field,
+conflicts flagged). The key can also be saved as a passphrase-sealed file from the screen on the administrator PC
+itself (`/api/devices/export-key`, same format as `nodectl export-authority`).
+
 **Threat model – protected against:** unknown PCs on the LAN (cannot join or sync), passive
 sniffing of sync traffic (TLS 1.3), active MITM between PCs (pinned certificates), replay of
 sync requests (single-use challenges, per-session HMAC counters), a normal PC or user forging
