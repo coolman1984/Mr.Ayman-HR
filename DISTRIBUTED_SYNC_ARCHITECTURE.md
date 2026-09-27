@@ -203,6 +203,19 @@ The administrator resolves one by choosing a value (a normal change that dominat
   PC's address, an 80-bit secret and 64 bits of its certificate fingerprint (39 characters). The new
   PC proves the secret with an HMAC, recognises the real administrator PC by the fingerprint, and the
   administrator approves after comparing a 6-digit confirmation number shown on both screens.
+* **Personal links** (optional, per user): `http://<PC>:<port>/k/<token>` logs that user in on any PC,
+  under their own name and permissions. `token` = first 168 bits of HMAC-SHA256(authority key,
+  `BAMS-LINK1|<user id>|<nonce>`), base64url – so only the administrator PC can create or show it again and
+  nothing secret is stored. The replicated user record carries only `link_hash` (SHA-256 of the token),
+  `link_nonce`, `link_at`, `link_by`, written by signed `admin` changesets. "New link" changes the nonce (old
+  link dead everywhere) and a `logout-link` command ends sessions opened with the old link; "Switch off"
+  clears the hash. Administrator accounts (`users.manage`) never get a link and a link session ends when an
+  account becomes administrator. Opening `/k/…` shows a small page that logs in with a same-origin POST sent
+  by `js/quick.js`, so link previews/scanners that only GET the address log nobody in. A link session skips
+  the forced change of a temporary password (the person may not know it). Every use is a `login-link`
+  security event (replicated), shown per user as "last used … on PC …"; wrong links are `login-link-failed`.
+  Residual risk: the link is a bearer credential over LAN HTTP – whoever holds it acts as that person; the
+  administrator replaces it with one click.
 
 **Threat model – protected against:** unknown PCs on the LAN (cannot join or sync), passive
 sniffing of sync traffic (TLS 1.3), active MITM between PCs (pinned certificates), replay of

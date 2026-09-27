@@ -4,7 +4,7 @@ Skipped when Playwright is not installed (it is only needed for testing, never a
 import os
 import unittest
 
-from harness import Server, wait_until
+from harness import ADMIN, Server, make_authority, wait_until
 
 try:
     from playwright.sync_api import sync_playwright
@@ -188,6 +188,44 @@ class BrowserFlow(unittest.TestCase):
             a.locator('.card.conflict tr:has-text("Opened on Tuesday") button').click()
             a.wait_for_selector('text=No conflicts', timeout=20000)
             wait_until(lambda: self._desc(self.B) == 'Opened on Tuesday', 30, what='resolution reached the store PC')
+            browser.close()
+        self.assertEqual(self.errors, [], 'browser console errors')
+
+    def test_personal_link(self):
+        """Administrator makes a personal link in Devices & Sync; opening it in another browser logs that person in under
+        their own name, without the forced password change of a temporary password."""
+        ac = make_authority(self.A)
+        ac.post('/api/users/save', {'username': 'mona', 'full_name': 'Mona Adel', 'password': 'Temp-pass88', 'must_change': True,
+                                    'perms': ['dashboard.view', 'areas.view'], 'areas': None, 'role': 'Custom'})
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(executable_path=CHROME) if CHROME else pw.chromium.launch()
+            a = self.page(browser, 'A')
+            a.goto(self.A.base)
+            a.fill('input[name=username]', ADMIN[0])
+            a.fill('input[name=password]', ADMIN[1])
+            a.get_by_role('button', name='Log In').click()
+            a.wait_for_selector('#syncInd', state='attached', timeout=30000)
+            a.goto(self.A.base + '/#/devices')
+            a.get_by_role('button', name='Personal links').click()
+            a.wait_for_selector('tr:has-text("Mona Adel") button:has-text("Create link")', timeout=20000)
+            self.assertIn('Administrator', a.locator('tr:has-text("The Admin")').inner_text())
+            a.locator('tr:has-text("Mona Adel") button:has-text("Create link")').click()
+            a.wait_for_selector('#modal.open input[data-select-all]', timeout=20000)
+            url = a.locator('#modal.open input[data-select-all]').input_value()
+            self.assertRegex(url, r'^http://[^/]+/k/[A-Za-z0-9_-]{25,}$')
+            self.assertEqual(a.locator('#modal.open .qr-box svg').count(), 1, 'QR code shown')
+            self.shot(a, '13-personal-link')
+            m = self.page(browser, 'Mona')
+            m.goto(self.A.base + url[url.index('/k/'):])
+            try:
+                m.wait_for_url(self.A.base + '/', timeout=20000)
+            except Exception:
+                raise AssertionError(f'url {m.url}; errors {self.errors}; ' + m.content()[:1500])
+            wait_until(lambda: 'Mona Adel' in m.locator('body').inner_text(), 30, what='logged in as Mona')
+            self.assertEqual(m.evaluate("() => fetch('/api/me').then(r => r.json()).then(x => x.username)"), 'mona')
+            self.shot(m, '14-opened-with-link')
+            a.locator('#modal .modal-f button:has-text("Close")').click()
+            a.wait_for_selector('tr:has-text("Mona Adel") td:has-text("on ")', timeout=20000)  # last used, on which PC
             browser.close()
         self.assertEqual(self.errors, [], 'browser console errors')
 

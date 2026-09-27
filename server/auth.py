@@ -27,6 +27,7 @@ failed-login counters and lockouts stay on the PC where they happen.
 Run  python server/auth.py reset-admin  on the administrator PC to regain access when the
 administrator password is lost.
 """
+import base64
 import hashlib
 import hmac
 import json
@@ -151,7 +152,7 @@ class NotAuthority(Forbidden):
 T, J, B = 'text', 'json', 'bool'
 USER_FIELDS = [('username', T), ('full_name', T), ('title', T), ('pw_hash', T), ('pw_pub', T), ('perms', J), ('areas', J), ('role', T),
                ('active', B), ('deleted', B), ('must_change', B), ('pw_changed_at', T), ('notes', T), ('created_at', T),
-               ('created_by', T), ('updated_at', T), ('updated_by', T)]
+               ('created_by', T), ('updated_at', T), ('updated_by', T), ('link_hash', T), ('link_nonce', T), ('link_at', T), ('link_by', T)]
 USER_FIELD_NAMES = {f for f, _ in USER_FIELDS}
 
 
@@ -238,8 +239,12 @@ class Auth:
                 id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, user TEXT, ip TEXT, event TEXT, target TEXT, detail TEXT);
             CREATE INDEX IF NOT EXISTS ix_security_ts ON security_log(ts);
         ''')
-        if 'pw_pub' not in {r[1] for r in self.conn.execute('PRAGMA table_info(users)')}:
-            self.conn.execute('ALTER TABLE users ADD COLUMN pw_pub TEXT')
+        have = {r[1] for r in self.conn.execute('PRAGMA table_info(users)')}
+        for col in ('pw_pub', 'link_hash', 'link_nonce', 'link_at', 'link_by'):
+            if col not in have:
+                self.conn.execute(f'ALTER TABLE users ADD COLUMN {col} TEXT')
+        if 'via' not in {r[1] for r in self.conn.execute('PRAGMA table_info(sessions)')}:
+            self.conn.execute('ALTER TABLE sessions ADD COLUMN via TEXT')
         replica.install(self.conn)
         self.journal = None
         self.node = None
@@ -452,7 +457,8 @@ class Auth:
         ts = now()
         with self.lock:
             self.conn.execute('UPDATE users SET failed=0, locked_until=NULL, last_login=?, last_ip=? WHERE id=?', (ts, ip, u['id']))
-            self.conn.execute('INSERT INTO sessions VALUES (?,?,?,?,?,?)', (_token_hash(token), u['id'], ts, ts, ip, (agent or '')[:300]))
+            self.conn.execute('INSERT INTO sessions (token_hash, user_id, created, last_seen, ip, agent) VALUES (?,?,?,?,?,?)',
+                              (_token_hash(token), u['id'], ts, ts, ip, (agent or '')[:300]))
         self.log(u['display'], ip, 'login', username, agent[:300] if agent else '')
         if not u.get('pw_pub') and self.node is not None and self.node.is_authority:
             try:  # account from before the multi-PC version: publish its password key, so it can change its password on any PC
@@ -480,6 +486,8 @@ class Auth:
             u = self.get(s['user_id'])
             if not reason and (not u or not u['active']):
                 reason = 'Session ended - the account is disabled or deleted'
+            if not reason and s['via'] == 'link' and not (u.get('link_hash') and self.link_allowed(u)):
+                reason = 'Session ended - the personal link was switched off or the account became an administrator'
             if reason:
                 self.conn.execute('DELETE FROM sessions WHERE token_hash=?', (th,))
         if reason:
@@ -488,7 +496,95 @@ class Auth:
         if touch and (t - _parse(s['last_seen'])).total_seconds() > 20:
             with self.lock:
                 self.conn.execute('UPDATE sessions SET last_seen=? WHERE token_hash=?', (t.isoformat(timespec='seconds'), th))
+        if s['via'] == 'link':
+            u['must_change'] = False  # came with the personal link: the person may not know the temporary password
+            u['via_link'] = True
         return u
+
+    # ------------------------------------------------------------ personal quick links
+    @staticmethod
+    def link_allowed(u):
+        """Administrator accounts never get a link: whoever holds it could change every user and permission."""
+        return 'users.manage' not in (u.get('perms') or [])
+
+    def link_token(self, uid, nonce):
+        """The secret part of a user's link. Only the administrator PC can work it out again (from its own key), so the
+        link can be shown again at any time without being stored anywhere; the other PCs only get its SHA-256."""
+        mac = hmac.new(self.node.authority_seed, b'BAMS-LINK1|' + uid.encode() + b'|' + nonce.encode(), hashlib.sha256).digest()
+        return base64.urlsafe_b64encode(mac[:21]).decode().rstrip('=')
+
+    def link_user(self, token):
+        """The user whose personal link this is (None for an unknown or switched-off link)."""
+        token = (token or '')[:100]
+        if len(token) < 20:
+            return None
+        th = _token_hash(token)
+        with self.lock:
+            u = self._user(self.conn.execute("SELECT * FROM users WHERE link_hash=? AND deleted=0", (th,)).fetchone())
+        return u if u and hmac.compare_digest(u.get('link_hash') or '', th) else None
+
+    def link_login(self, token, ip, agent=''):
+        """Logs in with a personal link. Returns (session token, user) or raises AuthError."""
+        u = self.link_user(token)
+        if not u:
+            self.log('(personal link)', ip, 'login-link-failed', '', 'Unknown or switched-off personal link')
+            raise AuthError('This link does not work any more.')
+        if not u['active']:
+            self.log(u['display'], ip, 'login-blocked', u['username'], 'Personal link used, but the account is disabled')
+            raise AuthError('This account is disabled.')
+        if not self.link_allowed(u):
+            self.log(u['display'], ip, 'login-blocked', u['username'], 'Personal link refused: administrator accounts must use their password')
+            raise AuthError('Administrator accounts must log in with their password.')
+        token = secrets.token_urlsafe(32)
+        ts = now()
+        with self.lock:
+            self.conn.execute('UPDATE users SET last_login=?, last_ip=? WHERE id=?', (ts, ip, u['id']))
+            self.conn.execute('INSERT INTO sessions (token_hash, user_id, created, last_seen, ip, agent, via) VALUES (?,?,?,?,?,?,?)',
+                              (_token_hash(token), u['id'], ts, ts, ip, (agent or '')[:300], 'link'))
+        self.log(u['display'], ip, 'login-link', u['username'], 'Logged in with the personal link' + (' - ' + agent[:250] if agent else ''))
+        return token, self.session(token, ip, touch=False)
+
+    def link_list(self):
+        """Every user with the state of their link, when it was last used and on which PC."""
+        used = {}
+        if self.journal is not None:
+            with self.journal.lock:
+                for r in self.journal.conn.execute("SELECT target, ts, node, ip FROM security WHERE event='login-link' ORDER BY ts"):
+                    used[r[0].lower()] = {'ts': r[1], 'node': r[2], 'ip': r[3]}
+        names = {k: v.get('name') for k, v in self.journal.roster().items()} if self.journal is not None else {}
+        out = []
+        with self.lock:
+            rows = [self._user(r) for r in self.conn.execute('SELECT * FROM users WHERE deleted=0 ORDER BY full_name COLLATE NOCASE')]
+        for u in rows:
+            last = used.get(u['username'].lower())
+            on = bool(u.get('link_hash'))
+            out.append({'id': u['id'], 'username': u['username'], 'full_name': u['full_name'], 'title': u['title'], 'active': bool(u['active']),
+                        'allowed': self.link_allowed(u), 'on': on, 'created_at': u.get('link_at') if on else None,
+                        'created_by': u.get('link_by') if on else None,
+                        'token': self.link_token(u['id'], u['link_nonce']) if on and self.node.is_authority and u.get('link_nonce') else None,
+                        'last_used': dict(last, pc=names.get(last['node']) or last['node']) if last else None})
+        return out
+
+    def link_set(self, actor, ip, uid, on):
+        """Creates a new personal link (the old one stops working) or switches it off - on every PC."""
+        u = self.get(uid)
+        if not u:
+            raise AuthError('This user no longer exists.')
+        if on and not self.link_allowed(u):
+            raise AuthError('Administrator accounts cannot get a personal link - they always log in with their password.')
+        ts = now()
+        nonce = secrets.token_hex(8) if on else ''
+        s = {'link_hash': _token_hash(self.link_token(uid, nonce)) if on else '', 'link_nonce': nonce,
+             'link_at': ts if on else '', 'link_by': actor['display'] if on else ''}
+        was = bool(u.get('link_hash'))
+        word = ('new link' if was else 'link created') if on else 'link switched off'
+        self._write(actor, ip, ('Personal link for ' if on else 'Personal link off for ') + u['username'], [
+            {'e': 'users', 'id': uid, 'op': 'update', 's': s, 'c': {'personal link': ['on' if was else 'off', word]}}] +
+            ([] if on and not was else [{'e': 'userCommands', 'id': uuid.uuid4().hex, 'op': 'insert', 'noaudit': True,
+                                         's': {'cmd': 'logout-link', 'user': uid}}]))
+        self.log(actor['display'], ip, 'link-created' if on else 'link-removed', u['display'],
+                 ('A new personal link was made (an older one stops working on every PC)' if was else 'Personal link created') if on
+                 else 'Personal link switched off on every PC')
 
     def logout(self, token, u, ip):
         with self.lock:
@@ -772,6 +868,8 @@ class UserFolder:
                 self.conn.execute('UPDATE users SET failed=0, locked_until=NULL WHERE id=?', (s.get('user'),))
             elif s.get('cmd') == 'logout':
                 self.conn.execute('DELETE FROM sessions WHERE user_id=?', (s.get('user'),))
+            elif s.get('cmd') == 'logout-link':  # the old personal link was replaced or switched off
+                self.conn.execute("DELETE FROM sessions WHERE user_id=? AND via='link'", (s.get('user'),))
 
     def materialize(self, uid, env):
         win = self.reg.resolve(self.reg.entries('users', uid), {})

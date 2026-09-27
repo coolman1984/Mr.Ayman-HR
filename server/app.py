@@ -6,6 +6,7 @@ printed in the console window. Everybody must log in; what each user may see and
 do is set by the administrator (Users page) and checked here for every request.
 """
 import hashlib
+import html
 import json
 import logging
 import logging.handlers
@@ -208,6 +209,11 @@ class Handler(BaseHTTPRequestHandler):
         return self.u['display'] if self.u else 'Not logged in'
 
     @property
+    def log_path(self):
+        """The address for logs: the secret part of a personal link is never written anywhere."""
+        return '/k/…' if self.path.startswith('/k/') else self.path
+
+    @property
     def ip(self):
         return self.client_address[0]
 
@@ -258,6 +264,28 @@ class Handler(BaseHTTPRequestHandler):
         if self.command != 'HEAD':
             self.wfile.write(body)
 
+    def link_page(self, token):
+        """Opening a personal link shows a tiny page that logs in by itself (js/quick.js). Logging in only happens with the
+        POST from this page, so a program that merely looks at the link (a chat preview, a virus scanner) logs nobody in."""
+        u = AUTH.link_user(token)
+        ok = u and u['active'] and AUTH.link_allowed(u)
+        title = 'Break Area Management System'
+        if ok:
+            body = (f'<h1>Welcome, {html.escape(u["full_name"])}</h1><p>Opening the system for you…</p>'
+                    f'<form id="go" method="post" action="/k/{html.escape(token)}"><button type="submit">Open the system</button></form>'
+                    '<p class="small">This is your personal link. Do not give it to anybody - whoever has it works under your name.</p>'
+                    '<script src="/js/quick.js"></script>')
+        else:
+            body = ('<h1>This link does not work any more</h1><p>Please ask the administrator for your new link, '
+                    'or <a href="/">log in with your user name and password</a>.</p>')
+        page = (f'<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
+                f'<title>{html.escape(title)}</title><style>body{{font-family:system-ui,Segoe UI,Arial,'
+                'sans-serif;background:#f3f5f8;color:#1b2533;display:flex;min-height:90vh;align-items:center;justify-content:center;margin:0 16px}'
+                'main{background:#fff;border-radius:12px;padding:28px 32px;max-width:440px;box-shadow:0 4px 18px #0001;text-align:center}'
+                'h1{font-size:1.35rem}button{font-size:1.05rem;padding:10px 26px;border:0;border-radius:8px;background:#1f6feb;color:#fff;cursor:pointer}'
+                '.small{font-size:.85rem;color:#5b6675;margin-top:18px}</style></head><body><main>' + body + '</main></body></html>')
+        return self.send(200 if ok else 404, page, 'text/html; charset=utf-8', {'Cache-Control': 'no-store'})
+
     def set_session(self, token):
         return {'Set-Cookie': f'{COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict'}
 
@@ -279,9 +307,9 @@ class Handler(BaseHTTPRequestHandler):
         return json.loads(raw.decode('utf-8')) if raw else {}
 
     def denied(self, msg):
-        AUTH.log(self.user, self.ip, 'access-denied', self.path.split('?')[0], msg)
+        AUTH.log(self.user, self.ip, 'access-denied', self.log_path.split('?')[0], msg)
         try:
-            STORE.log_activity(self.user, self.ip, [{'type': 'denied', 'action': self.path.split('?')[0], 'detail': msg}])
+            STORE.log_activity(self.user, self.ip, [{'type': 'denied', 'action': self.log_path.split('?')[0], 'detail': msg}])
         except Exception:
             pass
 
@@ -291,24 +319,24 @@ class Handler(BaseHTTPRequestHandler):
         except NotLoggedIn:
             self.send(401, {'error': 'Please log in.', 'login': True}, headers=self.clear_session())
         except Forbidden as e:
-            log.info('DENIED %s %s %s', self.user, self.path, e)
+            log.info('DENIED %s %s %s', self.user, self.log_path, e)
             self.denied(str(e))
             self.send(403, {'error': str(e)})
         except AuthError as e:
             self.send(400, {'error': str(e)})
         except Conflict as e:
-            log.info('CONFLICT %s %s %s', self.user, self.path, e)
+            log.info('CONFLICT %s %s %s', self.user, self.log_path, e)
             self.send(409, {'error': str(e)})
         except (BadRequest, ValueError) as e:
-            log.info('BAD REQUEST %s %s %s', self.user, self.path, e)
+            log.info('BAD REQUEST %s %s %s', self.user, self.log_path, e)
             self.send(400, {'error': str(e)})
         except (ConnectionError, BrokenPipeError):
             pass
         except Exception as e:
             tb = traceback.format_exc()
-            log.error('ERROR %s %s\n%s', self.user, self.path, tb)
+            log.error('ERROR %s %s\n%s', self.user, self.log_path, tb)
             try:
-                STORE.log_activity(self.user, self.ip, [{'type': 'server-error', 'action': self.path, 'detail': tb[-1900:]}])
+                STORE.log_activity(self.user, self.ip, [{'type': 'server-error', 'action': self.log_path, 'detail': tb[-1900:]}])
             except Exception:
                 pass
             self.send(500, {'error': f'Server error: {e}'})
@@ -328,7 +356,7 @@ class Handler(BaseHTTPRequestHandler):
     def me(self):
         u = self.u
         return {**AUTH.public(u), 'display': u['display'], 'permissions': PERMISSIONS, 'roles': ROLES,
-                'sessionIdleMinutes': CFG['session_idle_minutes'], 'minPasswordLength': AUTH.min_len, 'admin': is_admin(u),
+                'sessionIdleMinutes': CFG['session_idle_minutes'], 'minPasswordLength': AUTH.min_len, 'admin': is_admin(u), 'viaLink': bool(u.get('via_link')),
                 'node': {'id': NODE.id, 'name': NODE.name, 'role': NODE.role, 'authority': NODE.is_authority}}
 
     def need_admin(self):
@@ -347,6 +375,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.serve_file(ROOT, STATIC[p])
         if p.startswith(STATIC_DIRS):
             return self.serve_file(ROOT, p.lstrip('/'))
+        if p.startswith('/k/'):
+            return self.link_page(p[3:])
         if p == '/api/auth/status':
             u = AUTH.session(self.token, self.ip, touch=False)
             self.u = u
@@ -398,6 +428,10 @@ class Handler(BaseHTTPRequestHandler):
         if p == '/api/devices':
             self.need_admin()
             return self.send(200, SYNC.overview())
+        if p == '/api/quick-links':
+            self.need_admin()
+            return self.send(200, {'users': AUTH.link_list(), 'authority': NODE.is_authority,
+                                   'authorityHint': '' if NODE.is_authority else AUTH.authority_hint(), 'urls': lan_urls(CFG['port'])})
         if p == '/api/devices/log':
             self.need_admin()
             with JOURNAL.lock:
@@ -432,6 +466,16 @@ class Handler(BaseHTTPRequestHandler):
             raise Forbidden('Request from another web site was blocked.')
 
         # ---------------- no login needed
+        if p.startswith('/k/'):  # personal link: the page below sends this by itself
+            try:
+                token, u = AUTH.link_login(p[3:], self.ip, self.headers.get('User-Agent', ''))
+            except AuthError:
+                time.sleep(0.6)
+                return self.link_page(p[3:])
+            if self.token:
+                AUTH.logout(self.token, None, self.ip)  # whoever was logged in in this browser before
+            say(f'Login with personal link: {u["display"]} ({self.ip})')
+            return self.send(303, b'', 'text/plain', {'Location': '/', **self.set_session(token)})
         if p == '/api/auth/login':
             d = self.json_body()
             try:
@@ -543,6 +587,11 @@ class Handler(BaseHTTPRequestHandler):
             self.need('trash.restore')
             d = self.json_body()
             return self.send(200, STORE.restore_txn(self.user, self.ip, str(d.get('txn'))))
+        if p == '/api/quick-links/set':
+            self.need_admin()
+            d = self.json_body()
+            AUTH.link_set(self.u, self.ip, str(d.get('id')), bool(d.get('on')))
+            return self.send(200, {'ok': True})
         if p.startswith('/api/devices/'):
             self.need_admin()
             d = self.json_body()

@@ -2042,7 +2042,19 @@ const ACT = {
   printLabel: d => printLabels([area(d.id)]),
   printAllLabels: () => printLabels(DB.areas),
   printLabelsFiltered: () => printLabels(filteredAreas()),
-  copyLink: d => { navigator.clipboard?.writeText(d.url).then(() => toast('Link copied'), () => toast('Copy failed', true)); },
+  copyLink: d => {
+    const fallback = () => {  // the clipboard API is missing on plain http addresses of other PCs
+      const t = document.createElement('textarea');
+      t.value = d.url; t.style.position = 'fixed'; t.style.opacity = '0';
+      ($('#modal.open form') || document.body).appendChild(t); t.select();
+      let ok = false;
+      try { ok = document.execCommand('copy'); } catch (e) { /* not possible */ }
+      t.remove();
+      toast(ok ? 'Copied' : 'Copy failed – select the text and press Ctrl+C', !ok);
+    };
+    if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(d.url).then(() => toast('Copied'), fallback);
+    else fallback();
+  },
   async deleteArea(d) {
     const a = area(d.id);
     if (!confirm(`Delete ${a.name}?\n\nIts photos, documents, surveys and history are kept in the database and can be restored from Settings → Recycle Bin.`)) return;

@@ -16,6 +16,7 @@ Branch: `claude/distributed-offline-first-sync-cg26d2`.
 - [x] 8. Tests (below) + browser end-to-end
 - [x] 9. Independent reviews (correctness, security) – all verified findings fixed with regression tests (see DISTRIBUTED_SYNC_ARCHITECTURE.md §13a)
 - [x] 10. Simpler screens for non-technical users: sync light only for administrators, one code to add a PC, plain wording, automatic IP follow-up
+- [x] 11. Personal links: a fixed link per user that logs in under their own name on any PC (Devices & Sync → Personal links)
 
 ## How to run the tests
 
@@ -66,4 +67,5 @@ python3 -m unittest test_e2e_browser                  # needs Playwright + Chrom
 | – | forged administrator change, own-password-only rule, data changes touching accounts | `test_unit.JournalRulesTest` | pass |
 | – | acceptance story (definition of success) | `T00_DefinitionOfSuccess` | pass |
 | – | review regressions: save between receive and fold, impossible change, followers, weak restore delete, fingerprint cache, password proof, pre-auth limits, account records hidden | `test_unit.ReviewFindingsTest`, `T03_Cluster.test_f2`, `test_f3`, `test_e` | pass |
+| – | personal links: create/show on the administrator PC only, use on another PC, preview does not log in, own name and permissions, last used on which PC, wrong link refused and logged, new link kills the old one and its sessions, switch off, administrators refused | `T32_PersonalLinks`, `test_e2e_browser.test_personal_link` | pass |
 | – | browser: setup, pairing through the screens, login on 2nd PC, viewer has no access (UI + API 403), live change, sync light green/offline, logs with PC, conflict shown and resolved in UI, no console errors | `test_e2e_browser` | pass |

@@ -676,5 +676,126 @@ class T31_FourPCs(Base):
         self.assertEqual(len(nodes), 4)
 
 
+class T32_PersonalLinks(Base):
+    """Every user can get a fixed personal link that logs in under their own name on any PC; only the administrator PC
+    makes, shows, replaces or switches off links; a replaced link stops working everywhere."""
+    N = 2
+
+    @staticmethod
+    def _open(c, token):
+        """What a browser does: open the link (a page), then the page sends the POST by itself."""
+        page = c.get('/k/' + token)
+        c.call('POST', '/k/' + token, raw=b'')
+        return page
+
+    def _user(self, name):
+        return next(x for x in self.ac.get('/api/quick-links')['users'] if x['username'] == name)
+
+    def test_links(self):
+        ac, pc1 = self.ac, self.servers[1]
+        ac.post('/api/users/save', {'username': 'omar', 'full_name': 'Omar Tarek', 'password': 'Temp-pass55', 'must_change': True,
+                                    'perms': ['dashboard.view', 'areas.view', 'areas.create', 'areas.edit'], 'areas': None, 'role': 'Custom'})
+        omar = self._user('omar')
+        self.assertFalse(omar['on'])
+        self.assertTrue(omar['allowed'])
+        boss = self._user(ADMIN[0])
+        self.assertFalse(boss['allowed'])
+        with self.assertRaises(ApiError) as e:  # administrator accounts never get a link
+            ac.post('/api/quick-links/set', {'id': boss['id'], 'on': True})
+        self.assertEqual(e.exception.code, 400)
+
+        ac.post('/api/quick-links/set', {'id': omar['id'], 'on': True})
+        token = self._user('omar')['token']
+        self.assertTrue(token and len(token) >= 25)
+        self.assertEqual(self._user('omar')['token'], token)  # fixed: shown again the same
+        self.converged()
+
+        # a member PC can use the link but cannot make or show links
+        self.assertIsNone(next(x for x in self.clients[1].get('/api/quick-links')['users'] if x['username'] == 'omar')['token'])
+        with self.assertRaises(ApiError) as e:
+            self.clients[1].post('/api/quick-links/set', {'id': omar['id'], 'on': False})
+        self.assertEqual(e.exception.code, 403)
+
+        # opening the link without the page's own POST (a chat preview, a scanner) logs nobody in
+        c = pc1.client()
+        self.assertIn(b'Omar Tarek', c.get('/k/' + token))
+        with self.assertRaises(ApiError) as e:
+            c.get('/api/me')
+        self.assertEqual(e.exception.code, 401)
+        # the real browser: logged in as Omar, with Omar's permissions, no password prompt
+        self._open(c, token)
+        me = c.get('/api/me')
+        self.assertEqual((me['username'], me['must_change'], me['viaLink'], me['admin']), ('omar', False, True, False))
+        c.post('/api/commit', {'label': 'by link', 'ops': [area_op('LNK', 'Made through the link')]})
+        with self.assertRaises(ApiError) as e:
+            c.get('/api/users')
+        self.assertEqual(e.exception.code, 403)
+        with self.assertRaises(ApiError) as e:
+            c.get('/api/quick-links')
+        self.assertEqual(e.exception.code, 403)
+        self.converged()
+        rows = ac.get('/api/audit?q=LNK')['rows']
+        self.assertTrue(rows and all('omar' in r['user'] for r in rows))
+        wait_until(lambda: self._user('omar')['last_used'], 20, what='link use reported')
+        self.assertEqual(self._user('omar')['last_used']['pc'], 'pc1')
+
+        # a wrong link: refused and logged
+        bad = pc1.client()
+        with self.assertRaises(ApiError) as e:
+            bad.get('/k/' + 'x' * 28)
+        self.assertEqual(e.exception.code, 404)
+        with self.assertRaises(ApiError) as e:
+            bad.call('POST', '/k/' + 'x' * 28, raw=b'')
+        self.assertEqual(e.exception.code, 404)
+        with self.assertRaises(ApiError):
+            bad.get('/api/me')
+        self.assertTrue(self.clients[1].get('/api/security?type=login-link-failed')['rows'])
+
+        # a request from another web site is refused, and the secret part of the link is never written into a log
+        with self.assertRaises(ApiError) as e:
+            pc1.client().call('POST', '/k/' + token, raw=b'', headers={'Origin': 'http://evil.example'})
+        self.assertEqual(e.exception.code, 403)
+        self.converged()
+        for x in self.clients:
+            self.assertEqual(x.get('/api/security?limit=1000&q=' + token)['rows'], [])
+            self.assertEqual(x.get('/api/activity?limit=1000&q=' + token)['rows'], [])
+        for srv in self.servers:
+            for root, _, files in os.walk(os.path.join(srv.data_dir, 'logs')):
+                for f in files:
+                    with open(os.path.join(root, f), encoding='utf-8', errors='ignore') as fh:
+                        self.assertNotIn(token, fh.read(), f)
+
+        # new link: the old one stops working on every PC, and whoever used it is logged out
+        ac.post('/api/quick-links/set', {'id': omar['id'], 'on': True})
+        new = self._user('omar')['token']
+        self.assertNotEqual(new, token)
+        self.converged()
+        wait_until(lambda: T03_Cluster._logged_out(c), 20, what='old link session ended')
+        with self.assertRaises(ApiError) as e:
+            self._open(pc1.client(), token)
+        self.assertEqual(e.exception.code, 404)
+        c2 = pc1.client()
+        self._open(c2, new)
+        self.assertEqual(c2.get('/api/me')['username'], 'omar')
+
+        # switched off: the link is dead, the normal password still works
+        ac.post('/api/quick-links/set', {'id': omar['id'], 'on': False})
+        self.assertFalse(self._user('omar')['on'])
+        self.converged()
+        wait_until(lambda: T03_Cluster._logged_out(c2), 20, what='link session ended after switch off')
+        with self.assertRaises(ApiError):
+            self._open(pc1.client(), new)
+        pc1.client().login('omar', 'Temp-pass55')
+
+        # an account that becomes an administrator can no longer use its link
+        ac.post('/api/quick-links/set', {'id': omar['id'], 'on': True})
+        tok = self._user('omar')['token']
+        u = next(x for x in ac.get('/api/users')['users'] if x['username'] == 'omar')
+        ac.post('/api/users/save', {**u, 'perms': u['perms'] + ['users.manage']})
+        self.converged()
+        with self.assertRaises(ApiError):
+            self._open(pc1.client(), tok)
+
+
 if __name__ == '__main__':
     unittest.main()
