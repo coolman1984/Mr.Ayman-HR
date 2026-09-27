@@ -1522,7 +1522,7 @@ function viewSettings() {
       <div class="card-h">${ic('database')}<h3>Server &amp; Database</h3></div>
       ${can('settings.view') ? '<div data-async="serverInfo"><p class="muted">Loading…</p></div>' : ''}
       <div class="filters" style="margin-top:12px">
-        ${can('report.full') && allAreas() ? `<button class="btn primary" data-act="fullExport">${ic('download')}Full Excel Export (all data + logs)</button>` : ''}
+        ${can('report.full') && allAreas() ? `<button class="btn primary" data-act="fullExport">${ic('download')}Full Excel Export</button>` : ''}
       </div>
       ${can('data.import') ? `<details class="more"><summary>Advanced: bring data from the very first version</summary>
         <p class="hint">Only if the break areas were kept in the old single-file version (index.html): there Settings &rarr; Download Backup (JSON), then:</p>
@@ -2275,10 +2275,10 @@ const ACT = {
     if (await loadSample()) { rerender(); toast('Sample data loaded'); }
   },
   async clearAll() {
-    const n = DB.areas.length;
-    const answer = prompt(`This deletes ALL ${n} break areas (the sample data) with their inventory, photos, documents, issues, surveys and history, so you can start with your real data.\n\nA backup is made first, and everything stays restorable from the Recycle Bin.\n\nType DELETE to confirm:`);
+    const sample = new Set(DB.areas.filter(isSampleArea).map(a => a.id)), n = sample.size, real = DB.areas.length - n;
+    const answer = prompt(`This deletes the ${n} sample break areas with their inventory, photos, documents, issues, surveys and history, so you can start with your real data.${real ? `\n\nYour ${real} other break area(s) are kept.` : ''}\n\nA backup is made first, and everything stays restorable from the Recycle Bin.\n\nType DELETE to confirm:`);
     if ((answer || '').trim().toUpperCase() !== 'DELETE') return toast('Nothing was deleted');
-    DB.areas = []; DB.history = []; DB.settings.sampleData = false;
+    DB.areas = DB.areas.filter(a => !sample.has(a.id)); DB.history = DB.history.filter(h => !sample.has(h.areaId)); DB.settings.sampleData = false;
     if (await save(`Delete sample data – start real use (${n} break areas)`, { force: true })) { location.hash = '#/dashboard'; rerender(); toast('Sample data deleted – you can now add your real break areas'); }
   },
   backupFolder(d) {
@@ -2490,8 +2490,9 @@ setInterval(() => {
   if (ME && !document.hidden && Date.now() - LAST_ACTIVE < 4 * 60000) fetch('/api/me', { credentials: 'same-origin' }).catch(() => {});
 }, 4 * 60000);
 /* the sample break areas are still there (marked when loaded; older systems: recognised by their names) */
-const hasSample = () => DB.areas.length > 0 && (DB.settings.sampleData === true ||
-  (DB.settings.sampleData === undefined && DB.areas.some(a => /^ba\d\d$/.test(a.id) && /^Break Area \d\d$/.test(a.name))));
+/* sample break areas: the fixed ids ba01..ba22 with their sample names (real break areas get random ids) */
+const isSampleArea = a => /^ba\d\d$/.test(a.id) && /^Break Area \d\d$/.test(a.name);
+const hasSample = () => DB.settings.sampleData !== false && DB.areas.some(isSampleArea);
 let ABOUT = null;
 const aboutLine = () => ABOUT ? `<p class="about-line">Version ${esc(ABOUT.version)} · ${esc(ABOUT.copyright)}</p>` : '';
 async function boot() {

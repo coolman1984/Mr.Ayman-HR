@@ -41,10 +41,32 @@ essentials.
   delivery changes, search **all** user-visible texts (`js/`, server messages, tools, guides) for the old way.
 - Loading sample data by itself on the first start made it hard to tell real from sample data. Ask once instead.
 - A top-level `const` in a new classic script shares one global scope with `app.js`: keep names specific
-  (`hb`, `HELP_F`) to avoid a clash that stops the whole page.
+  (`helpBold`, `HELP_F`) to avoid a clash that stops the whole page.
 - Links (`<a>`) with `data-act` are ignored by the click handler unless they have `data-href` – use buttons for
   in-page actions.
 - The browser test assumed automatic sample data; every change of the first screens must update that test.
+
+**Independent review of 2.3 – found and fixed (regression tests `T36.test_z_removed_while_off`, `T37`)**
+- HIGH: a backup administrator PC removed while switched off kept the administrator key for ever – a removed PC
+  never receives its own removal (every PC refuses it). Now it deletes the key when a PC answers "removed", and
+  checks its role at every start.
+- A backup PC could save (export) the administrator key and could remove the administrator PC → both refused (also
+  in the tool), the buttons are hidden there.
+- After a key import on a former backup PC the `backup` mark stayed, so another backup PC could end its role and
+  delete the real key → the mark is cleared on import; the administrator PC can never get the backup role.
+- PCs added on a backup PC named the backup PC as administrator PC → they get the real one.
+- *Delete Sample Data* trusted a flag that could stay on after the sample areas were gone, and then deleted **all**
+  break areas → it appears only while sample break areas exist and deletes only those (real ones are kept).
+- Backup folder: network folders refused (backups contain the password hashes), links resolved (`realpath`),
+  other folders from `config.json` kept, a damaged `config.json` gives a clear message.
+- Two help answers named buttons that do not exist; a "Save it again" link did nothing (`<a data-act>`).
+
+**Lessons**
+- A revoked PC is cut off from exactly the message that tells it so: anything a PC must undo when removed has to
+  be triggered by the refusal itself (and checked again at start), not by the roster change.
+- "Delegated" copies of an authority must have fewer powers than the original (no export, cannot remove the
+  original), otherwise ending the delegation means nothing.
+- A delete-everything button must be tied to what it deletes (the sample records), never to a flag that can drift.
 
 ## 2.2.0 – permanent release on GitHub (2026-09-27)
 

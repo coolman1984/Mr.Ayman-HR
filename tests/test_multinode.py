@@ -1131,6 +1131,26 @@ class T36_BackupAdminPC(Base):
         self.assertEqual(e.exception.code, 403)
         self.assertFalse(os.path.exists(os.path.join(self.servers[1].data_dir, 'node', 'authority.key')))
 
+    def test_z_removed_while_off(self):
+        """Review 2.3: a backup PC may not save the key or remove the administrator PC, and a backup PC that is removed
+        while switched off deletes the key when the others tell it (it never receives its own removal)."""
+        ac, pc2 = self.relogin(0), self.clients[2]
+        pc2_id, admin_id = self.servers[2].node_id, self.servers[0].node_id
+        ac.post('/api/devices/backup', {'id': pc2_id, 'on': True})
+        wait_until(lambda: pc2.get('/api/users')['authority'], 40, what='pc2 became backup PC')
+        with self.assertRaises(ApiError) as e:
+            pc2.post('/api/devices/export-key', {'passphrase': 'a long passphrase 2026'})
+        self.assertEqual(e.exception.code, 403)
+        with self.assertRaises(ApiError):
+            pc2.post('/api/devices/revoke', {'id': admin_id})
+        self.assertEqual(next(n for n in ac.get('/api/devices')['nodes'] if n['id'] == admin_id)['status'], 'active')
+        key = os.path.join(self.servers[2].data_dir, 'node', 'authority.key')
+        self.servers[2].stop()
+        ac.post('/api/devices/revoke', {'id': pc2_id})
+        self.assertTrue(os.path.exists(key))
+        self.servers[2].start()
+        wait_until(lambda: not os.path.exists(key), 60, what='removed backup PC deleted the key')
+
 
 class T37_AdminSafety(unittest.TestCase):
     """Version 2.3: second backup folder, saving the administrator key from the screen, Excel export without the
@@ -1149,7 +1169,7 @@ class T37_AdminSafety(unittest.TestCase):
     def test_second_backup_folder(self):
         ac = self.ac
         self.assertEqual(ac.get('/api/backups/folder')['dirs'], [])
-        for bad in ('relative\\folder', os.path.join(self.S.data_dir, 'copies')):
+        for bad in ('relative\\folder', os.path.join(self.S.data_dir, 'copies'), '\\\\fileserver\\share\\bams', '//fileserver/share/bams'):
             with self.assertRaises(ApiError) as e:
                 ac.post('/api/backups/folder', {'path': bad})
             self.assertEqual(e.exception.code, 400, bad)

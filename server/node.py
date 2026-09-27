@@ -167,7 +167,7 @@ class Node:
             raise ValueError('This key does not belong to this system.')
         write_atomic(os.path.join(self.dir, 'authority.key'), seed.hex())
         self.authority_seed = seed
-        self.info.update(role='authority', authority_node=self.id)
+        self.info.update(role='authority', authority_node=self.id, backup=False)
         self.save()
 
     def install_backup_key(self, seed):

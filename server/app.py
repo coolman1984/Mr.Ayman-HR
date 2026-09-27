@@ -1,7 +1,7 @@
 """Break Area Management System - local web server.
 
 Runs with the Python standard library only (no pip install needed).
-Start it with start.bat; every PC on the network can then open the address
+Installed with BAMS-Setup.exe (portable: start.bat); every PC on the network can then open the address
 printed in the console window. Everybody must log in; what each user may see and
 do is set by the administrator (Users page) and checked here for every request.
 """
@@ -87,10 +87,12 @@ def set_backup_folder(folder):
     """Choose (or with '' remove) the second backup folder of this PC. Stored in config.json of this PC only."""
     if folder:
         folder = os.path.normpath(folder)
+        if folder.startswith(('\\\\', '//')):
+            raise BadRequest('Choose a USB drive or another disk of this PC, not a network folder (the backups contain the passwords).')
         if not os.path.isabs(folder):
             raise BadRequest('Type the full folder, for example E:\\BAMS-Backups.')
-        inside = [os.path.normcase(os.path.abspath(d)) for d in (HOME, DATA_DIR, BACKUPS.dir)]
-        f = os.path.normcase(os.path.abspath(folder))
+        inside = [os.path.normcase(os.path.realpath(d)) for d in (HOME, DATA_DIR, BACKUPS.dir)]
+        f = os.path.normcase(os.path.realpath(folder))
         if any(f == d or f.startswith(d + os.sep) for d in inside):
             raise BadRequest('Choose a folder on another disk or a USB drive, not inside the program data.')
         try:
@@ -101,18 +103,21 @@ def set_backup_folder(folder):
             os.remove(test)
         except OSError:
             raise BadRequest('This folder cannot be used (not found or no permission to write). Check the drive and try again.')
-    dirs = [folder] if folder else []
-    cfg = {}
-    if os.path.exists(CONFIG_PATH):
-        with open(CONFIG_PATH, encoding='utf-8') as fh:
-            cfg = json.load(fh)
-    cfg['extra_backup_dirs'] = dirs
-    tmp = CONFIG_PATH + '.tmp'
-    with open(tmp, 'w', encoding='utf-8') as fh:
-        json.dump(cfg, fh, indent=2)
-    os.replace(tmp, CONFIG_PATH)
+    dirs = ([folder] if folder else []) + [d for d in CFG.get('extra_backup_dirs', [])[1:] if d]  # the screen sets the first one
+    try:
+        cfg = {}
+        if os.path.exists(CONFIG_PATH):
+            with open(CONFIG_PATH, encoding='utf-8') as fh:
+                cfg = json.load(fh)
+        cfg['extra_backup_dirs'] = dirs
+        tmp = CONFIG_PATH + '.tmp'
+        with open(tmp, 'w', encoding='utf-8') as fh:
+            json.dump(cfg, fh, indent=2)
+        os.replace(tmp, CONFIG_PATH)
+    except (OSError, ValueError):
+        raise BadRequest('The setting could not be saved (config.json is damaged or cannot be written).')
     CFG['extra_backup_dirs'] = dirs
-    BACKUPS.extra = dirs
+    BACKUPS.extra = [resolve(d) for d in dirs]
     BACKUPS.last_error = ''
 
 
@@ -624,7 +629,7 @@ class Handler(BaseHTTPRequestHandler):
             raise BadRequest('Choose same or new')
         if p == '/api/auth/setup':
             if self.ip not in LOCAL_IPS:
-                raise Forbidden('The first administrator account can only be created on the server PC itself.')
+                raise Forbidden('The first administrator account can only be created on the PC with the program itself.')
             d = self.json_body()
             AUTH.setup(d.get('username'), d.get('full_name'), d.get('password'), self.ip)
             token, self.u = AUTH.login(d.get('username'), d.get('password'), self.ip, self.headers.get('User-Agent', ''))
@@ -723,8 +728,8 @@ class Handler(BaseHTTPRequestHandler):
                 if action == 'export-key':  # the administrator key, protected by a passphrase, as a file for a USB stick
                     if self.ip not in LOCAL_IPS:
                         raise Forbidden('For safety, save the administrator key on the administrator PC itself.')
-                    if not NODE.is_authority:
-                        raise Forbidden('Only the administrator PC holds the administrator key.')
+                    if not NODE.is_authority or NODE.info.get('backup'):
+                        raise Forbidden('Only the administrator PC can save the administrator key.')
                     pw = str(d.get('passphrase') or '')
                     if len(pw) < 12:
                         raise BadRequest('The passphrase must have at least 12 characters.')

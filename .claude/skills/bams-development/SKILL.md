@@ -89,6 +89,9 @@ Check a local compile on Linux: `pip install --target <dir> nuitka ordered-set z
 - Tags cannot be pushed from the Claude session (403): the workflow publishes the release on main by itself.
 - The installed program is the normal case: never mention `start.bat`/`reset_admin.bat` in user texts (portable is
   for developers only). Search `js/`, server messages and guides when delivery changes.
+- A removed (revoked) PC never receives its removal: undo local powers on the refusal itself and at start
+  (`check_backup_role`, `Revoked` handler). A backup administrator PC cannot export the key or remove the administrator PC.
+- Sample data = break areas `ba01..ba22` named "Break Area NN" (`isSampleArea`); Delete Sample Data removes only those.
 - The first start asks empty / sample data (`firstStartChoice`); browser tests must click the choice.
 - Script files share one global scope: no short top-level names in new JS files. `<a data-act>` needs `data-href`
   to reach `ACT` – use `<button>` for in-page actions.

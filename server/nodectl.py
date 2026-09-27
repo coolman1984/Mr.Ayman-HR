@@ -168,8 +168,8 @@ def cmd_reset_admin():
 
 def cmd_export(path):
     s = open_system()
-    if not s.node.authority_seed:
-        print('This PC does not hold the administrator key.')
+    if not s.node.authority_seed or s.node.info.get('backup'):
+        print('This PC does not hold the administrator key (a backup administrator PC cannot export it).')
         return 1
     p1 = getpass.getpass('Passphrase to protect the key (at least 12 characters): ')
     if len(p1) < 12 or p1 != getpass.getpass('Repeat the passphrase: '):

@@ -80,6 +80,9 @@ it can no longer exchange data; everything it did before stays).
   over the encrypted connection (the key never travels in any other way). From then on people with administrator
   rights can add people, change permissions and links there too, also while the administrator PC is switched off.
 * **End backup admin** takes it back: the PC deletes its copy of the key at its next contact.
+  A backup PC that is **removed** deletes the key too, even if it was switched off at that moment (as soon as it
+  is back in the network).
+* A backup administrator PC cannot save the key as a file and cannot remove the administrator PC.
 * Give the rights to a person as well (a deputy): GUIDE_Users_Permissions.md, section 7.
 * Every step is in the security log (*Backup administrator PC chosen*, *Administrator key sent to backup PC*, …).
 

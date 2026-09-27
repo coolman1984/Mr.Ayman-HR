@@ -99,9 +99,9 @@ function devSummary() {
 
 /* the administrator key on a USB stick: without it, a lost administrator PC means nobody can manage people any more */
 function devKeyCard() {
-  if (DEV.me.role !== 'authority') return '';
+  if (DEV.me.role !== 'authority' || DEV.me.backup) return '';  // only the administrator PC itself saves the key
   if (DEV.key_saved) return `<p class="hint">${ic('shield')} Administrator key saved on ${esc(fmt(DEV.key_saved.slice(0, 10)))}.
-    <a href="#/devices" data-act="devSaveKey">Save it again</a></p>`;
+    <button type="button" class="btn sm" data-act="devSaveKey">Save it again</button></p>`;
   return `<div class="card mb attention"><div class="card-h">${ic('shield')}<h3>Save the administrator key (once)</h3></div>
     <p>If this PC breaks or is lost, the saved key lets another PC take over managing people and permissions.
       Save it on a USB stick and keep the stick and the passphrase in two different safe places.</p>
@@ -148,7 +148,7 @@ function devTable() {
       <td class="nowrap">${admin && n.status === 'active' ? `<button class="btn sm" data-act="devEdit" data-id="${n.id}">${ic('edit')}Edit</button>
         ${n.self || n.authority ? '' : `<button class="btn sm" data-act="devBackup" data-id="${n.id}" data-on="${n.backup ? '0' : '1'}"
             title="${n.backup ? 'This PC stops managing people and permissions' : 'This PC can also manage people and permissions, e.g. while the administrator PC is off'}">${ic('shield')}${n.backup ? 'End backup admin' : 'Make backup admin'}</button>`}
-        ${n.self ? '' : `<button class="btn sm danger" data-act="devRevoke" data-id="${n.id}">${ic('trash')}Remove</button>`}` : ''}</td></tr>`).join('')}
+        ${n.self || (DEV.me.backup && n.authority) ? '' : `<button class="btn sm danger" data-act="devRevoke" data-id="${n.id}">${ic('trash')}Remove</button>`}` : ''}</td></tr>`).join('')}
     </tbody></table></div>
     ${admin ? `<p class="hint"><b>Backup administrator PC:</b> a second PC that can also manage people, permissions and PCs – useful when the
       administrator PC is switched off or the administrator is away. Choose a PC that only trusted people use. Anybody who should manage
