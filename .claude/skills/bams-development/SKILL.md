@@ -35,6 +35,7 @@ Two ways to run:
 | `server/nodectl.py` | maintenance tools (`BAMS.exe tool …`) |
 | `server/version.py` | VERSION, developer, copyright – the build reads it |
 | `js/app.js`, `js/devices.js` | whole UI (views, `ACT` actions, `modal`, `esc` for every value) |
+| `js/data.js` | sample data (`buildSeed`, fixed short ids), `DEFAULT_ITEM_TYPES`, lists (actions, conditions) |
 | `js/help.js` | Help & User Guide (`#/help`): Q&A per topic, admin topics hidden from others – **update it with every screen change** |
 | `tools/` | `make_assets.py`, `make_icon.py`, `build_windows.py` |
 | `installer/bams.iss` | Inno Setup script (install + update, firewall, autostart, old data import) |
@@ -99,5 +100,17 @@ Check a local compile on Linux: `pip install --target <dir> nuitka ordered-set z
 - Since 2.4 new PCs join without code or approval (`join_open`, `_open_join`, `discover`, `/sync/hello`); the code
   method is still in `sync.py` (used by the test harness `pair()`), but not in the screens.
 - The first start asks empty / sample data (`firstStartChoice`); browser tests must click the choice.
+- Sample records are recognised by their fixed ids (`SAMPLE_REC` in `js/app.js`, ids from `js/data.js`), never by
+  names – people rename sample break areas. Keep seed ids short and real ids random 8 letters (`uid()`).
+- A window (`modal`) must not save records from before a reload: `save()` failing calls `load()`, which replaces `DB`.
+  `modal()` remembers `DB` and the opening action (`OPENER`) and reopens itself (`reopenFresh`). New dialogs must be
+  opened through an `ACT` action to get this.
+- `form.elements.item` / `form.elements['item']` is a method – look fields up with `[name=…]`.
+- Serial numbers: entity `pieces` (one record per piece, area child); the quantity stays the `inventory` counter.
+  Any change of an item's quantity must think about its pieces (Removed/Transferred pick them, Delete Item and
+  item-type delete remove them).
+- Area-limited users: anything that affects all break areas (item type delete, backup restore, Recycle Bin, new
+  break areas) needs "all areas" in the screen *and* on the server.
+- The stylesheet is `css/styles.css` (not style.css).
 - Script files share one global scope: no short top-level names in new JS files. `<a data-act>` needs `data-href`
   to reach `ACT` – use `<button>` for in-page actions.

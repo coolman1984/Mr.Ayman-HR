@@ -78,5 +78,8 @@ python3 -m unittest test_e2e_browser                  # needs Playwright + Chrom
 | – | delegation: backup administrator PC gets the key over the pinned connection, manages people while the administrator PC is off, role ended → key deleted; only the administrator PC can give the role | `T36_BackupAdminPC` | pass |
 | – | 2.3 admin safety: second backup folder (refused inside the data / relative, copy at once and on every backup, saved in config.json, removed), administrator key saved from the screen (passphrase ≥ 12, never readable, remembered), activity log in the Excel export only for administrators | `T37_AdminSafety` | pass |
 | – | 2.4 open join: address only, added at once, accounts + data copied, changes both ways, network search answers | `T38_OpenJoin`, `test_e2e_browser` | pass |
+| – | 2.5 serial numbers: pieces added on two PCs at once both kept, transfer moves the piece, empty serial refused, permission and area scope | `T39_SerialNumbers` | pass |
+| – | 2.5 serial numbers in the screens (quantity follows the list, which pieces go, search) + delete sample data with renamed sample areas | `test_e2e_browser.test_serial_numbers_and_renamed_sample_area` | pass |
+| – | 2.5 save again after "changed by another user": window opens again on the new data, typed text kept, saved correctly | `test_e2e_browser.test_save_again_after_a_conflict` | pass |
 | – | first start: choice empty / sample data; Help & User Guide from Settings, administrator answers, search | `test_e2e_browser` | pass |
 | – | browser: setup, pairing through the screens, login on 2nd PC, viewer has no access (UI + API 403), live change, sync light green/offline, logs with PC, conflict shown and resolved in UI, no console errors | `test_e2e_browser` | pass |

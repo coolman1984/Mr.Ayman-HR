@@ -673,3 +673,16 @@ details.help-q > summary:hover { color: var(--blue-2); }
 .bk-folder.ok { background: #f0fdf4; border-color: #bbf7d0; } .bk-folder.ok > .ic { color: #16a34a; }
 .bk-folder.warn, .bk-folder.bad { background: #fff7ed; border-color: #fed7aa; } .bk-folder.warn > .ic, .bk-folder.bad > .ic { color: #ea580c; }
 .btn:disabled { opacity: .5; cursor: not-allowed; }
+
+/* serial numbers (area page, inventory update) */
+.serials { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 10px; }
+.serials summary { cursor: pointer; font-weight: 700; display: flex; align-items: center; gap: 6px; }
+.serials summary .ic { width: 16px; height: 16px; color: var(--blue); }
+.serial-row { display: grid; grid-template-columns: minmax(90px, 140px) 1fr auto; gap: 8px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.serial-row:last-child { border-bottom: 0; }
+.serial-chips { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; }
+.chip { display: inline-block; padding: 2px 7px; border-radius: 6px; background: var(--bg, #f1f5f9); border: 1px solid var(--line); }
+.serial-pick { display: flex; flex-wrap: wrap; gap: 6px 14px; max-height: 160px; overflow: auto; padding: 6px 0; }
+.serial-pick .chk { display: inline-flex; align-items: center; gap: 4px; font-weight: 400; }
+.lbl-sm { font-size: 13px; }
+@media (max-width: 600px) { .serial-row { grid-template-columns: 1fr auto; } .serial-chips { grid-column: 1 / -1; } }

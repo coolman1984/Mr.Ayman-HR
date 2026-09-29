@@ -1,5 +1,24 @@
 # What is new
 
+## 2.5.0
+
+- **Serial numbers** for every piece: when you add items (Update → *Added*) type or scan their serial numbers, one per
+  line. When you remove or transfer items you tick which pieces go. *Replaced* can change a serial number. The
+  break area page lists them (*Serial numbers → Add / Edit*), *Furniture & Equipment* has a search box for them, and
+  the inventory report shows them. The same serial number cannot be entered twice.
+- **Delete Sample Data** no longer disappears when you renamed sample break areas: renamed ones are kept (with their
+  inventory and everything you added) and only their sample photos, issues, surveys and history are removed.
+- Fixed: pressing Save again after "someone else changed it" said "saved" but saved nothing. The window now opens
+  again on the new data with what you typed.
+- Fixed: the dashboard showed 0 TV screens and water dispensers on a system started empty; a system started empty
+  now has the usual item types at once.
+- Fixed: editing a break area after renaming a location changed its location; a note on a closed issue changed its
+  closed date; deleting the last inspection kept the old next date; a transparent logo turned black; the first real
+  photo did not replace the drawing of a new break area; completing maintenance recorded the team instead of you.
+- Safer: a person limited to some break areas can no longer delete item types, restore a backup or see "Add New Break
+  Area". Messages about changes made at the same time name the record ("Inventory Chairs of Break Area 01").
+- All PCs must be updated to 2.5: changes made on a 2.5 PC wait on older PCs until they are updated too.
+
 ## 2.4.0
 
 - Two simple ways to work: a **personal link** (open it, nothing else) or **user name and password** on a PC with the

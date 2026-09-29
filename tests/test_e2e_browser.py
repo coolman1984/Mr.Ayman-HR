@@ -189,6 +189,94 @@ class BrowserFlow(unittest.TestCase):
             browser.close()
         self.assertEqual(self.errors, [], 'browser console errors')
 
+    def test_serial_numbers_and_renamed_sample_area(self):
+        """Customer reports of 2.4: (1) after renaming a sample break area the Delete Sample Data button disappeared and the
+        sample records stayed; (2) every piece should carry its serial number."""
+        make_authority(self.A)
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(executable_path=CHROME) if CHROME else pw.chromium.launch()
+            a = self.page(browser, 'A')
+            a.goto(self.A.base)
+            a.fill('input[name=username]', ADMIN[0])
+            a.fill('input[name=password]', ADMIN[1])
+            a.get_by_role('button', name='Log In').click()
+            a.get_by_text('Try it with sample data first').click()
+            a.wait_for_selector('text=Break Area 01', timeout=30000)
+            submit = lambda: a.click('#modal .modal-f .primary')
+            closed = lambda: a.wait_for_selector('#modal.open', state='detached', timeout=15000)
+            # every sample break area renamed: the button stays, the renamed break areas stay, their sample records go
+            a.evaluate("async () => { DB.areas.forEach(x => (x.name = 'Canteen ' + x.id)); await save('rename all', { force: true }); }")
+            a.goto(self.A.base + '/#/area/ba03')
+            a.wait_for_selector('text=Canteen ba03')
+            # serial numbers: two TV screens with their serial numbers; the quantity follows the list
+            a.click('.page-head button[data-act=invModal]')
+            a.select_option('#modal select[name=item]', 'tv')
+            a.fill('#modal textarea[name=serials]', 'TV-7001\nTV-7002')
+            self.assertEqual(a.input_value('#modal input[name=qty]'), '2')
+            submit()
+            closed()
+            a.wait_for_selector('.serial-chips >> text=TV-7002')
+            # removing fewer pieces than have a serial number asks which one goes
+            a.click('.page-head button[data-act=invModal]')
+            a.select_option('#modal select[name=item]', 'tv')
+            a.select_option('#modal select[name=action]', 'Removed')
+            a.fill('#modal input[name=qty]', '2')  # 3 TV screens, 2 with a serial number: 1 of them must go
+            submit()
+            a.wait_for_selector('#toast.error')
+            a.check('#modal input[name=pick] >> nth=0')
+            submit()
+            closed()
+            self.assertEqual(a.evaluate("area('ba03').pieces.map(p => p.serial)"), ['TV-7002'])
+            a.goto(self.A.base + '/#/equipment')
+            a.fill('input[data-f="serial.q"]', '7002')
+            a.wait_for_selector('tbody[data-results=serial] >> text=Canteen ba03')
+            a.goto(self.A.base + '/#/settings')
+            a.evaluate("window.prompt = () => 'DELETE'")  # the confirmation asks to type DELETE
+            a.click('button[data-act=clearAll]')
+            a.wait_for_selector('text=Sample data deleted')
+            left = a.evaluate("({ n: DB.areas.length, recs: DB.areas.reduce((s, x) => s + x.photos.length + x.issues.length + x.surveys.length + x.inspections.length + x.maintenance.length, 0), pieces: area('ba03').pieces.length, hist: DB.history.filter(h => /^h\\d+$/.test(h.id)).length })")
+            self.assertEqual(left, {'n': 22, 'recs': 0, 'pieces': 1, 'hist': 0})
+            a.goto(self.A.base + '/#/settings')
+            a.wait_for_selector('text=Server & Database')
+            self.assertEqual(a.locator('button[data-act=clearAll]').count(), 0, 'nothing of the sample data is left')
+            self.assertEqual(self.errors, [])
+            browser.close()
+
+    def test_save_again_after_a_conflict(self):
+        """Review of 2.4: after "changed by another user" the window stayed open on the old records; pressing Save again
+        said "Inventory updated" but saved nothing (only a wrong transaction line). Now it opens again on the new data."""
+        make_authority(self.A)
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(executable_path=CHROME) if CHROME else pw.chromium.launch()
+            a = self.page(browser, 'A')
+            a.goto(self.A.base)
+            a.fill('input[name=username]', ADMIN[0])
+            a.fill('input[name=password]', ADMIN[1])
+            a.get_by_role('button', name='Log In').click()
+            a.get_by_text('Try it with sample data first').click()
+            a.wait_for_selector('text=Break Area 01', timeout=30000)
+            a.goto(self.A.base + '/#/area/ba01')
+            a.click('.page-head button[data-act=invModal]')
+            a.fill('#modal input[name=qty]', '5')
+            a.fill('#modal textarea[name=details]', 'From supplier X')
+            # meanwhile somebody else changes the chairs of this break area
+            other = self.A.client()
+            other.login(*ADMIN)
+            inv = next(x for x in next(x for x in other.get('/api/state')['areas'] if x['id'] == 'ba01')['inventory'] if x['item'] == 'chairs')
+            other.post('/api/commit', {'label': 'other', 'ops': [{'e': 'inventory', 'id': inv['id'], 'op': 'put', 'ver': inv['ver'],
+                                                                   'row': {**{k: v for k, v in inv.items() if k != 'ver'}, 'areaId': 'ba01', 'qty': inv['qty'] + 1}}]})
+            a.click('#modal .modal-f .primary')
+            a.wait_for_selector('#toast.error >> text=Not saved')
+            a.click('#modal .modal-f .primary')
+            a.wait_for_selector('#toast.error >> text=window shows the new data')
+            self.assertEqual(a.input_value('#modal input[name=qty]'), '5', 'what was typed is kept')
+            self.assertEqual(a.input_value('#modal textarea[name=details]'), 'From supplier X')
+            a.click('#modal .modal-f .primary')
+            a.wait_for_selector('#modal.open', state='detached', timeout=15000)
+            self.assertEqual(a.evaluate("qty(area('ba01'), 'chairs')"), inv['qty'] + 6)
+            self.assertEqual([e for e in self.errors if '409 (Conflict)' not in e], [])
+            browser.close()
+
     def test_personal_link(self):
         """The administrator adds a person with only a name (personal link is the default) and a profile; the link is shown
         at once; opening it in another browser logs that person in under their own name. The link list in Devices & Sync

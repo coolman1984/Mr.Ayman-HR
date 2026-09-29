@@ -7,6 +7,57 @@ Version numbers: `server/version.py`. Pull requests: github.com/coolman1984/Mr.A
 
 ---
 
+## 2.5.0 – serial numbers, sample data fix, 12 bugs from a whole-program hunt (2026-09-29)
+
+**Why:** the customer reported that *Delete Sample Data* disappears, "many bugs and problems", and asked to record the
+serial number of every piece in a break area.
+
+**What changed**
+- **Delete Sample Data disappeared** (reproduced in the browser): the button looked for sample break areas by their
+  *names* ("Break Area 03"). People start real use by renaming them, so the button vanished while the fake issues,
+  photos, surveys and history stayed. Now sample records are recognised by their fixed short ids (`SAMPLE_REC`,
+  `sampleLeft`): untouched sample areas are deleted completely, renamed ones are kept with their inventory and
+  everything added by hand; only their sample records go. The button shows while any sample record is left.
+- **Serial numbers**: new replicated entity `pieces` (one record per piece: item, serial, date, break area;
+  `journal.SCHEMA` and `sync.SCHEMA_VERSION` 3 → 4). Update → *Added* asks the serial numbers (one per line, barcode
+  scanners work; the quantity follows), *Removed / Transferred* ask which pieces go (required when fewer pieces would
+  remain than serial numbers), *Replaced* changes old → new, *Delete Item* removes them. Area page list with
+  Add/Edit (`serialModal`), search on Furniture & Equipment, column in the inventory report, sheet in the full export.
+  Duplicates refused with where the number is; duplicates from two PCs at once are marked "twice". Server: serial
+  required (≤ 80), permission `inventory.edit` (delete also `inventory.delete`), area scope as everywhere.
+- **Bug hunt** (independent reviewer, browser-reproduced), all fixed:
+  1. Save again after "changed by another user" said "saved" but saved nothing (the window kept the old records after
+     the reload) → a window opened on older data is opened again on the new data with the typed values
+     (`reopenFresh`, `OPENER`).
+  2. Dashboard TV / water columns were 0 on a system started empty (item type ids `tv_screens`) → `mainItem`.
+  3. A system started empty had no item types → the usual ones are added at the empty start.
+  4. Editing an area after a location was renamed silently changed its location → the current value is always offered.
+  5. A note on a closed issue changed its closed date.
+  6. An area-limited user could delete item types used elsewhere → refused in the screen and on the server.
+  7. "Add New Break Area" in the menu for area-limited users (refused only at the end) → hidden and blocked.
+  8. Transparent PNG logos turned black (JPEG) → white background.
+  9. Deleting the latest inspection kept its next inspection date.
+  10. The first real photo never replaced the drawing of a new break area as main photo.
+  11. Conflict messages showed ids (`Inventory "ba01:chairs"`) → names (`Inventory "Chairs" of Break Area 01`).
+  12. Completing maintenance recorded the team as "Updated By" instead of the person.
+  Also: backup restore refused for area-limited users; a transfer no longer changes the condition of the pieces
+  already in the other area; the maintenance page no longer breaks on an old record without a date.
+- Tests: `T39_SerialNumbers` (two PCs), browser tests `test_serial_numbers_and_renamed_sample_area`,
+  `test_save_again_after_a_conflict`.
+
+**Mistakes and lessons**
+- Recognising demo data by a *name* people can change was the root of the "disappearing" button. Recognise it by an
+  id nobody sees.
+- Keeping a form open after a failed save (2.3, "nothing typed is lost") created a silent data-loss bug: the form
+  kept references to records that the reload had replaced. Whenever data objects are replaced, anything holding
+  them (open windows, closures) must be refreshed – test "fail, then retry" for every save path.
+- `form.elements['item']` is a *method* of the elements collection, not the field named "item" – use
+  `querySelector('[name=…]')`.
+- `>>` to a new file name by mistake created a second stylesheet (`style.css` next to `styles.css`) – check the file
+  name before appending.
+- Known and left: the first save of a person with settings rights writes the default settings into the database
+  (noise in the log only).
+
 ## 2.4.0 – new PCs join by themselves, no "Add a PC" (2026-09-27)
 
 **Why:** the HR team asked for two simple ways only: a **personal link** (nothing else needed) and **user name and

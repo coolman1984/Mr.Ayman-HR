@@ -162,7 +162,7 @@ CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';
        "connect-src 'self' data: blob:; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
 PERM_LABEL = {p: label for _, ps in PERMISSIONS for p, label in ps}
 REPORT_PERMS = [p for p in ALL if p.startswith('report.')] + ['export.excel', 'logs.view', 'logs.activity', 'logs.security']
-ENTITY_TITLE = {'areas': 'break areas', 'inventory': 'inventory', 'surveys': 'satisfaction results', 'photos': 'photos',
+ENTITY_TITLE = {'areas': 'break areas', 'inventory': 'inventory', 'pieces': 'serial numbers', 'surveys': 'satisfaction results', 'photos': 'photos',
                 'docs': 'documents', 'issues': 'issues', 'issueLog': 'issue follow-ups', 'maintenance': 'maintenance',
                 'inspections': 'inspections', 'history': 'transactions', 'itemTypes': 'item types', 'settings': 'settings'}
 OP_WORD = {'insert': 'add', 'update': 'change', 'delete': 'delete'}
@@ -184,6 +184,8 @@ def required(entity, op, changed):
         return ('areas.edit',)
     if entity == 'inventory':
         return ('inventory.delete', 'itemtypes.manage') if op == 'delete' else ('inventory.edit',)
+    if entity == 'pieces':  # a piece leaves with "Removed" (inventory.edit) or with "Delete Item" (inventory.delete)
+        return ('inventory.edit', 'inventory.delete') if op == 'delete' else ('inventory.edit',)
     if entity == 'history':
         return HISTORY_PERMS if op == 'insert' else ('areas.delete',)
     return {
@@ -215,6 +217,8 @@ def commit_guard(u):
             if scope is not None and e not in ('settings', 'itemTypes') and not {area, c.get('area_before', area)} <= scope:
                 raise Forbidden('You are limited to certain break areas and cannot add new ones.' if e == 'areas' and op == 'insert'
                                 else 'You can only change the break areas assigned to you.')
+            if e == 'itemTypes' and op == 'delete' and scope is not None:  # other break areas may still use it
+                raise Forbidden('Only a person who works with all break areas can delete an item type.')
             if e != 'areas' and op == 'insert' and area in created and 'areas.create' in perms:
                 continue  # contents of a break area that is being created
             if e != 'areas' and op == 'delete' and area in removed and 'areas.delete' in perms:
@@ -708,6 +712,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(200, {'ok': not BACKUPS.last_error, 'error': BACKUPS.last_error, 'name': name})
         if p == '/api/backups/restore':
             self.need('backups.restore')
+            if self.u['areas'] is not None:  # a restore changes every break area back
+                raise Forbidden('Restoring a backup changes all break areas. It is only for users who work with all break areas.')
             d = self.json_body()
             safety, res = BACKUPS.restore(d.get('name'), self.user, self.ip, self.u['id'])
             STORE.log_activity(self.user, self.ip, [{'type': 'restore', 'action': 'Restored backup', 'target': d.get('name'),

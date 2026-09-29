@@ -63,10 +63,10 @@ function flatten(db) {
   Object.entries(db.settings).forEach(([id, value]) => put('settings', { id, value }));
   db.itemTypes.forEach(t => put('itemTypes', t));
   db.areas.forEach(a => {
-    const { inventory, photos, docs, issues, maintenance, inspections, surveys, ...base } = a;
+    const { inventory, pieces, photos, docs, issues, maintenance, inspections, surveys, ...base } = a;
     put('areas', base);
     inventory.forEach(x => put('inventory', { ...x, id: x.id || a.id + ':' + x.item, areaId: a.id }));
-    [['photos', photos], ['docs', docs], ['maintenance', maintenance], ['inspections', inspections], ['surveys', surveys || []]]
+    [['pieces', pieces || []], ['photos', photos], ['docs', docs], ['maintenance', maintenance], ['inspections', inspections], ['surveys', surveys || []]]
       .forEach(([e, list]) => list.forEach(x => put(e, { ...x, areaId: a.id })));
     issues.forEach(i => {
       const { log, ...b } = i;
@@ -81,7 +81,7 @@ function flatten(db) {
 async function load() {
   const s = await api('GET', '/api/state');
   s.settings = { ...DEFAULT_SETTINGS, ...s.settings };
-  s.areas.forEach(a => { a.surveys = a.surveys || []; a.issues.forEach(i => (i.log = i.log || [])); });
+  s.areas.forEach(a => { a.surveys = a.surveys || []; a.pieces = a.pieces || []; a.issues.forEach(i => (i.log = i.log || [])); });
   const vers = {};
   const walk = (e, x) => { if (x.ver) vers[e + '|' + x.id] = x.ver; };
   (s.settingsVer ? Object.entries(s.settingsVer) : []).forEach(([id, ver]) => (vers['settings|' + id] = ver));
@@ -90,7 +90,7 @@ async function load() {
   s.areas.forEach(a => {
     walk('areas', a);
     a.inventory.forEach(x => walk('inventory', x));
-    ['photos', 'docs', 'maintenance', 'inspections', 'surveys'].forEach(e => a[e].forEach(x => walk(e, x)));
+    ['pieces', 'photos', 'docs', 'maintenance', 'inspections', 'surveys'].forEach(e => a[e].forEach(x => walk(e, x)));
     a.issues.forEach(i => { walk('issues', i); i.log.forEach(l => walk('issueLog', l)); });
   });
   DB = s;
@@ -183,6 +183,10 @@ const area = id => DB.areas.find(a => a.id === id);
 const itemType = id => DB.itemTypes.find(t => t.id === id);
 const itemName = id => id === 'area' ? 'Break Area' : (itemType(id) || { name: id }).name;
 const itemShort = id => { if (id === 'area') return 'Break Area'; const t = itemType(id); return t ? (t.short || t.name) : id; };
+const allPieces = () => DB.areas.flatMap(a => (a.pieces || []).map(p => ({ a, p }))).sort((x, y) => x.p.serial.localeCompare(y.p.serial, undefined, { numeric: true }));
+/* dashboard columns chairs / tables / TV / water: the item types of a system started empty get other ids (tv_screens) */
+const MAIN_ICON = { chairs: 'chair', tables: 'table', tv: 'tv', water: 'dispenser' };
+const mainItem = k => itemType(k) ? k : (DB.itemTypes.find(t => t.icon === MAIN_ICON[k]) || { id: k }).id;
 const invEntry = (a, item) => a.inventory.find(i => i.item === item);
 const qty = (a, item) => (invEntry(a, item) || {}).qty || 0;
 const byDateDesc = (x, y) => (y.date || '').localeCompare(x.date || '') || (y.seq || 0) - (x.seq || 0);
@@ -199,6 +203,28 @@ function setQty(a, item, value, condition) {
   e.qty = Math.max(0, value);
   if (condition) e.condition = condition;
 }
+/* serial numbers: one record per piece (a.pieces), the quantity stays in the inventory */
+const piecesOf = (a, item) => (a.pieces || []).filter(p => p.item === item).sort((x, y) => x.serial.localeCompare(y.serial, undefined, { numeric: true }));
+const serialLines = t => String(t || '').split(/[\r\n,;]+/).map(x => x.trim()).filter(Boolean);
+/* where a serial number is already used (any break area the person can see), or null */
+function serialUsed(serial, exceptId) {
+  const k = serial.toLowerCase();
+  for (const a of DB.areas) for (const p of a.pieces || []) if (p.id !== exceptId && p.serial.toLowerCase() === k) return { a, p };
+  return null;
+}
+/* checks new serial numbers: none twice in the list, none already used; returns an error text or '' */
+function serialProblem(list, exceptIds = []) {
+  const seen = new Set();
+  for (const x of list) {
+    if (x.length > 80) return `Serial number "${x.slice(0, 20)}…" is too long (at most 80 characters).`;
+    if (seen.has(x.toLowerCase())) return `Serial number ${x} is entered twice.`;
+    seen.add(x.toLowerCase());
+    const u = serialUsed(x);
+    if (u && !exceptIds.includes(u.p.id)) return `Serial number ${x} is already used: ${itemShort(u.p.item)} in ${u.a.name}.`;
+  }
+  return '';
+}
+const newPiece = (item, serial, date) => ({ id: uid() + uid().slice(0, 4), item, serial, date: date || today() });
 let lastSeq = 0;
 function pushHistory(rec) {
   // time-based so two PCs saving at the same moment never produce the same record id
@@ -466,8 +492,8 @@ function renderShell(route) {
   const link = (href, icon, label, active, extra = '') => canPage(href.slice(2)) ? `<a href="${href}" class="${active ? 'active' : ''}">${ic(icon)}<span>${label}</span>${extra}</a>` : '';
   $('#sidebar').innerHTML = `<div class="nav">
       ${link('#/dashboard', 'dashboard', 'Dashboard', top === 'dashboard')}
-      ${link('#/areas', 'building', 'Break Areas', areasOpen, can('areas.create') ? ic(areasOpen ? 'chevD' : 'chevR', 'chev') : '')}
-      ${areasOpen && can('areas.create') ? `<div class="sub">
+      ${link('#/areas', 'building', 'Break Areas', areasOpen, can('areas.create') && allAreas() ? ic(areasOpen ? 'chevD' : 'chevR', 'chev') : '')}
+      ${areasOpen && can('areas.create') && allAreas() ? `<div class="sub">
         <a href="#/areas" class="${top === 'areas' && route[1] !== 'new' || top === 'area' ? 'active' : ''}">All Break Areas</a>
         <a href="#/areas/new" class="${route[1] === 'new' ? 'active' : ''}">Add New Break Area</a></div>` : ''}
       ${link('#/equipment', 'sofa', 'Furniture &amp; Equipment', top === 'equipment')}
@@ -492,7 +518,7 @@ function render() {
   renderShell(route);
   const v = $('#view');
   const [top, id] = route;
-  if (!canPage(top) || (top === 'areas' && id === 'new' && !can('areas.create'))) v.innerHTML = viewNoAccess();
+  if (!canPage(top) || (top === 'areas' && id === 'new' && !(can('areas.create') && allAreas()))) v.innerHTML = viewNoAccess();
   else if (top === 'area' && area(id)) v.innerHTML = viewArea(area(id));
   else if (top === 'area') v.innerHTML = `<div class="card welcome"><div class="kic">${ic('alert')}</div><h2>Break area not found</h2>
     <p>It was deleted${allAreas() ? '' : ', or it is not one of the break areas assigned to you'}.</p><a class="btn" href="#/areas">Back to Break Areas</a></div>`;
@@ -578,7 +604,7 @@ function satLine(points, { h = 230, compact = false } = {}) {
 /* ============================== Dashboard ============================== */
 const F = {
   dash: { q: '', status: '' }, areas: { q: '', loc: '', status: '', active: '' }, tx: { q: '', area: '', item: '', action: '', from: '', to: '' },
-  hist: { item: '', action: '' }, photoTab: 'All', sat: { loc: '', month: '' },
+  hist: { item: '', action: '' }, serial: { q: '' }, photoTab: 'All', sat: { loc: '', month: '' },
   log: { tab: 'audit', q: '', user: '', type: '', node: '', from: '', to: '' }
 };
 
@@ -610,7 +636,7 @@ function viewDashboard() {
   const A = DB.areas;
   if (!A.length) return viewWelcome();
   const tot = id => A.reduce((s, a) => s + qty(a, id), 0);
-  const kpis = [['building', 'Total Break Areas', A.length], ['chair', 'Total Chairs', tot('chairs')], ['table', 'Total Tables', tot('tables')], ['tv', 'TV Screens', tot('tv')], ['dispenser', 'Water Dispensers', tot('water')]];
+  const kpis = [['building', 'Total Break Areas', A.length], ['chair', 'Total Chairs', tot(mainItem('chairs'))], ['table', 'Total Tables', tot(mainItem('tables'))], ['tv', 'TV Screens', tot(mainItem('tv'))], ['dispenser', 'Water Dispensers', tot(mainItem('water'))]];
   const statusData = STATUSES.map(s => ({ label: s, value: A.filter(a => a.status === s).length, color: STATUS_COLOR[s] }));
   const equip = DB.itemTypes.map(t => ({ label: t.name, value: tot(t.id), icon: t.icon }));
   const locs = [...new Set([...setting('locations'), ...A.map(a => a.location)])]
@@ -667,11 +693,20 @@ function txRow(h) {
 }
 
 const RESULTS = {
+  serial(el) {
+    const q = F.serial.q.trim().toLowerCase();
+    const rows = allPieces().filter(r => !q || (r.p.serial + ' ' + r.a.name + ' ' + itemName(r.p.item)).toLowerCase().includes(q));
+    const dup = new Map();
+    allPieces().forEach(r => { const k = r.p.serial.toLowerCase(); dup.set(k, (dup.get(k) || 0) + 1); });
+    el.innerHTML = rows.slice(0, 300).map(({ a, p }) => `<tr class="click" data-act="go" data-href="#/area/${a.id}"><td class="mono"><b>${esc(p.serial)}</b>${dup.get(p.serial.toLowerCase()) > 1 ? ' <span class="badge b-red" title="The same serial number is recorded more than once">twice</span>' : ''}</td>
+      <td>${esc(itemName(p.item))}</td><td>${esc(a.name)}</td><td>${esc(a.location)}</td><td>${fmt(p.date)}</td></tr>`).join('')
+      || `<tr><td colspan="5" class="empty">${q ? 'No serial number matches your search' : 'No serial numbers recorded yet. Open a break area and use Update → Added, or Serial numbers → Add.'}</td></tr>`;
+  },
   dash(el) {
     const q = F.dash.q.toLowerCase();
     const rows = DB.areas.filter(a => (!q || (a.name + ' ' + a.location + ' ' + a.responsible).toLowerCase().includes(q)) && (!F.dash.status || a.status === F.dash.status));
     el.innerHTML = rows.map((a, i) => `<tr class="click" data-act="go" data-href="#/area/${a.id}"><td>${i + 1}</td><td><b>${esc(a.name)}</b></td><td>${esc(a.location)}</td>
-      <td class="num">${qty(a, 'chairs')}</td><td class="num">${qty(a, 'tables')}</td><td class="num">${qty(a, 'tv')}</td><td class="num">${qty(a, 'water')}</td>
+      <td class="num">${qty(a, mainItem('chairs'))}</td><td class="num">${qty(a, mainItem('tables'))}</td><td class="num">${qty(a, mainItem('tv'))}</td><td class="num">${qty(a, mainItem('water'))}</td>
       <td>${badge(a.status)}</td><td>${fmt(lastUpdate(a))}</td></tr>`).join('') || `<tr><td colspan="9" class="empty">No break areas match your search</td></tr>`;
   },
   sat(el) {
@@ -712,7 +747,7 @@ const RESULTS = {
       const nd = daysFromToday(a.nextInspection);
       return `<tr class="click" data-act="go" data-href="#/area/${a.id}">
         <td><span class="thumb-s ph">${photoHTML(mainPhoto(a))}</span></td><td><b>${esc(a.name)}</b></td><td>${esc(a.location)}</td><td>${esc(a.building)} / ${esc(a.floor)}</td>
-        <td class="num">${a.capacity}</td><td class="num">${qty(a, 'chairs')}</td><td class="num">${qty(a, 'tables')}</td><td class="num">${qty(a, 'tv')}</td><td class="num">${qty(a, 'water')}</td>
+        <td class="num">${a.capacity}</td><td class="num">${qty(a, mainItem('chairs'))}</td><td class="num">${qty(a, mainItem('tables'))}</td><td class="num">${qty(a, mainItem('tv'))}</td><td class="num">${qty(a, mainItem('water'))}</td>
         <td>${esc(a.responsible)}</td><td>${badge(a.status)}</td><td class="num">${satBadge((latestSat(a) || {}).value)}</td><td class="${nd < 0 ? 'overdue' : ''}">${fmt(a.nextInspection)}</td>
         <td class="num">${openIssues(a).length || '-'}</td><td>${fmt(lastUpdate(a))}</td></tr>`;
     }).join('') || `<tr><td colspan="15" class="empty">No break areas match the filters</td></tr>`;
@@ -779,7 +814,7 @@ function areaFields(a = {}) {
   const sel = (n, l, list, v) => `<label>${l}<select name="${n}">${list.map(x => `<option ${x === v ? 'selected' : ''}>${esc(x)}</option>`).join('')}</select></label>`;
   return `<div class="form-grid">
     ${inp('name', 'Break Area Name / Number *', a.name, 'text', 'required')}
-    ${sel('location', 'Location', setting('locations'), a.location)}
+    ${sel('location', 'Location', [...new Set([a.location, ...setting('locations')].filter(Boolean))], a.location)}
     ${inp('building', 'Building', a.building)}
     ${inp('floor', 'Floor', a.floor)}
     ${inp('startDate', 'Start Date', a.startDate || today(), 'date')}
@@ -822,7 +857,7 @@ async function submitNewArea(form) {
   if (!d.name.trim()) return toast('Name is required', true);
   let id;  // random, so two PCs adding a break area at the same time never get the same id
   do { id = 'ba' + Date.now().toString(36).slice(-4) + uid().slice(0, 4); } while (area(id));
-  const a = { id, inventory: [], photos: [], docs: [], issues: [], maintenance: [], inspections: [], surveys: [], lastInspection: '', nextInspection: addDays(d.startDate || today(), setting('inspectionDays')), inspectedBy: '' };
+  const a = { id, inventory: [], pieces: [], photos: [], docs: [], issues: [], maintenance: [], inspections: [], surveys: [], lastInspection: '', nextInspection: addDays(d.startDate || today(), setting('inspectionDays')), inspectedBy: '' };
   applyAreaFields(a, d);
   DB.itemTypes.forEach(t => { const q = +d['qty_' + t.id] || 0; if (q > 0) a.inventory.push({ item: t.id, qty: q, condition: d['cond_' + t.id] }); });
   const btn = $('button.primary', form);
@@ -912,6 +947,7 @@ function viewArea(a) {
       <div class="card-h"><h3>Inventory / Contents</h3><span class="sp"></span>${can('inventory.edit', 'inventory.delete') ? `<button class="btn sm" data-act="invModal" data-id="${a.id}">${ic('edit')}Update</button>` : ''}</div>
       <div class="inv">${a.inventory.map(e => `<div class="inv-tile" ${can('inventory.edit', 'inventory.delete') ? `data-act="invModal" data-id="${a.id}" data-item="${e.item}"` : 'style="cursor:default"'} title="${esc(e.note || '')}">
         ${itemIcon(e.item)}<div class="n">${esc(itemName(e.item))}</div><div class="q">${e.qty}</div>${badge(e.condition || 'Good')}</div>`).join('') || '<p class="muted">No items recorded yet.</p>'}</div>
+      ${serialList(a)}
     </div>
     <div class="card">
       <div class="card-h"><h3>Inspection</h3><span class="sp"></span>${inspState}</div>
@@ -1027,8 +1063,29 @@ function filteredHist(a) {
 
 /* ============================== Modals ============================== */
 /* allow: false shows the form read-only (the user may look but not change) */
+/* A window works on the records it was opened with. When a save fails, the data is loaded again and those records are
+   replaced - saving the old ones again would silently do nothing. So the window is opened again on the new data, with
+   everything that was typed kept (the action that opened it is remembered). */
+let OPENER = null;
+function reopenFresh(form, opener) {
+  const vals = $$('[name]', form).filter(el => el.type !== 'file' && !el.disabled).map(el => [el.name, el.type === 'checkbox' ? el.checked : el.value, el.type, el.value]);
+  closeModal();
+  OPENER = opener;
+  try { ACT[opener[0]](opener[1], null); } finally { OPENER = null; }
+  const f = $('#modal.open form');
+  if (!f) return;
+  const put = ([name, v, type, value]) => {
+    const el = $$(`[name="${name}"]`, f).find(x => type !== 'checkbox' || x.value === value); // not f.elements[name]: "item" is a method there
+    if (!el || el.disabled || el.type === 'file') return;
+    if (type === 'checkbox') el.checked = v; else el.value = v;
+  };
+  // the choices that change the window first (item, action), then everything else
+  vals.filter(v => v[2] === 'select-one').forEach(v => { put(v); const el = $(`[name="${v[0]}"]`, f); if (el) el.dispatchEvent(new Event('change', { bubbles: true })); });
+  vals.filter(v => v[2] !== 'select-one').forEach(put);
+  toast('Someone else changed this at the same time. The window shows the new data now – please check and press the button again.', true, 8000);
+}
 function modal(title, body, { submit = 'Save', onSubmit, wide = false, extra = '', cls = '', locked = false, allow = true } = {}) {
-  const m = $('#modal');
+  const m = $('#modal'), dbAtOpen = DB, opener = OPENER;
   if (!allow) onSubmit = undefined;
   track('open', 'dialog', title.replace(/<[^>]+>/g, ''));
   m.dataset.locked = locked ? '1' : '';
@@ -1043,6 +1100,10 @@ function modal(title, body, { submit = 'Save', onSubmit, wide = false, extra = '
   form.onsubmit = async e => {
     e.preventDefault();
     if (!onSubmit) return;
+    if (DB !== dbAtOpen) { // the data was loaded again since this window opened (a save failed)
+      if (opener && ACT[opener[0]]) return reopenFresh(form, opener);
+      closeModal(); return toast('The data was refreshed. Please open the window again and repeat your change.', true, 8000);
+    }
     const bad = $$('[required]', form).find(el => !String(el.value).trim());
     if (bad) { bad.focus(); return toast('Please fill the required fields', true); }
     const btn = $('.modal-f .primary', form); btn.disabled = true;
@@ -1074,6 +1135,11 @@ function invModal(a, presetItem) {
     <label>Action<select name="action">${options(ACTIONS, 'Added')}</select></label>
     <label data-show="qty">Quantity<input name="qty" type="number" min="1" value="1"></label>
     <label>Current Quantity<input name="cur" disabled value="${e ? e.qty : 0}"></label>
+    <label class="full" data-show="serials">Serial numbers <span class="hint">(optional – one per line; a barcode scanner works too)</span>
+      <textarea name="serials" rows="3" placeholder="e.g. SN-100234" autocomplete="off"></textarea></label>
+    <div class="full" data-show="pick"></div>
+    <label class="hidden" data-show="old">Old serial number<select name="oldSerial"></select></label>
+    <label class="hidden" data-show="old">New serial number<input name="newSerial" autocomplete="off" placeholder="leave empty to keep it"></label>
     <label>Condition after update<select name="condition">${options(CONDITIONS, e ? e.condition : 'Good')}</select></label>
     <label>Date<input name="date" type="date" value="${today()}" required></label>
     <label class="full hidden" data-show="transfer">Transfer to<select name="target">${options(DB.areas.filter(x => x.id !== a.id).map(x => [x.id, x.name + ' – ' + x.location]))}</select></label>
@@ -1089,34 +1155,111 @@ function invModal(a, presetItem) {
       if (moves && n <= 0) { toast('Enter a quantity greater than 0', true); return false; }
       if ((d.action === 'Removed' || d.action === 'Transferred') && n > prev) { toast(`Only ${prev} ${itemName(d.item)} available`, true); return false; }
       const next = d.action === 'Added' ? prev + n : d.action === 'Removed' || d.action === 'Transferred' ? prev - n : prev;
-      let details = d.details.trim();
+      // serial numbers of the pieces that come, go or are exchanged
+      const have = piecesOf(a, d.item), added = d.action === 'Added' ? serialLines(d.serials) : [];
+      const picked = moves && d.action !== 'Added' ? $$('[name=pick]:checked', form).map(x => have.find(p => p.id === x.value)).filter(Boolean) : [];
+      if (added.length > n) { toast(`You entered ${added.length} serial numbers but the quantity is ${n}.`, true); return false; }
+      const addErr = serialProblem(added);
+      if (addErr) { toast(addErr, true, 6000); return false; }
+      if (picked.length > n) { toast(`You ticked ${picked.length} serial numbers but the quantity is ${n}.`, true); return false; }
+      const mustPick = d.action === 'Removed' || d.action === 'Transferred' ? Math.max(0, have.length - next) : 0;
+      if (picked.length < mustPick) { toast(`Please tick the serial number${mustPick === 1 ? ' of the piece' : 's of the ' + mustPick + ' pieces'} that ${mustPick === 1 ? 'is' : 'are'} ${d.action === 'Removed' ? 'removed' : 'transferred'}.`, true, 6000); return false; }
+      const old = d.action === 'Replaced' ? have.find(p => p.id === d.oldSerial) : null, newSerial = (d.newSerial || '').trim();
+      if (old && newSerial && newSerial.toLowerCase() !== old.serial.toLowerCase()) {
+        const err = serialProblem([newSerial], [old.id]);
+        if (err) { toast(err, true, 6000); return false; }
+      }
+      let details = d.details.trim(), serialNote = '';
+      const sn = list => list.length ? ` (serial ${list.join(', ')})` : '';
       if (d.action === 'Transferred') {
         const t = area(d.target);
         if (!t) { toast('Choose a destination break area', true); return false; }
         const tp = qty(t, d.item);
-        setQty(t, d.item, tp + n, d.condition);
-        pushHistory({ areaId: t.id, date: d.date, item: d.item, action: 'Transferred', prev: tp, next: tp + n, details: `Received ${n} from ${a.name}` + (details ? '. ' + details : ''), by: d.by });
-        details = `Transferred ${n} to ${t.name}` + (details ? '. ' + details : '');
+        setQty(t, d.item, tp + n, tp ? '' : d.condition); // the pieces already there keep their condition
+        t.pieces = t.pieces || [];
+        for (const p of picked) { a.pieces = a.pieces.filter(x => x !== p); t.pieces.push(p); }
+        const moved = sn(picked.map(p => p.serial));
+        pushHistory({ areaId: t.id, date: d.date, item: d.item, action: 'Transferred', prev: tp, next: tp + n, details: `Received ${n} from ${a.name}${moved}` + (details ? '. ' + details : ''), by: d.by });
+        details = `Transferred ${n} to ${t.name}${moved}` + (details ? '. ' + details : '');
+      } else if (d.action === 'Removed' && picked.length) {
+        a.pieces = a.pieces.filter(x => !picked.includes(x));
+        serialNote = sn(picked.map(p => p.serial));
+      } else if (added.length) {
+        a.pieces = a.pieces || [];
+        added.forEach(x => a.pieces.push(newPiece(d.item, x, d.date)));
+        serialNote = sn(added);
+      } else if (old && newSerial && newSerial !== old.serial) {
+        serialNote = ` (serial ${old.serial} → ${newSerial})`;
+        old.serial = newSerial; old.date = d.date;
       }
       setQty(a, d.item, next, d.condition);
-      pushHistory({ areaId: a.id, date: d.date, item: d.item, action: d.action, prev, next, details: details || txTitle({ action: d.action, item: d.item, prev, next }), by: d.by });
+      pushHistory({ areaId: a.id, date: d.date, item: d.item, action: d.action, prev, next, details: (details || txTitle({ action: d.action, item: d.item, prev, next })) + serialNote, by: d.by });
       if (!(await save(`${d.action} ${itemName(d.item)} – ${a.name}`))) return false;
       toast('Inventory updated');
     }
   });
   const sync = () => {
-    const act = form.elements.action.value;
+    const act = form.elements.action.value, have = piecesOf(a, form.item.value);
     $('[data-show=qty]', form).classList.toggle('hidden', !['Added', 'Removed', 'Transferred'].includes(act));
     $('[data-show=transfer]', form).classList.toggle('hidden', act !== 'Transferred');
+    $('[data-show=serials]', form).classList.toggle('hidden', act !== 'Added');
+    const pick = $('[data-show=pick]', form), showPick = (act === 'Removed' || act === 'Transferred') && have.length;
+    const ticked = new Set($$('[name=pick]:checked', form).map(x => x.value));
+    pick.classList.toggle('hidden', !showPick);
+    pick.innerHTML = showPick ? `<b class="lbl-sm">Which pieces? <span class="hint">(tick their serial numbers)</span></b>
+      <div class="serial-pick">${have.map(p => `<label class="chk"><input type="checkbox" name="pick" value="${esc(p.id)}" ${ticked.has(p.id) ? 'checked' : ''}> <span class="mono">${esc(p.serial)}</span></label>`).join('')}</div>` : '';
+    const showOld = act === 'Replaced' && have.length;
+    $$('[data-show=old]', form).forEach(el => el.classList.toggle('hidden', !showOld));
+    if (showOld) form.oldSerial.innerHTML = options(have.map(p => [p.id, p.serial]), form.oldSerial.value);
     const en = invEntry(a, form.item.value);
     form.cur.value = en ? en.qty : 0;
   };
   form.addEventListener('change', ev => {
-    if (ev.target.name === 'item') { const en = invEntry(a, form.item.value); form.condition.value = en ? en.condition : 'Good'; }
+    if (ev.target.name === 'item') { const en = invEntry(a, form.item.value); form.condition.value = en ? en.condition : 'Good'; pickReset(); }
+    if (ev.target.name === 'pick') { const k = $$('[name=pick]:checked', form).length; if (k > (+form.qty.value || 0)) form.qty.value = k; return; }
     sync();
   });
+  const pickReset = () => $$('[name=pick]', form).forEach(x => (x.checked = false));
+  // typing or scanning serial numbers raises the quantity to match
+  form.serials.addEventListener('input', () => { const k = serialLines(form.serials.value).length; if (k > (+form.qty.value || 0)) form.qty.value = k; });
   if (!can('inventory.edit')) form.item.disabled = false; // still lets a user who may only delete pick the item
   sync();
+}
+
+/* area page: the serial numbers per item, with a button to add or correct them */
+function serialList(a) {
+  const items = a.inventory.filter(e => e.qty > 0 || piecesOf(a, e.item).length);
+  if (!items.length) return '';
+  const edit = can('inventory.edit');
+  const rows = items.map(e => { const ps = piecesOf(a, e.item); return { e, ps }; }).filter(r => r.ps.length || edit);
+  if (!rows.length) return '';
+  return `<details class="serials" ${a.pieces && a.pieces.length ? 'open' : ''}><summary>${ic('clipboard')}Serial numbers <span class="muted">(${(a.pieces || []).length})</span></summary>
+    ${rows.map(({ e, ps }) => `<div class="serial-row"><div><b>${esc(itemName(e.item))}</b> <span class="muted">${ps.length} of ${e.qty}</span></div>
+      <div class="serial-chips">${ps.map(p => `<span class="chip mono" title="Added ${esc(fmt(p.date))}">${esc(p.serial)}</span>`).join('') || '<span class="muted">none yet</span>'}</div>
+      ${edit ? `<button class="btn sm" data-act="serialModal" data-id="${a.id}" data-item="${esc(e.item)}">${ic('edit')}${ps.length ? 'Edit' : 'Add'}</button>` : ''}</div>`).join('')}
+  </details>`;
+}
+/* the serial numbers of one item in one break area: add the ones of pieces already there, correct typing mistakes */
+function serialModal(a, item) {
+  const have = piecesOf(a, item), q = qty(a, item);
+  modal(`Serial Numbers – ${esc(itemName(item))} – ${esc(a.name)}`, `
+    <p class="hint">One serial number per line (a barcode scanner works too). ${q} ${esc(itemName(item))} in this break area, ${have.length} with a serial number.
+      To bring in or take out pieces use <b>Update</b> (Added / Removed / Transferred).</p>
+    <label class="fld">Serial numbers<textarea name="serials" rows="8" autocomplete="off">${esc(have.map(p => p.serial).join('\n'))}</textarea></label>`, {
+    submit: 'Save Serial Numbers', allow: can('inventory.edit'),
+    async onSubmit(d) {
+      const list = serialLines(d.serials);
+      if (list.length > q) { toast(`There are only ${q} ${itemName(item)} here – you entered ${list.length} serial numbers. Add the pieces first with Update → Added.`, true, 7000); return false; }
+      const err = serialProblem(list, have.map(p => p.id));
+      if (err) { toast(err, true, 6000); return false; }
+      const keep = new Set(list.map(x => x.toLowerCase()));
+      a.pieces = (a.pieces || []).filter(p => p.item !== item || keep.has(p.serial.toLowerCase()));
+      const known = new Set(piecesOf(a, item).map(p => p.serial.toLowerCase()));
+      list.filter(x => !known.has(x.toLowerCase())).forEach(x => a.pieces.push(newPiece(item, x)));
+      if (!(await save(`Serial numbers of ${itemName(item)} – ${a.name}`))) return false;
+      toast('Serial numbers saved');
+    }
+  });
 }
 
 function issueModal(a) {
@@ -1160,7 +1303,7 @@ function issueView(a, iid) {
       i.log = i.log || [];
       i.log.push({ id: uid(), date: d.date, by: me(), text: (d.status !== i.status ? `Status changed to ${d.status}. ` : '') + d.text.trim() });
       i.status = d.status;
-      i.closedDate = d.status === 'Closed' ? d.date : '';
+      if (d.status !== i.status) i.closedDate = d.status === 'Closed' ? d.date : ''; // a note on a closed issue keeps its closed date
       if (!(await save(`Issue follow-up "${i.title}" – ${a.name}`))) return false;
       toast('Issue updated');
     }
@@ -1196,7 +1339,7 @@ function maintDone(a, mid) {
       m.status = 'Done'; m.doneDate = d.date; m.notes = d.notes;
       a.status = d.status;
       const q = m.item ? qty(a, m.item) : null;
-      pushHistory({ areaId: a.id, date: d.date, item: m.item || 'area', action: 'Maintenance', prev: q, next: q, details: m.details + (d.notes ? '. ' + d.notes : ''), by: m.assignedTo });
+      pushHistory({ areaId: a.id, date: d.date, item: m.item || 'area', action: 'Maintenance', prev: q, next: q, details: m.details + (m.assignedTo ? ` (done by ${m.assignedTo})` : '') + (d.notes ? '. ' + d.notes : ''), by: me() });
       if (!(await save(`Complete maintenance – ${a.name}`))) return false;
       toast('Maintenance completed');
     }
@@ -1235,7 +1378,9 @@ function resizeImage(file, max = 1280, asBlob = false) {
       const k = Math.min(1, max / Math.max(img.width, img.height));
       const c = document.createElement('canvas');
       c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
-      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      const g = c.getContext('2d');
+      g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height); // JPEG has no transparency: a transparent logo must not turn black
+      g.drawImage(img, 0, 0, c.width, c.height);
       URL.revokeObjectURL(url);
       if (asBlob) c.toBlob(b => (b ? res(b) : rej(new Error('bad image'))), 'image/jpeg', .82);
       else res(c.toDataURL('image/jpeg', .78));
@@ -1270,6 +1415,9 @@ function uploadModal(a, cat = 'Current') {
         } catch (e) { toast(`${f.name}: ${e.message}`, true, 6000); }
       }
       if (!added) return false;
+      // the first real photo replaces the drawing a new break area starts with as its main photo
+      const main = a.photos.find(p => p.main), real = a.photos.find(p => p.src);
+      if ((!main || !main.src) && real) a.photos.forEach(p => (p.main = p === real));
       if (d.category === 'Before' || d.category === 'After') F.photoTab = d.category;
       if (!(await save(`Upload ${added} file(s) – ${a.name}`))) return false;
       toast(added + ' file(s) uploaded');
@@ -1340,6 +1488,9 @@ function viewEquipment() {
       <td class="num"><b>${a.inventory.reduce((s, e) => s + e.qty, 0)}</b></td></tr>`).join('')}</tbody>
     <tfoot><tr><td>Total</td><td></td>${DB.itemTypes.map(t => `<td class="num">${A.reduce((s, a) => s + qty(a, t.id), 0)}</td>`).join('')}<td class="num">${A.reduce((s, a) => s + a.inventory.reduce((x, e) => x + e.qty, 0), 0)}</td></tr></tfoot></table></div>
     <p class="hint">Highlighted numbers mean the item condition is not "Good".</p></div>
+  <div class="card mb"><div class="card-h"><h3>Serial Numbers</h3><span class="muted">(${allPieces().length})</span><span class="sp"></span>
+      <label class="search">${ic('search')}<input data-f="serial.q" data-res="serial" placeholder="Find a serial number..." value="${esc(F.serial.q)}"></label></div>
+    <div class="tbl-wrap scroll"><table class="tbl"><thead><tr><th>Serial Number</th><th>Item</th><th>Break Area</th><th>Location</th><th>Added</th></tr></thead><tbody data-results="serial"></tbody></table></div></div>
   <div class="card"><div class="card-h"><h3>Item Types</h3></div>
     <div class="tbl-wrap"><table class="tbl"><thead><tr><th></th><th>Name</th><th>Singular</th><th>Code</th><th></th></tr></thead><tbody>
     ${DB.itemTypes.map(t => `<tr><td>${ic(t.icon)}</td><td><b>${esc(t.name)}</b></td><td>${esc(t.short || '')}</td><td class="muted">${esc(t.id)}</td>
@@ -1403,9 +1554,9 @@ function inspStatus(a) { const d = daysFromToday(a.nextInspection || today()); r
 
 function viewMaintenance() {
   const iss = allIssues();
-  const open = iss.filter(i => i.status !== 'Closed').sort((x, y) => PRIORITIES.indexOf(y.priority) - PRIORITIES.indexOf(x.priority) || x.date.localeCompare(y.date));
+  const open = iss.filter(i => i.status !== 'Closed').sort((x, y) => PRIORITIES.indexOf(y.priority) - PRIORITIES.indexOf(x.priority) || (x.date || '').localeCompare(y.date || ''));
   const month = today().slice(0, 7);
-  const maint = DB.areas.flatMap(a => a.maintenance.filter(m => m.status !== 'Done').map(m => ({ ...m, a }))).sort((x, y) => x.date.localeCompare(y.date));
+  const maint = DB.areas.flatMap(a => a.maintenance.filter(m => m.status !== 'Done').map(m => ({ ...m, a }))).sort((x, y) => (x.date || '').localeCompare(y.date || ''));
   const insp = [...DB.areas].sort((x, y) => (x.nextInspection || '').localeCompare(y.nextInspection || ''));
   const k = [
     ['alert', 'Open Issues', iss.filter(i => i.status === 'Open').length, 'orange'],
@@ -1442,9 +1593,9 @@ function viewMaintenance() {
 const REPORTS = {
   register: { title: 'Break Area Register', desc: 'Master data of all break areas with contents, status and inspection dates.', head: areaHead, rows: () => areaRows(DB.areas) },
   inventory: {
-    title: 'Inventory by Break Area', desc: 'Quantity and condition of every item in each break area.',
-    head: () => ['Break Area', 'Location', 'Item', 'Quantity', 'Condition', 'Notes'],
-    rows: () => DB.areas.flatMap(a => a.inventory.map(e => [a.name, a.location, itemName(e.item), e.qty, e.condition, e.note || '']))
+    title: 'Inventory by Break Area', desc: 'Quantity, condition and serial numbers of every item in each break area.',
+    head: () => ['Break Area', 'Location', 'Item', 'Quantity', 'Condition', 'Notes', 'Serial Numbers'],
+    rows: () => DB.areas.flatMap(a => a.inventory.map(e => [a.name, a.location, itemName(e.item), e.qty, e.condition, e.note || '', piecesOf(a, e.item).map(p => p.serial).join(', ')]))
   },
   history: {
     title: 'Update History', desc: 'All inventory changes (added, removed, replaced, transferred, maintenance) in a date range.', dated: true,
@@ -1554,7 +1705,7 @@ function viewSettings() {
 /* ============================== Activity log ============================== */
 const ENTITY_NAME = {
   areas: 'Break Area', inventory: 'Inventory', surveys: 'Satisfaction', photos: 'Photo', docs: 'Document', issues: 'Issue',
-  issueLog: 'Issue Follow-up', maintenance: 'Maintenance', inspections: 'Inspection', history: 'Transaction', itemTypes: 'Item Type', settings: 'Setting',
+  pieces: 'Serial Number', issueLog: 'Issue Follow-up', maintenance: 'Maintenance', inspections: 'Inspection', history: 'Transaction', itemTypes: 'Item Type', settings: 'Setting',
   users: 'Person', profiles: 'Profile', nodes: 'PC'
 };
 const OP_BADGE = { insert: ['Added', 'b-green'], update: ['Changed', 'b-blue'], delete: ['Deleted', 'b-red'] };
@@ -2086,7 +2237,7 @@ async function importOldBackup(file) {
   try {
     for (const a of data.areas) {
       a.surveys = a.surveys || [];
-      a.issues = a.issues || []; a.docs = a.docs || []; a.photos = a.photos || []; a.maintenance = a.maintenance || []; a.inspections = a.inspections || []; a.inventory = a.inventory || [];
+      a.issues = a.issues || []; a.docs = a.docs || []; a.photos = a.photos || []; a.maintenance = a.maintenance || []; a.inspections = a.inspections || []; a.inventory = a.inventory || []; a.pieces = a.pieces || [];
       for (const p of a.photos) if (p.src && p.src.startsWith('data:')) {
         const b = await dataURLToBlob(p.src);
         p.src = await uploadFile(b, 'photo' + extOf(b.type));
@@ -2139,6 +2290,7 @@ const ACT = {
   toHistory: () => $('#history').scrollIntoView({ behavior: 'smooth' }),
   photoTab: d => { F.photoTab = d.tab; rerender(); },
   editArea: d => editArea(area(d.id)),
+  serialModal: d => serialModal(area(d.id), d.item),
   invModal: d => invModal(area(d.id), d.item),
   issueModal: d => issueModal(area(d.id)),
   issueView: d => issueView(area(d.id), d.iid),
@@ -2152,8 +2304,10 @@ const ACT = {
     const a = area(d.id), item = $('#modal form').item.value, e = invEntry(a, item);
     if (!e) return toast(`${itemName(item)} is not in this break area's inventory`, true);
     if (!confirm(`Delete ${itemName(item)} (quantity ${e.qty}) from ${a.name}'s inventory?`)) return;
+    const gone = piecesOf(a, item).map(p => p.serial);
     a.inventory = a.inventory.filter(x => x !== e);
-    pushHistory({ areaId: a.id, date: today(), item, action: 'Removed', prev: e.qty, next: 0, details: `${itemName(item)} deleted from the inventory`, by: me() });
+    a.pieces = (a.pieces || []).filter(p => p.item !== item);
+    pushHistory({ areaId: a.id, date: today(), item, action: 'Removed', prev: e.qty, next: 0, details: `${itemName(item)} deleted from the inventory` + (gone.length ? ` (serial ${gone.join(', ')})` : ''), by: me() });
     if (await save(`Delete inventory item ${itemName(item)} – ${a.name}`)) { closeModal(); rerender(); toast('Item deleted'); }
   },
   async maintDelete(d) {
@@ -2170,17 +2324,20 @@ const ACT = {
       const last = [...a.inspections].sort(byDateDesc)[0];
       a.lastInspection = last ? last.date : '';
       a.inspectedBy = last ? last.by : '';
+      a.nextInspection = addDays(last ? last.date : a.startDate || today(), setting('inspectionDays'));
     }
     if (await save(`Delete inspection ${i.date} – ${a.name}`)) { closeModal(); rerender(); toast('Inspection deleted'); }
   },
   async itemTypeDelete(d) {
     const t = itemType(d.tid);
     if (!t) return;
+    // a person limited to some break areas does not see the others, where the item type may still be in use
+    if (!allAreas()) return toast('Only a person who works with all break areas can delete an item type.', true, 7000);
     const used = DB.areas.filter(a => qty(a, t.id) > 0);
     if (used.length) return toast(`${t.name} are still in ${used.length} break area(s). Set their quantity to 0 or delete them from the inventory first.`, true, 7000);
     if (!confirm(`Delete the item type "${t.name}"?`)) return;
     DB.itemTypes = DB.itemTypes.filter(x => x !== t);
-    DB.areas.forEach(a => (a.inventory = a.inventory.filter(e => e.item !== t.id)));
+    DB.areas.forEach(a => { a.inventory = a.inventory.filter(e => e.item !== t.id); a.pieces = (a.pieces || []).filter(p => p.item !== t.id); });
     if (await save(`Delete item type – ${t.name}`)) { closeModal(); rerender(); toast('Item type deleted'); }
   },
   maintModal: d => maintModal(area(d.id)),
@@ -2267,7 +2424,12 @@ const ACT = {
     } catch (e) { toast('Export failed: ' + e.message, true); }
   },
   async removeLogo() { DB.settings.logoImage = ''; if (await save('Remove logo image')) rerender(); },
-  startEmpty: () => { closeModal(); location.hash = '#/dashboard'; rerender(); },
+  async startEmpty() {
+    closeModal();
+    // the usual item types (chairs, tables, TV screens...) so inventory can be recorded at once; they can be changed later
+    location.hash = '#/dashboard'; rerender();
+    if (!DB.itemTypes.length) { DB.itemTypes = DEFAULT_ITEM_TYPES.map(t => ({ ...t })); if (await save('Add the usual item types')) rerender(); }
+  },
   async startSample() { closeModal(); if (await loadSample()) { rerender(); toast('Sample data loaded – delete it in Settings when you start real use'); } },
   async loadDemo() {
     if (DB.areas.length) return toast('Sample data can only be loaded into an empty system.', true);
@@ -2275,11 +2437,20 @@ const ACT = {
     if (await loadSample()) { rerender(); toast('Sample data loaded'); }
   },
   async clearAll() {
-    const sample = new Set(DB.areas.filter(isSampleArea).map(a => a.id)), n = sample.size, real = DB.areas.length - n;
-    const answer = prompt(`This deletes the ${n} sample break areas with their inventory, photos, documents, issues, surveys and history, so you can start with your real data.${real ? `\n\nYour ${real} other break area(s) are kept.` : ''}\n\nA backup is made first, and everything stays restorable from the Recycle Bin.\n\nType DELETE to confirm:`);
+    const left = sampleLeft(), gone = new Set(left.areas.map(a => a.id)), n = gone.size, k = left.kept.length;
+    const real = DB.areas.length - n - k;
+    const answer = prompt(`This deletes the sample data so you can start with your real data:`
+      + (n ? `\n\n- ${n} sample break area(s) with their inventory, photos, documents, issues, surveys and history.` : '')
+      + (k ? `\n\n- The sample photos, issues, maintenance, inspections, surveys and history inside ${k} renamed break area(s): ${left.kept.map(a => a.name).join(', ')}. These break areas, their inventory and everything you added yourself are kept.` : '')
+      + (real ? `\n\nYour ${real} other break area(s) are not touched.` : '')
+      + `\n\nA backup is made first, and everything stays restorable from the Recycle Bin.\n\nType DELETE to confirm:`);
     if ((answer || '').trim().toUpperCase() !== 'DELETE') return toast('Nothing was deleted');
-    DB.areas = DB.areas.filter(a => !sample.has(a.id)); DB.history = DB.history.filter(h => !sample.has(h.areaId)); DB.settings.sampleData = false;
-    if (await save(`Delete sample data – start real use (${n} break areas)`, { force: true })) { location.hash = '#/dashboard'; rerender(); toast('Sample data deleted – you can now add your real break areas'); }
+    DB.areas = DB.areas.filter(a => !gone.has(a.id));
+    for (const a of left.kept) for (const kind of Object.keys(SAMPLE_REC)) a[kind] = a[kind].filter(x => !isSampleRec(kind, x));
+    const hist = new Set(left.hist.map(h => h.id));
+    DB.history = DB.history.filter(h => !hist.has(h.id));
+    DB.settings.sampleData = false;
+    if (await save(`Delete sample data – start real use (${n} break areas${k ? `, sample records of ${k} renamed` : ''})`, { force: true })) { location.hash = '#/dashboard'; rerender(); toast('Sample data deleted – you can now add your real break areas'); }
   },
   backupFolder(d) {
     modal('Second backup folder', `<p>Every backup is also copied into this folder. Use a USB drive that stays connected, or another disk of this PC.</p>
@@ -2343,7 +2514,9 @@ document.addEventListener('click', e => {
   if (!el || !ACT[el.dataset.act]) return;
   if (el.tagName === 'A' && !el.dataset.href) return;
   e.preventDefault();
+  OPENER = [el.dataset.act, { ...el.dataset }];
   ACT[el.dataset.act](el.dataset, el, e);
+  OPENER = null;
 });
 
 function onFilter(e) {
@@ -2492,7 +2665,18 @@ setInterval(() => {
 /* the sample break areas are still there (marked when loaded; older systems: recognised by their names) */
 /* sample break areas: the fixed ids ba01..ba22 with their sample names (real break areas get random ids) */
 const isSampleArea = a => /^ba\d\d$/.test(a.id) && /^Break Area \d\d$/.test(a.name);
-const hasSample = () => DB.settings.sampleData !== false && DB.areas.some(isSampleArea);
+/* a sample break area that was renamed (people start real use by renaming it) is kept; only its sample records go.
+   Sample records have short fixed ids (js/data.js); records made in the program get random 8-letter ids. */
+const SAMPLE_REC = { photos: /^ba\d\dp\d$/, surveys: /^ba\d\ds\d{2,3}$/, issues: /^is\d{1,4}$/, maintenance: /^m\d{1,4}$/, inspections: /^in\d{1,4}$/ };
+const isSampleRec = (kind, x) => SAMPLE_REC[kind].test(x.id);
+const isSampleHist = h => /^h\d{1,4}$/.test(h.id) && /^ba\d\d$/.test(h.areaId || '');
+function sampleLeft() {
+  const areas = DB.areas.filter(isSampleArea), gone = new Set(areas.map(a => a.id));
+  const kept = DB.areas.filter(a => !gone.has(a.id) && Object.keys(SAMPLE_REC).some(k => (a[k] || []).some(x => isSampleRec(k, x))));
+  const hist = DB.history.filter(h => gone.has(h.areaId) || isSampleHist(h));
+  return { areas, kept, hist, any: !!(areas.length || kept.length || hist.length) };
+}
+const hasSample = () => sampleLeft().any;
 let ABOUT = null;
 const aboutLine = () => ABOUT ? `<p class="about-line">Version ${esc(ABOUT.version)} · ${esc(ABOUT.copyright)}</p>` : '';
 async function boot() {
