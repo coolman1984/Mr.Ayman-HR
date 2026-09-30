@@ -1331,3 +1331,65 @@ class T39_SerialNumbers(Base):
         self.assertEqual(e.exception.code, 403)
         keeper.post('/api/commit', {'label': 'own area', 'ops': [piece('pf000001', 'S1', 'TV-F')]})
         self.assertIn('TV-F', [x['serial'] for x in get_area(ac, 'S1')['pieces']])
+
+
+class T40_AreaLogAndWork(Base):
+    """Version 2.6: notes of a break area, finished work with cost / contractor / warranty. Two PCs writing notes at the
+    same time keep both; cancelling on one PC and completing on another ends as done; a person who may not see costs
+    never receives them (screen, change log) and cannot change or wipe them by saving."""
+    N = 2
+
+    def test_log_and_work(self):
+        ac, pc1 = self.ac, self.clients[1]
+        ac.post('/api/commit', {'label': 'area', 'ops': [area_op('L1', 'Log One')]})
+        self.converged()
+        note = lambda nid, text: {'e': 'notes', 'id': nid, 'op': 'put', 'row': {'areaId': 'L1', 'date': '2026-09-29', 'kind': 'Painting', 'text': text, 'by': 'x'}}
+        self.unplug(1)
+        ac.post('/api/commit', {'label': 'n1', 'ops': [note('na000001', 'Walls painted')]})
+        pc1.post('/api/commit', {'label': 'n2', 'ops': [note('nb000001', 'New lamps')]})
+        self.plug(1)
+        self.converged()
+        for c in (ac, pc1):
+            self.assertEqual(sorted(n['text'] for n in get_area(c, 'L1')['notes']), ['New lamps', 'Walls painted'])
+        with self.assertRaises(ApiError) as e:
+            ac.post('/api/commit', {'label': 'empty', 'ops': [note('nc000001', '   ')]})
+        self.assertEqual(e.exception.code, 400)
+
+        # cost: only for people who may see it
+        work = lambda wid, **kw: {'e': 'maintenance', 'id': wid, 'op': 'put', 'row': {
+            'areaId': 'L1', 'date': '2026-09-20', 'details': 'Repair the door', 'status': 'Done', 'kind': 'Repair', 'assignedTo': 'Team',
+            'contractor': 'Nile Doors', 'cost': 1200, **kw}}
+        ac.post('/api/commit', {'label': 'w', 'ops': [work('w0000001')]})
+        ac.post('/api/users/save', {'username': 'plain.desk', 'full_name': 'Plain Desk', 'password': 'Quiet-room81x', 'must_change': False,
+                                    'perms': ['dashboard.view', 'areas.view', 'maintenance.create', 'maintenance.complete', 'logs.view'], 'areas': None})
+        ac.post('/api/users/save', {'username': 'money.desk', 'full_name': 'Money Desk', 'password': 'Green-safe62x', 'must_change': False,
+                                    'perms': ['dashboard.view', 'areas.view', 'maintenance.cost'], 'areas': None})
+        plain, money = self.A.client(), self.A.client()
+        plain.login('plain.desk', 'Quiet-room81x')
+        money.login('money.desk', 'Green-safe62x')
+        wk = lambda c: next(m for m in get_area(c, 'L1')['maintenance'] if m['id'] == 'w0000001')
+        self.assertNotIn('cost', wk(plain))
+        self.assertEqual(wk(money)['cost'], 1200)
+        self.assertEqual(wk(ac)['cost'], 1200, 'administrators see costs')
+        m = wk(plain)
+        row = {k: v for k, v in m.items() if k != 'ver'}
+        plain.post('/api/commit', {'label': 'edit', 'ops': [{'e': 'maintenance', 'id': 'w0000001', 'op': 'put', 'ver': m['ver'],
+                                                              'row': {**row, 'areaId': 'L1', 'notes': 'checked', 'cost': 1}}]})
+        after = wk(ac)
+        self.assertEqual((after['cost'], after['notes']), (1200, 'checked'), 'saving without the right neither wipes nor changes the cost')
+        log = json.dumps(plain.get('/api/audit?limit=200')['rows'])
+        self.assertNotIn('1200', log)
+        self.assertIn('1200', json.dumps(ac.get('/api/audit?limit=200')['rows']))
+
+        # cancelled here, done there: done wins everywhere
+        ac.post('/api/commit', {'label': 'w2', 'ops': [work('w0000002', status='Scheduled', cost=None)]})
+        self.converged()
+        m1, m2 = wk(ac) and next(m for m in get_area(ac, 'L1')['maintenance'] if m['id'] == 'w0000002'), next(m for m in get_area(pc1, 'L1')['maintenance'] if m['id'] == 'w0000002')
+        put = lambda m, **kw: {'e': 'maintenance', 'id': 'w0000002', 'op': 'put', 'ver': m['ver'], 'row': {**{k: v for k, v in m.items() if k != 'ver'}, 'areaId': 'L1', **kw}}
+        self.unplug(1)
+        ac.post('/api/commit', {'label': 'cancel', 'ops': [put(m1, status='Cancelled', notes='not needed')]})
+        pc1.post('/api/commit', {'label': 'done', 'ops': [put(m2, status='Done', doneDate='2026-09-30')]})
+        self.plug(1)
+        self.converged()
+        for c in (ac, pc1):
+            self.assertEqual(next(m for m in get_area(c, 'L1')['maintenance'] if m['id'] == 'w0000002')['status'], 'Done')

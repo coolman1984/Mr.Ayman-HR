@@ -43,7 +43,7 @@ from journal import canonical, now
 from version import VERSION as APP_VERSION
 
 PROTOCOL = 1
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 INVITE_MINUTES = 15
 OFFLINE_ERRORS = (ConnectionRefusedError, ConnectionResetError, ConnectionAbortedError, TimeoutError, socket.timeout, OSError)
 

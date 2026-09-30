@@ -113,5 +113,10 @@ Check a local compile on Linux: `pip install --target <dir> nuitka ordered-set z
 - Area-limited users: anything that affects all break areas (item type delete, backup restore, Recycle Bin, new
   break areas) needs "all areas" in the screen *and* on the server.
 - The stylesheet is `css/styles.css` (not style.css).
+- Area Log (`notes` entity, `areaTimeline`) and work: maintenance fields kind, cost, contractor, warrantyUntil, issueId, serial, repeatMonths;
+  status `Cancelled` ranks below `Done`. Use `isOpenWork(m)` (not `status !== 'Done'`) for "still to do".
+- Costs: `maintenance.cost` permission. The server hides `cost` in `/api/state`, `/api/audit` (`hide_costs`) and the Excel export (`cost=`) and
+  restores it on save for people without the right. Any new place that lists maintenance rows or their changes must do the same.
+- A new permission is not in the stored permission lists of existing accounts: `Auth._user()` adds `maintenance.cost` for `users.manage`.
 - Script files share one global scope: no short top-level names in new JS files. `<a data-act>` needs `data-href`
   to reach `ACT` – use `<button>` for in-page actions.

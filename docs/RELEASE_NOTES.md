@@ -1,5 +1,18 @@
 # What is new
 
+## 2.6.0
+
+- **Area Log** on every break area page: write notes (painting, renovation, repairs, visits…) and see everything that happened – notes, work,
+  issues, inspections, Before / After photos – on one time line. Print it or save it as Excel. New reports: **Area History** and **Maintenance & Work Done**.
+- **Record Finished Work**: write down work that is already done, with type, contractor, warranty and (by permission) cost. It can close the related issue.
+- Maintenance has a **type of work**, a contractor, a related issue, and can **repeat** (the next one is planned when it is completed).
+  Work due within a week or late is marked; the bell counts it.
+- **Cancel** work instead of deleting it: it stays in the history.
+- Photos can belong to a piece of work (before / after).
+- **Costs** are only shown to people with the new permission *See and enter what maintenance work cost* (administrators always have it).
+- Click a **serial number** to see everything that happened to that piece; three repairs suggest replacing it.
+- All PCs must be updated to 2.6: changes made on a 2.6 PC wait on older PCs until they are updated too.
+
 ## 2.5.0
 
 - **Serial numbers** for every piece: when you add items (Update → *Added*) type or scan their serial numbers, one per

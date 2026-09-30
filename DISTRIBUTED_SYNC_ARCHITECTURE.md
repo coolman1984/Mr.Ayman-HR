@@ -156,6 +156,8 @@ that are added exactly once.
 |---|---|---|---|---|---|
 | break areas | keep both (random ids) | merged | LWW, surfaced | delete wins, edit kept in record + flagged | `lastInspection`, `nextInspection`: latest **date** wins; `inspectedBy` follows `lastInspection` |
 | inventory | same id `area:item` merges | merged | `condition`,`note` LWW surfaced | delete wins, flagged | **`qty` = counter**: every movement is a delta, concurrent +5 and −2 give +3. Negative result is flagged "please count" |
+| area log notes | keep both (random ids) | merged | LWW surfaced | delete wins | one record per note (schema 5) |
+| maintenance (work) | keep both | merged | `status` ranks Scheduled < In Progress < Cancelled < Done (done wins); `doneDate`, `notes` follow it | delete wins | new fields kind, cost, contractor, warrantyUntil, issueId, serial, repeatMonths; `cost` is never sent to PCs' users without the permission |
 | serial numbers (pieces) | keep both (random ids) | merged | `serial`, `areaId` LWW | delete wins | one record per piece (schema 4); the quantity stays the inventory counter; a transfer changes `areaId` |
 | transactions (history) | keep all (immutable events) | – | – | delete only with its break area | the ground truth of movements |
 | surveys | keep both | merged | LWW surfaced | delete wins | same area+month+department twice is flagged as possible duplicate |

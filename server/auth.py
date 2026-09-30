@@ -75,6 +75,7 @@ PERMISSIONS = [
         ('maintenance.create', 'Schedule maintenance'),
         ('maintenance.complete', 'Complete maintenance'),
         ('maintenance.delete', 'Delete maintenance'),
+        ('maintenance.cost', 'See and enter what maintenance work cost'),
         ('inspections.create', 'Record inspections'),
         ('inspections.delete', 'Delete inspections'),
     ]),
@@ -351,6 +352,8 @@ class Auth:
             return None
         u = dict(r)
         perms = [p for p in json.loads(u['perms'] or '[]') if p in ALL]
+        if 'users.manage' in perms and 'maintenance.cost' not in perms:
+            perms.append('maintenance.cost')  # administrators always see costs (the right is newer than most accounts)
         u['perms'] = perms
         u['areas'] = json.loads(u['areas']) if u['areas'] else None
         u['display'] = self.display(u)

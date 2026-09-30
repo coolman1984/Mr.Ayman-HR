@@ -7,6 +7,31 @@ Version numbers: `server/version.py`. Pull requests: github.com/coolman1984/Mr.A
 
 ---
 
+## 2.6.0 – Area Log, finished work, costs by permission, repeating work, piece history (2026-09-30)
+
+**Why:** the owner asked whether a break area can carry notes (painting, renovation, repairs, maintenance) and to think through the real cases; all three
+proposed phases were built, each shown with screenshots before the next.
+
+**What changed** (`journal.SCHEMA` and `sync.SCHEMA_VERSION` 4 → 5)
+- **Phase 1:** new entity `notes` (Area Log) + `areaTimeline()` (notes, work, issues, inspections, Before/After photos on one time line, printable,
+  Excel), *Record Finished Work* (a maintenance record that is already Done), work type on maintenance, reports *Area History* and *Maintenance & Work Done*.
+- **Phase 2:** maintenance gets contractor, warranty, cost, related issue (closed together with the work); *Cancel* (status `Cancelled`, ranks below
+  `Done` so done wins a concurrent cancel) instead of only delete; photos get `workId` ("belongs to this work") and the work details window shows them.
+  **Cost is by permission** `maintenance.cost`: the server removes it from the state, the change log and the Excel export for people without it, and
+  fills the old value back in when such a person saves a work (`STORE.maintenance_cost`), so saving can neither read, change nor erase it.
+  Users with `users.manage` always get it (the right is newer than the stored permission lists of existing accounts).
+- **Phase 3:** `repeatMonths` (completing repeating work plans the next one, `planNext`, `addMonths` keeps month ends), work due in a week or late is
+  marked / counted at the bell and on the Maintenance page, `serial` on maintenance and `pieceHistory` (click a serial number; three repairs → replace).
+- Tests: `T40_AreaLogAndWork` (two PCs, cost hiding, cancel vs done), browser `test_area_log_finished_work_and_repeats`.
+
+**Mistakes and lessons**
+- `form.elements.item` is the collection's *method* (again!) – it broke the serial select of the new work windows until a screenshot run showed the
+  select never appeared. Always run the new window in a browser, not only read the code.
+- A new permission does not reach stored accounts: give it to administrators at run time (`_user`) and tell the administrator to tick it for others.
+- Hiding a value only on screen is not hiding it: the state, the change log (before / after / changes) and the Excel export all carried the cost.
+- Known and left: photos of a work cannot be uploaded while recording finished work itself (upload afterwards with *Add photo*);
+  a piece's history is linked by serial text, so renaming a serial number breaks the link to older work.
+
 ## 2.5.0 – serial numbers, sample data fix, 12 bugs from a whole-program hunt (2026-09-29)
 
 **Why:** the customer reported that *Delete Sample Data* disappears, "many bugs and problems", and asked to record the

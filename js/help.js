@@ -63,8 +63,20 @@ const HELP = [
       The bell at the top shows how many issues are open.`],
     ['How do I follow up or close an issue?', `Open the issue, choose the new status (${helpBold('Open')}, ${helpBold('In Progress')}, ${helpBold('Closed')})
       and write what was done. Every step is kept in the issue's log.`],
-    ['How do I plan maintenance?', `Open the break area → ${helpBold('Schedule Maintenance')}. When it is done, open it on the
-      ${helpBold('Maintenance')} page and complete it.`],
+    ['How do I plan maintenance?', `Open the break area → ${helpBold('Schedule Maintenance')}: type of work (repair, painting, renovation…), item, date, who
+      does it, contractor. Choose ${helpBold('Repeat')} for work that comes back (for example every 6 months): when you complete it, the next one is
+      planned by itself. When it is done, open it on the ${helpBold('Maintenance')} page and complete it. Work due within a week or late is
+      marked and counted at the bell.`],
+    ['Where do I write that the room was painted or renovated?', `Open the break area → ${helpBold('Area Log')} → ${helpBold('Add Note')}. Choose the type (Painting, Renovation, Repair,
+      Cleaning, Replacement…), the date and write what happened. The log also shows all work, issues and inspections of the break area on one
+      time line, newest first. You can print it or save it as Excel (the buttons in the log).`],
+    ['The work is already finished. How do I record it?', `Area Log → ${helpBold('Record Finished Work')}. You do not need to plan it first. Add the contractor, the
+      warranty date and – if you may see costs – what it cost. If it solved an issue, choose the issue: it is closed together with the work.`],
+    ['Can I cancel planned work?', `Yes: the small ${helpBold('×')} next to it → ${helpBold('Cancel the work')} (write why). It stays in the history as Cancelled; nothing is erased.`],
+    ['Who sees what the work cost?', `Only people with the permission "See and enter what maintenance work cost" (administrators always have it). Everybody else does not
+      see costs anywhere: not on the screens, not in reports, not in the change log, not in Excel.`],
+    ['How do I see everything that happened to one TV or fridge?', `Give the piece a serial number (${helpBold('Serial numbers')} on the break area page). Choose the piece when you record work.
+      Then click its serial number: you see every repair and movement. Three repairs or more: the program suggests replacing it.`],
     ['How do inspections work?', `Record an inspection on the break area. The next inspection date is calculated from the inspection
       frequency in ${helpBold('Settings')}. The ${helpBold('Maintenance')} page shows what is due or overdue.`]
   ]},
@@ -76,11 +88,13 @@ const HELP = [
   { id: 'files', title: 'Photos and documents', icon: 'image', items: [
     ['How do I add photos or documents?', `Open the break area → ${helpBold('Upload Photo / Document')}. Photos keep their full quality; you can
       choose the main photo (${helpBold('Set as Main Photo')}). Files up to 50 MB.`],
+    ['How do I keep the photos of a painting or renovation together?', `Upload with ${helpBold('Category: Before')} and ${helpBold('After')} and choose ${helpBold('Belongs to this work')}.
+      Open the work (the small page symbol in the Area Log) to see its photos together, or press ${helpBold('Add photo')} there.`],
     ['A photo says "Photo is being copied".', `It was added on another PC and is still on its way. It appears by itself in a moment.`]
   ]},
   { id: 'reports', title: 'Reports, printing and Excel', icon: 'report', items: [
     ['Which reports are there?', `${helpBold('Reports')} has: Break Area Register, Inventory by Break Area, Update History, Issues, Inspection
-      Schedule, Satisfaction Survey, Summary by Location and QR labels. Each can be filtered, printed or saved as PDF
+      Schedule, Satisfaction Survey, Summary by Location, Area History (everything that happened in one or all break areas), Maintenance & Work Done and QR labels. Each can be filtered, printed or saved as PDF
       (${helpBold('Print / PDF')}) and exported to Excel.`],
     ['How do I save something as PDF?', `${helpBold('Print / PDF')} → in the print window choose ${helpBold('Save as PDF')} as the printer.`],
     ['Can I export everything?', `${helpBold('Reports → Export Everything')} gives one Excel file with all data and logs (needs the permission

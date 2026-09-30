@@ -274,6 +274,20 @@ Kept up to date with every change (rule in `CLAUDE.md`). New idea → new card i
 - 🇪🇬 **بالعربي:** الناس بتبدأ الشغل الحقيقي بإنها تغيّر اسم البيانات التجريبية. متعرفش التجريبي من اسمه، اعرفه من
   رقمه الثابت. كده تمسح التجريبي بس وتسيب اللي الناس ضافته بإيديها.
 
+### 6.3 One time line per place: notes + work + issues + inspections
+- **Problem:** "was this room painted? when was the last repair?" – the answer was spread over issues, maintenance, inspections and photos.
+- **Idea:** one *Area Log*: free notes with a type (painting, renovation…) plus everything else merged into one list, newest first, printable.
+  Work can be recorded after the fact ("record finished work") because people do not plan everything in advance.
+- **Where:** `js/app.js` (`areaTimeline`, `areaLogCard`, `doneWorkModal`), reports *Area History* / *Maintenance & Work Done*.
+- 🇪🇬 **بالعربي:** سجل واحد لكل مكان: ملاحظات (دهان، تجديد…) + كل الصيانة والأعطال والتفتيش في خط زمني واحد، وتقدر تسجّل شغل خلص من غير ما تجدوله الأول.
+
+### 6.4 Hide a value everywhere, not only on screen (cost by permission)
+- **Problem:** costs should not be seen by everybody; hiding a column in the screen still leaves them in the API, the change log and the Excel export.
+- **Idea:** the server removes the value from every output for people without the right, and when such a person saves the record it puts the stored
+  value back – so they can neither read, change nor erase it.
+- **Where:** `server/app.py` (`hide_costs`, commit), `server/store.py` (`state(cost=)`, `strip_cost`, `export_sheets(cost=)`).
+- 🇪🇬 **بالعربي:** إخفاء الرقم من الشاشة مش كفاية: لازم يتشال من الـ API وسجل التغييرات والإكسل، ولما حد ماله صلاحية يحفظ السجل الرقم القديم بيتحط تاني مكانه.
+
 ### 6.2 A window must never save "old" records
 - **Problem:** a save fails ("someone else changed it"), the data is loaded again, the window stays open so nothing
   typed is lost – but the window still points at the *old* records. Pressing Save again said "saved" and saved nothing.

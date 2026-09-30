@@ -29,7 +29,7 @@ sys.path.insert(0, HERE)  # the portable (embedded) Python does not add the scri
 import backup as backup_mod  # noqa: E402
 import xlsx  # noqa: E402
 from auth import ADMIN_PERMS, ALL, PERMISSIONS, AuthError, Forbidden  # noqa: E402
-from store import BadRequest, Conflict, now  # noqa: E402
+from store import BadRequest, Conflict, now, strip_cost  # noqa: E402
 from sync import SyncService  # noqa: E402
 from system import System, lock_data  # noqa: E402
 
@@ -162,7 +162,7 @@ CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';
        "connect-src 'self' data: blob:; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
 PERM_LABEL = {p: label for _, ps in PERMISSIONS for p, label in ps}
 REPORT_PERMS = [p for p in ALL if p.startswith('report.')] + ['export.excel', 'logs.view', 'logs.activity', 'logs.security']
-ENTITY_TITLE = {'areas': 'break areas', 'inventory': 'inventory', 'pieces': 'serial numbers', 'surveys': 'satisfaction results', 'photos': 'photos',
+ENTITY_TITLE = {'areas': 'break areas', 'inventory': 'inventory', 'pieces': 'serial numbers', 'notes': 'area log notes', 'surveys': 'satisfaction results', 'photos': 'photos',
                 'docs': 'documents', 'issues': 'issues', 'issueLog': 'issue follow-ups', 'maintenance': 'maintenance',
                 'inspections': 'inspections', 'history': 'transactions', 'itemTypes': 'item types', 'settings': 'settings'}
 OP_WORD = {'insert': 'add', 'update': 'change', 'delete': 'delete'}
@@ -184,6 +184,9 @@ def required(entity, op, changed):
         return ('areas.edit',)
     if entity == 'inventory':
         return ('inventory.delete', 'itemtypes.manage') if op == 'delete' else ('inventory.edit',)
+    if entity == 'notes':  # the log of a break area: anybody who works on the break area writes in it
+        return ('areas.edit',) if op == 'delete' else ('areas.edit', 'inventory.edit', 'maintenance.create', 'maintenance.complete',
+                                                       'issues.create', 'issues.followup', 'inspections.create')
     if entity == 'pieces':  # a piece leaves with "Removed" (inventory.edit) or with "Delete Item" (inventory.delete)
         return ('inventory.edit', 'inventory.delete', 'itemtypes.manage') if op == 'delete' else ('inventory.edit',)
     if entity == 'history':
@@ -194,11 +197,21 @@ def required(entity, op, changed):
         'docs': {'insert': ('files.upload',), 'update': ('files.upload',), 'delete': ('files.delete',)},
         'issues': {'insert': ('issues.create',), 'update': ('issues.followup',), 'delete': ('issues.delete',)},
         'issueLog': {'insert': ('issues.followup',), 'update': ('issues.followup',), 'delete': ('issues.delete',)},
-        'maintenance': {'insert': ('maintenance.create',), 'update': ('maintenance.complete',), 'delete': ('maintenance.delete',)},
+        'maintenance': {'insert': ('maintenance.create', 'maintenance.complete'), 'update': ('maintenance.complete', 'maintenance.create'), 'delete': ('maintenance.delete',)},
         'inspections': {'insert': ('inspections.create',), 'update': ('inspections.create',), 'delete': ('inspections.delete',)},
         'itemTypes': {'insert': ('itemtypes.manage',), 'update': ('itemtypes.manage',), 'delete': ('itemtypes.manage',)},
         'settings': {'insert': ('settings.edit',), 'update': ('settings.edit',), 'delete': ('settings.edit',)},
     }[entity][op]
+
+
+def hide_costs(rows):
+    """The change log of a person who may not see costs must not show them either."""
+    for r in rows:
+        if r.get('entity') != 'maintenance':
+            continue
+        for k in ('changes', 'before', 'after'):
+            r[k] = strip_cost(r.get(k))
+    return rows
 
 
 def commit_guard(u):
@@ -498,7 +511,7 @@ class Handler(BaseHTTPRequestHandler):
         if p == '/api/me':
             return self.send(200, self.me())
         if p == '/api/state':
-            return self.send(200, STORE.state(self.u['areas'], self.can('surveys.view')))
+            return self.send(200, STORE.state(self.u['areas'], self.can('surveys.view'), self.can('maintenance.cost')))
         if p == '/api/version':
             return self.send(200, {'version': STORE.version(), 'me': self.u['ver'], 'mustChange': bool(self.u['must_change']),
                                    'sync': SYNC.summary()})
@@ -528,10 +541,13 @@ class Handler(BaseHTTPRequestHandler):
             if p == '/api/activity':
                 self.need_admin()  # what other people clicked is forensic data: administrators only
             node = qs.get('node', '') if is_admin(self.u) else ''
-            return self.send(200, STORE.query_log('audit' if p == '/api/audit' else 'activity', qs.get('q', ''), qs.get('user', ''),
+            res = STORE.query_log('audit' if p == '/api/audit' else 'activity', qs.get('q', ''), qs.get('user', ''),
                                                   qs.get('type', ''), qs.get('area', ''), qs.get('from', ''), qs.get('to', ''),
                                                   max(1, min(1000, int(qs.get('limit', 200)))), max(0, int(qs.get('offset', 0))), self.u['areas'], node,
-                                                  admin=is_admin(self.u)))
+                                                  admin=is_admin(self.u))
+            if p == '/api/audit' and not self.can('maintenance.cost'):
+                hide_costs(res['rows'])
+            return self.send(200, res)
         if p == '/api/security':
             self.need('logs.security')
             self.need_admin()
@@ -561,7 +577,7 @@ class Handler(BaseHTTPRequestHandler):
             self.need('report.full')
             if self.u['areas'] is not None:
                 raise Forbidden('The complete export contains all break areas; you only have access to some of them.')
-            data = xlsx.build(STORE.export_sheets(admin=is_admin(self.u) and self.can('logs.activity')))
+            data = xlsx.build(STORE.export_sheets(admin=is_admin(self.u) and self.can('logs.activity'), cost=self.can('maintenance.cost')))
             log.info('EXPORT full workbook by %s (%s)', self.user, self.ip)
             STORE.log_activity(self.user, self.ip, [{'type': 'export', 'action': 'Full Excel export', 'target': 'All data'}])
             return self.send(200, data, TYPES['.xlsx'], {'Content-Disposition': f'attachment; filename="BAMS_Full_Export_{datetime.now():%Y-%m-%d_%H%M}.xlsx"'})
@@ -675,6 +691,10 @@ class Handler(BaseHTTPRequestHandler):
                     BACKUPS.create('pre-import')
             if any(isinstance(o, dict) and 'resolve' in o for o in (d.get('ops') or []) if isinstance(d.get('ops'), list)):
                 raise Forbidden('Conflicts are decided only in Devices & Sync by an administrator.')
+            if not self.can('maintenance.cost') and isinstance(d.get('ops'), list):
+                for o in d['ops']:  # a person who may not see costs can neither read, change nor wipe them
+                    if isinstance(o, dict) and o.get('e') == 'maintenance' and isinstance(o.get('row'), dict):
+                        o['row'] = {**o['row'], 'cost': STORE.maintenance_cost(o.get('id'))}
             res = STORE.commit(self.user, self.ip, label, d.get('ops'), force, guard=commit_guard(self.u), user_id=self.u['id'])
             log.info('COMMIT %s (%s) "%s" %s changes', self.user, self.ip, label, res['changes'])
             return self.send(200, res)
