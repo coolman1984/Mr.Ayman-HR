@@ -185,7 +185,7 @@ def required(entity, op, changed):
     if entity == 'inventory':
         return ('inventory.delete', 'itemtypes.manage') if op == 'delete' else ('inventory.edit',)
     if entity == 'pieces':  # a piece leaves with "Removed" (inventory.edit) or with "Delete Item" (inventory.delete)
-        return ('inventory.edit', 'inventory.delete') if op == 'delete' else ('inventory.edit',)
+        return ('inventory.edit', 'inventory.delete', 'itemtypes.manage') if op == 'delete' else ('inventory.edit',)
     if entity == 'history':
         return HISTORY_PERMS if op == 'insert' else ('areas.delete',)
     return {

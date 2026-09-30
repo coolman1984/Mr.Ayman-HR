@@ -699,7 +699,7 @@ const RESULTS = {
     const dup = new Map();
     allPieces().forEach(r => { const k = r.p.serial.toLowerCase(); dup.set(k, (dup.get(k) || 0) + 1); });
     el.innerHTML = rows.slice(0, 300).map(({ a, p }) => `<tr class="click" data-act="go" data-href="#/area/${a.id}"><td class="mono"><b>${esc(p.serial)}</b>${dup.get(p.serial.toLowerCase()) > 1 ? ' <span class="badge b-red" title="The same serial number is recorded more than once">twice</span>' : ''}</td>
-      <td>${esc(itemName(p.item))}</td><td>${esc(a.name)}</td><td>${esc(a.location)}</td><td>${fmt(p.date)}</td></tr>`).join('')
+      <td>${esc(itemName(p.item))}</td><td>${esc(a.name)}</td><td>${esc(a.location)}</td><td>${esc(fmt(p.date))}</td></tr>`).join('')
       || `<tr><td colspan="5" class="empty">${q ? 'No serial number matches your search' : 'No serial numbers recorded yet. Open a break area and use Update → Added, or Serial numbers → Add.'}</td></tr>`;
   },
   dash(el) {
@@ -1071,12 +1071,12 @@ function reopenFresh(form, opener) {
   const vals = $$('[name]', form).filter(el => el.type !== 'file' && !el.disabled).map(el => [el.name, el.type === 'checkbox' ? el.checked : el.value, el.type, el.value]);
   closeModal();
   OPENER = opener;
-  try { ACT[opener[0]](opener[1], null); } finally { OPENER = null; }
+  try { ACT[opener[0]](opener[1], null); } catch (e) { /* the record is gone */ } finally { OPENER = null; }
   const f = $('#modal.open form');
-  if (!f) return;
+  if (!f) { closeModal(); return toast('Someone else deleted this in the meantime. Nothing was saved.', true, 8000); }
   const put = ([name, v, type, value]) => {
     const el = $$(`[name="${name}"]`, f).find(x => type !== 'checkbox' || x.value === value); // not f.elements[name]: "item" is a method there
-    if (!el || el.disabled || el.type === 'file') return;
+    if (!el || el.disabled || el.type === 'file' || el.type === 'radio') return;
     if (type === 'checkbox') el.checked = v; else el.value = v;
   };
   // the choices that change the window first (item, action), then everything else
@@ -1162,7 +1162,8 @@ function invModal(a, presetItem) {
       const addErr = serialProblem(added);
       if (addErr) { toast(addErr, true, 6000); return false; }
       if (picked.length > n) { toast(`You ticked ${picked.length} serial numbers but the quantity is ${n}.`, true); return false; }
-      const mustPick = d.action === 'Removed' || d.action === 'Transferred' ? Math.max(0, have.length - next) : 0;
+      // pieces with a serial number that remain cannot be more than the pieces that remain (at most all n that go are ticked)
+      const mustPick = d.action === 'Removed' || d.action === 'Transferred' ? Math.min(n, Math.max(0, have.length - next)) : 0;
       if (picked.length < mustPick) { toast(`Please tick the serial number${mustPick === 1 ? ' of the piece' : 's of the ' + mustPick + ' pieces'} that ${mustPick === 1 ? 'is' : 'are'} ${d.action === 'Removed' ? 'removed' : 'transferred'}.`, true, 6000); return false; }
       const old = d.action === 'Replaced' ? have.find(p => p.id === d.oldSerial) : null, newSerial = (d.newSerial || '').trim();
       if (old && newSerial && newSerial.toLowerCase() !== old.serial.toLowerCase()) {
@@ -1252,8 +1253,9 @@ function serialModal(a, item) {
       if (list.length > q) { toast(`There are only ${q} ${itemName(item)} here – you entered ${list.length} serial numbers. Add the pieces first with Update → Added.`, true, 7000); return false; }
       const err = serialProblem(list, have.map(p => p.id));
       if (err) { toast(err, true, 6000); return false; }
-      const keep = new Set(list.map(x => x.toLowerCase()));
+      const keep = new Map(list.map(x => [x.toLowerCase(), x]));
       a.pieces = (a.pieces || []).filter(p => p.item !== item || keep.has(p.serial.toLowerCase()));
+      piecesOf(a, item).forEach(p => (p.serial = keep.get(p.serial.toLowerCase()))); // a correction of upper / lower case is kept
       const known = new Set(piecesOf(a, item).map(p => p.serial.toLowerCase()));
       list.filter(x => !known.has(x.toLowerCase())).forEach(x => a.pieces.push(newPiece(item, x)));
       if (!(await save(`Serial numbers of ${itemName(item)} – ${a.name}`))) return false;
@@ -1302,8 +1304,8 @@ function issueView(a, iid) {
       if (!d.text.trim() && d.status === i.status) { toast('Add a note or change the status', true); return false; }
       i.log = i.log || [];
       i.log.push({ id: uid(), date: d.date, by: me(), text: (d.status !== i.status ? `Status changed to ${d.status}. ` : '') + d.text.trim() });
-      i.status = d.status;
       if (d.status !== i.status) i.closedDate = d.status === 'Closed' ? d.date : ''; // a note on a closed issue keeps its closed date
+      i.status = d.status;
       if (!(await save(`Issue follow-up "${i.title}" – ${a.name}`))) return false;
       toast('Issue updated');
     }
@@ -1416,7 +1418,7 @@ function uploadModal(a, cat = 'Current') {
       }
       if (!added) return false;
       // the first real photo replaces the drawing a new break area starts with as its main photo
-      const main = a.photos.find(p => p.main), real = a.photos.find(p => p.src);
+      const main = a.photos.find(p => p.main), real = [...a.photos].reverse().find(p => p.src && p.category === 'Current');
       if ((!main || !main.src) && real) a.photos.forEach(p => (p.main = p === real));
       if (d.category === 'Before' || d.category === 'After') F.photoTab = d.category;
       if (!(await save(`Upload ${added} file(s) – ${a.name}`))) return false;
@@ -2515,8 +2517,7 @@ document.addEventListener('click', e => {
   if (el.tagName === 'A' && !el.dataset.href) return;
   e.preventDefault();
   OPENER = [el.dataset.act, { ...el.dataset }];
-  ACT[el.dataset.act](el.dataset, el, e);
-  OPENER = null;
+  try { ACT[el.dataset.act](el.dataset, el, e); } finally { OPENER = null; }
 });
 
 function onFilter(e) {
@@ -2666,10 +2667,24 @@ setInterval(() => {
 /* sample break areas: the fixed ids ba01..ba22 with their sample names (real break areas get random ids) */
 const isSampleArea = a => /^ba\d\d$/.test(a.id) && /^Break Area \d\d$/.test(a.name);
 /* a sample break area that was renamed (people start real use by renaming it) is kept; only its sample records go.
-   Sample records have short fixed ids (js/data.js); records made in the program get random 8-letter ids. */
-const SAMPLE_REC = { photos: /^ba\d\dp\d$/, surveys: /^ba\d\ds\d{2,3}$/, issues: /^is\d{1,4}$/, maintenance: /^m\d{1,4}$/, inspections: /^in\d{1,4}$/ };
-const isSampleRec = (kind, x) => SAMPLE_REC[kind].test(x.id);
-const isSampleHist = h => /^h\d{1,4}$/.test(h.id) && /^ba\d\d$/.test(h.areaId || '');
+   A sample record has the id AND the content of a record of the sample data (js/data.js buildSeed, always the same):
+   the id alone is not enough - the very first program version saved real records with short ids like h121 or ba23. */
+const SAMPLE_KEY = {
+  photos: x => [x.caption, x.variant, x.src || ''], surveys: x => [x.month, x.department], issues: x => [x.date, x.title],
+  maintenance: x => [x.date, x.details], inspections: x => [x.date, x.by], history: x => [x.areaId, x.date, x.action, x.details]
+};
+const SAMPLE_REC = { photos: 1, surveys: 1, issues: 1, maintenance: 1, inspections: 1 };
+let SEED_KEYS = null;
+function seedKeys() {
+  if (SEED_KEYS) return SEED_KEYS;
+  const seed = buildSeed(), k = {};
+  const add = (kind, x) => (k[kind] = k[kind] || new Map()).set(x.id, JSON.stringify(SAMPLE_KEY[kind](x)));
+  seed.areas.forEach(a => Object.keys(SAMPLE_REC).forEach(kind => (a[kind] || []).forEach(x => add(kind, x))));
+  seed.history.forEach(h => add('history', h));
+  return (SEED_KEYS = k);
+}
+const isSampleRec = (kind, x) => { const m = seedKeys()[kind]; return !!m && m.get(x.id) === JSON.stringify(SAMPLE_KEY[kind](x)); };
+const isSampleHist = h => isSampleRec('history', h);
 function sampleLeft() {
   const areas = DB.areas.filter(isSampleArea), gone = new Set(areas.map(a => a.id));
   const kept = DB.areas.filter(a => !gone.has(a.id) && Object.keys(SAMPLE_REC).some(k => (a[k] || []).some(x => isSampleRec(k, x))));

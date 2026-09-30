@@ -350,6 +350,8 @@ class Store:
     def _what(c, entity, title, row, rid):
         """A record in words for messages (never an internal id when a name is known): 'Inventory "Chairs" of Break Area 01'."""
         kind = 'Serial number' if entity == 'pieces' else title[:-1] if title.endswith('s') else title
+        # only plain values: a hand-made request must not reach SQL with a list (answer 400 later, not a crash)
+        row = {k: v for k, v in row.items() if isinstance(v, (str, int, float))} if isinstance(row, dict) else {}
         label = next((str(row[k]) for k in ('name', 'title', 'serial', 'caption', 'department', 'details', 'date') if row.get(k)), '')
         if entity == 'inventory' and row.get('item'):
             t = c.execute('SELECT name FROM item_types WHERE id=?', (row['item'],)).fetchone()
@@ -599,7 +601,7 @@ class Store:
                 row = self._row_js(entity, r) if r else {'id': f['rid']}
                 detail = json.loads(f['detail'])
                 item = {'entity': entity, 'title': title, 'id': f['rid'], 'kind': f['kind'], 'deleted': bool(r and r['deleted']),
-                        'name': row.get('name') or row.get('title') or row.get('caption') or row.get('item') or row.get('details') or f['rid'],
+                        'name': row.get('name') or row.get('title') or row.get('caption') or row.get('serial') or row.get('item') or row.get('details') or f['rid'],
                         'area': self._area_of(entity, row) if r else None, 'row': row, 'detail': detail}
                 out.append(item)
             dup = self.conn.execute('SELECT area_id, month, department, COUNT(*) n, GROUP_CONCAT(id) ids FROM surveys WHERE deleted=0 '

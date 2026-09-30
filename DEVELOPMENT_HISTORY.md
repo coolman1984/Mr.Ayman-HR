@@ -58,6 +58,21 @@ serial number of every piece in a break area.
 - Known and left: the first save of a person with settings rights writes the default settings into the database
   (noise in the log only).
 
+**Independent review of 2.5 – found and fixed**
+- My own fix for "a note changes the closed date" broke closing: the status was set *before* comparing it, so closing
+  an issue lost its closed date ("Closed This Month" stayed 0). Lesson: when a fix compares old and new, read the
+  lines around it – the old value may already be overwritten.
+- Sample records by id pattern alone matched real records of the very first program version (history `h121`, areas
+  `ba23`, kept by the old-backup import) → a sample record now needs the id *and* the content of the sample data
+  (`seedKeys` from `buildSeed`, which is always the same).
+- "Save again" when the record was deleted meanwhile crashed silently → clear message; `OPENER` reset in `finally`.
+- Smaller: a case-only correction of a serial number was not saved; "Removed" could get stuck when two PCs left more
+  serial numbers than pieces; deleting an item type with left-over serial numbers needs `itemtypes.manage` there too;
+  a hand-made request with a list value gave error 500; one date was not escaped; only a *Current* photo becomes
+  the main photo; the conflict list names a serial number by its serial.
+- Browser tests extended: closing an issue keeps its date, an old real record with a short id survives Delete Sample
+  Data, a record deleted while its window is open.
+
 ## 2.4.0 – new PCs join by themselves, no "Add a PC" (2026-09-27)
 
 **Why:** the HR team asked for two simple ways only: a **personal link** (nothing else needed) and **user name and

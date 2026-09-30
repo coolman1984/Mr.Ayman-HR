@@ -100,8 +100,9 @@ Check a local compile on Linux: `pip install --target <dir> nuitka ordered-set z
 - Since 2.4 new PCs join without code or approval (`join_open`, `_open_join`, `discover`, `/sync/hello`); the code
   method is still in `sync.py` (used by the test harness `pair()`), but not in the screens.
 - The first start asks empty / sample data (`firstStartChoice`); browser tests must click the choice.
-- Sample records are recognised by their fixed ids (`SAMPLE_REC` in `js/app.js`, ids from `js/data.js`), never by
-  names – people rename sample break areas. Keep seed ids short and real ids random 8 letters (`uid()`).
+- Sample records are recognised by id *and* content of `buildSeed()` (`seedKeys`, `isSampleRec` in `js/app.js`), never
+  by names (people rename sample break areas) and never by id pattern alone (the first program version saved real
+  records with short ids like `h121`). `buildSeed()` must stay deterministic (no today(), no random).
 - A window (`modal`) must not save records from before a reload: `save()` failing calls `load()`, which replaces `DB`.
   `modal()` remembers `DB` and the opening action (`OPENER`) and reopens itself (`reopenFresh`). New dialogs must be
   opened through an `ACT` action to get this.
