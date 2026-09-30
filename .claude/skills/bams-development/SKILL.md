@@ -123,6 +123,7 @@ Check a local compile on Linux: `pip install --target <dir> nuitka ordered-set z
 - **Updates must never lose data**: `server/upgrade.py` runs at every start (snapshot in `data/upgrades/`, old rows compared before / after, refusal of newer data). A change
   that REWRITES existing data must be a `MIGRATIONS` step that declares the tables it touches; adding columns / entities is free. Before each release add its commit to
   `T41_UpgradeKeepsData.RELEASES` (the test runs the real old program on a data folder, then the new one). `Server(app=…)` starts another program version in tests.
+- Text sizes: never write `font-size: 13px` in `css/styles.css` - write `calc(13px * var(--fs))` (`AppearanceFilesTest` fails otherwise); the font comes from `var(--font)`. New static folders go into `STATIC_DIRS`, `serve_static` and `tools/make_assets.py`.
 - Icons: `js/icons.js` is generated (`tools/make_icons.py`, Lucide, ISC) - never edit it by hand; `IconPackTest` fails when a screen uses an icon that does not exist.
 - Excel import (`excel_import.plan`) never changes what exists; a new importable field needs a column name list, a warning for bad values, and a test in `ExcelImportTest`.
 - `repr()` / `str()` of Python data is not JavaScript: write generated JS with explicit brackets.

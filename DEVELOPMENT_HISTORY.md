@@ -50,7 +50,14 @@ proposed phases were built, each shown with screenshots before the next.
   a full disk or a locked `program.json` ended the start without a message (clear message / not fatal); Ctrl K opened behind a window; `nan`/`inf`/`1,000` in an Excel number; a plan whose
   work was cancelled could never be scheduled again; `program.json` now moves with copied data; the old start-up message is removed after a good start.
 
+- **Appearance** (owner's request: more elegant fonts, font choice in settings, larger / smaller text): six variable fonts (Inter, Source Sans 3, IBM Plex Sans, DM Sans, Nunito Sans,
+  Merriweather; SIL OFL, `fonts/`, `docs/FONTS_LICENSE.txt`, 290 KB, from the Fontsource packages) loaded by `css/fonts.css`; every text size in `styles.css` is `calc(Npx * var(--fs))` so one
+  switch scales the text (not the layout); the font is `var(--font)` set by `html[data-font]`; `js/boot.js` applies the choice from `localStorage` before the page is drawn (no flash; inline scripts
+  are blocked by the CSP); `appearanceCard()` in Settings and My Account, **Aa** button at the top; the program serves `/fonts/`. Tests: `AppearanceFilesTest` (no fixed px font size may
+  come back), `test_font_and_text_size_choice`.
+
 **More mistakes and lessons**
+- The static-file rules exist in two places (`STATIC_DIRS` and `serve_static`): a new folder such as `fonts/` must be added to both, and to `tools/make_assets.py` for the installed program.
 - `repr()` of a Python list of tuples is not a JavaScript array: `('name', [...])` is a comma expression, the picker showed nothing. Generate JS with explicit brackets and open the window in a browser.
 - A digest of rows must not depend on the row type: a connection with `sqlite3.Row` gave another `repr` than a plain one and the upgrade check refused a healthy history. Use `tuple(row)`.
 - The first version of the history check compared bookkeeping columns (`status`, `note`, `via`) that legitimately move; compare only what never changes.

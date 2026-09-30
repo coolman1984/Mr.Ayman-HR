@@ -51,6 +51,7 @@ const HELP = [
       number. Find a serial number in ${helpBold('Furniture & Equipment → Serial Numbers')}. The same serial number cannot be entered twice.`],
     ['How do I move items to another break area?', `Choose the action ${helpBold('Transferred')} and the break area it goes to. It is removed from
       one and added to the other in one step.`],
+    ['Can I change the font or make the text bigger?', `Yes, for yourself: press ${helpBold('Aa')} at the top (or open ${helpBold('Settings → Appearance')}). Choose a font and press ${helpBold('A+')} / ${helpBold('A−')} for larger or smaller text, ${helpBold('Back to normal')} to undo. It is saved on the PC and browser you use.`],
     ['How do I choose an icon for an item type?', `${helpBold('Furniture & Equipment → Add Item Type')} (or Edit): click an icon – there are 124 in seven groups – or type a word in the search box (tv, water, chair…).`],
     ['Where do I see the totals?', `${helpBold('Furniture & Equipment')} shows every item type with totals and how many are not in good
       condition. ${helpBold('Export Excel')} gives the full list.`],

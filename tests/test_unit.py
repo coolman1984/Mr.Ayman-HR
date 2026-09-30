@@ -850,3 +850,29 @@ class ExcelImportTest(unittest.TestCase):
         for data in (b'', b'not a workbook at all' * 20, b'PK' + b'x' * 200):
             with self.assertRaises(xlsx_read.XlsxError):
                 excel_import.plan(data, {'areas': [], 'itemTypes': [], 'settings': {}})
+
+
+class AppearanceFilesTest(unittest.TestCase):
+    """The fonts are shipped with the program (no internet), every text size scales with the chosen size, and the licence is there."""
+
+    def test_fonts_and_sizes(self):
+        import re
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        fonts_css = open(os.path.join(root, 'css', 'fonts.css'), encoding='utf-8').read()
+        files = re.findall(r'url\("\.\./(fonts/[^"]+)"\)', fonts_css)
+        self.assertEqual(len(files), 6)
+        for f in files:
+            self.assertGreater(os.path.getsize(os.path.join(root, f)), 10000, f)
+        styles = open(os.path.join(root, 'css', 'styles.css'), encoding='utf-8').read()
+        self.assertEqual(re.findall(r'font-size:\s*[\d.]+px', styles), [], 'a font size that does not follow the chosen text size')
+        self.assertEqual(re.findall(r'(?<![-\w])font:\s*[\d.]+px', styles), [])
+        for fam in ('inter', 'source', 'plex', 'dm', 'nunito', 'serif'):
+            self.assertIn(f'html[data-font="{fam}"]', styles)
+        boot = open(os.path.join(root, 'js', 'boot.js'), encoding='utf-8').read()
+        app = open(os.path.join(root, 'js', 'app.js'), encoding='utf-8').read()
+        for fam in ("'inter'", "'source'", "'plex'", "'dm'", "'nunito'", "'serif'"):
+            self.assertIn(fam, boot)
+            self.assertIn(fam, app)
+        self.assertIn('0.85, 0.92, 1, 1.1, 1.2, 1.35', boot)
+        self.assertTrue(os.path.exists(os.path.join(root, 'docs', 'FONTS_LICENSE.txt')))
+        self.assertIn('fonts', open(os.path.join(root, 'tools', 'make_assets.py')).read())

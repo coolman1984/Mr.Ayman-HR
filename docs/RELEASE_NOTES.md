@@ -17,6 +17,7 @@
 - **Import from Excel** (Break Areas page): break areas, what is in them and serial numbers. You see what would be added first; nothing that exists is changed; a template can be downloaded.
 - **Search everything** with Ctrl K (or the Search button): break areas, serial numbers, plans, issues, pages.
 - **Needs Attention** on the dashboard: late work, urgent issues, plans past their date, warranties ending, pieces repaired 3 times, overdue inspections.
+- **Appearance** (Settings, and *My Account* through the new **Aa** button at the top): choose one of six elegant fonts (Inter, Source Sans 3, IBM Plex Sans, DM Sans, Nunito Sans, Merriweather) or the standard look, and make the text smaller or larger (six sizes). Saved on the PC you use; works without internet.
 - All PCs must be updated to 2.6: changes made on a 2.6 PC wait on older PCs until they are updated too.
 
 ## 2.5.0

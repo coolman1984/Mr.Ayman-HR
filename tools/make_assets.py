@@ -8,7 +8,7 @@ import sys
 import zlib
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PARTS = ['index.html', 'css', 'js', 'lib']
+PARTS = ['index.html', 'css', 'js', 'lib', 'fonts']
 
 
 def collect():

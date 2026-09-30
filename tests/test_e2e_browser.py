@@ -448,6 +448,48 @@ class BrowserFlow(unittest.TestCase):
             self.assertEqual(self.errors, [])
             browser.close()
 
+    def test_font_and_text_size_choice(self):
+        """2.6: Settings -> Appearance: six bundled fonts, six text sizes, kept on this PC (also after a reload), the Aa button, fonts served by the program."""
+        make_authority(self.A)
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(executable_path=CHROME) if CHROME else pw.chromium.launch()
+            a = self.page(browser, 'A')
+            a.goto(self.A.base)
+            a.fill('input[name=username]', ADMIN[0])
+            a.fill('input[name=password]', ADMIN[1])
+            a.get_by_role('button', name='Log In').click()
+            a.get_by_text('Start with my real data').click()
+            a.wait_for_selector('text=Add First Break Area', timeout=30000)
+            body = lambda prop: a.evaluate("p => getComputedStyle(document.body)[p]", prop)
+            self.assertEqual(body('fontSize'), '13px')
+            a.goto(self.A.base + '/#/settings')
+            a.wait_for_selector('h3:text-is("Appearance")')
+            a.click('.font-card.f-inter')
+            self.assertIn('Inter', body('fontFamily'))
+            self.assertTrue(a.evaluate("document.fonts.load('16px \"Inter\"').then(f => f.length > 0)"), 'the font file is loaded from the program')
+            a.click('button[data-act=lookSize][data-step="1"]')
+            a.click('button[data-act=lookSize][data-step="1"]')
+            self.assertEqual(body('fontSize'), '15.6px')
+            self.assertIn('Large', a.inner_text('.look-now'))
+            a.reload()
+            a.wait_for_selector('h3:text-is("Appearance")')
+            self.assertEqual((body('fontSize'), 'Inter' in body('fontFamily')), ('15.6px', True), 'kept after a reload, before the page is drawn')
+            a.click('.font-card.f-serif')
+            self.assertIn('Merriweather', body('fontFamily'))
+            a.click('#fontBtn')
+            a.wait_for_selector('h2:text-is("My Account")')
+            a.wait_for_selector('h3:text-is("Appearance")')
+            a.click('button[data-act=lookReset]')
+            self.assertEqual(body('fontSize'), '13px')
+            self.assertNotIn('Merriweather', body('fontFamily'))
+            # served like the rest of the program: known folder, right type, nothing outside it
+            ok = a.evaluate("fetch('/fonts/inter-latin-wght-normal.woff2').then(r => [r.status, r.headers.get('content-type')])")
+            self.assertEqual(ok, [200, 'font/woff2'])
+            self.assertEqual(a.evaluate("fetch('/fonts/../config.json').then(r => r.status)"), 404)
+            self.assertEqual(a.evaluate("fetch('/fonts/nothing.woff2').then(r => r.status)"), 404)
+            self.assertEqual([e for e in self.errors if '404' not in e], [])  # the two 404 above are the point of the test
+            browser.close()
+
     def test_personal_link(self):
         """The administrator adds a person with only a name (personal link is the default) and a profile; the link is shown
         at once; opening it in another browser logs that person in under their own name. The link list in Devices & Sync

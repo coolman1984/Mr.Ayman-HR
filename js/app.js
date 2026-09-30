@@ -483,6 +483,7 @@ function renderShell(route) {
   $('#bell').innerHTML = ic('bell') + (open ? `<span class="cnt">${open}</span>` : '');
   $('#bell').title = 'Open issues and work that is due soon or late';
   $('#searchBtn').classList.remove('hidden'); $('#searchBtn .sb-ic').innerHTML = ic('search');
+  $('#fontBtn').classList.remove('hidden');
   $('#user').innerHTML = `<div class="avatar">${esc(initials(me()))}</div><div class="who"><b>${esc(me())}</b><small>${esc(ME.title || ME.role || ME.username)} ▾</small></div>`;
   $('#user').dataset.act = 'accountMenu';
   $('#user').title = 'My account, change password, log out';
@@ -1262,6 +1263,29 @@ function invModal(a, presetItem) {
   sync();
 }
 
+/* ============================== Appearance: font and text size (kept on this PC) ============================== */
+const FONT_CHOICES = [['default', 'Standard', 'Clean and familiar (Segoe UI)'], ['inter', 'Inter', 'Modern and very clear'], ['source', 'Source Sans 3', 'Elegant and easy to read'],
+  ['plex', 'IBM Plex Sans', 'Professional and precise'], ['dm', 'DM Sans', 'Soft and geometric'], ['nunito', 'Nunito Sans', 'Friendly and rounded'], ['serif', 'Merriweather', 'A classic serif for calm reading']];
+const LOOK_SIZES = [[0.85, 'Smallest'], [0.92, 'Small'], [1, 'Normal'], [1.1, 'Large'], [1.2, 'Larger'], [1.35, 'Largest']];
+function lookGet() { try { return JSON.parse(localStorage.getItem('bams_look') || '{}'); } catch (e) { return {}; } }
+function lookSet(change) {
+  const p = { ...lookGet(), ...change }, root = document.documentElement;
+  if (p.font && p.font !== 'default') root.setAttribute('data-font', p.font); else root.removeAttribute('data-font');
+  if (LOOK_SIZES.some(s => s[0] === p.size) && p.size !== 1) root.style.setProperty('--fs', String(p.size)); else root.style.removeProperty('--fs');
+  try { localStorage.setItem('bams_look', JSON.stringify({ font: p.font || 'default', size: p.size || 1 })); } catch (e) { /* the change still applies until the page is closed */ }
+}
+function appearanceCard() {
+  const p = lookGet(), font = p.font || 'default', size = LOOK_SIZES.some(s => s[0] === p.size) ? p.size : 1, i = LOOK_SIZES.findIndex(s => s[0] === size);
+  return `<div class="card mb appearance"><div class="card-h">${ic('sparkles')}<h3>Appearance</h3><span class="hint">Only for you, on this PC and browser</span></div>
+    <div class="look-size"><b>Text size</b>
+      <button class="btn" data-act="lookSize" data-step="-1" ${i <= 0 ? 'disabled' : ''} title="Smaller text"><span class="aa sm">A</span>−</button>
+      <span class="look-now">${LOOK_SIZES[i][1]} <small class="muted">${Math.round(size * 100)}%</small></span>
+      <button class="btn" data-act="lookSize" data-step="1" ${i >= LOOK_SIZES.length - 1 ? 'disabled' : ''} title="Larger text"><span class="aa lg">A</span>+</button>
+      <button class="btn" data-act="lookReset" ${font === 'default' && size === 1 ? 'disabled' : ''}>Back to normal</button></div>
+    <div class="font-grid">${FONT_CHOICES.map(([id, name, note]) => `<button type="button" class="font-card f-${id} ${id === font ? 'on' : ''}" data-act="lookFont" data-font="${id}">
+      <b>${esc(name)}</b><span class="sample">Break Area 01 – Aa Bb 0123</span><small>${esc(note)}</small></button>`).join('')}</div></div>`;
+}
+
 /* ============================== Area Log ============================== */
 /* what happened in a break area, on one time line: notes, work, issues, inspections, before / after photos */
 const WORK_KINDS = ['Repair', 'Painting', 'Renovation', 'Cleaning', 'Replacement', 'Other'];
@@ -2003,6 +2027,7 @@ function viewReports() {
 function viewSettings() {
   const s = DB.settings, ro = can('settings.edit') ? '' : 'disabled';
   return `<div class="page-head"><h2>Settings</h2></div>
+  ${appearanceCard()}
   <a class="card mb help-card" href="#/help">${ic('help')}<div><b>Help &amp; User Guide</b>
     <small>How to add people (with a link or a user name and password), give someone administrator rights, delete the sample data,
     backups, several PCs – and answers to common questions.</small></div><span class="btn sm primary">Open</span></a>
@@ -2299,8 +2324,9 @@ const permGroupsHTML = (perms, input) => ME.permissions.map(([g, list]) => `<fie
       : `<div class="perm ${perms.includes(p) ? 'yes' : 'no'}">${ic(perms.includes(p) ? 'check' : 'x')}${esc(l)}</div>`).join('')}
   </fieldset>`).join('');
 function viewAccount() {
-  return `<div class="page-head"><h2>My Permissions</h2><span class="muted">${esc(ME.full_name)} · ${esc(ME.role || 'Custom')}</span>
+  return `<div class="page-head"><h2>My Account</h2><span class="muted">${esc(ME.full_name)} · ${esc(ME.role || 'Custom')}</span>
     <div class="actions">${ME.login === 'link' ? '' : `<button class="btn" data-act="changePassword">${ic('edit')}Change Password</button>`}</div></div>
+  ${appearanceCard()}
   <div class="card mb"><div class="card-h">${ic('building')}<h3>Break areas</h3></div>
     <p>${allAreas() ? 'You can work with <b>all break areas</b>.' : `You can only see and work with: <b>${ME.areas.map(id => esc((area(id) || { name: id }).name)).join(', ') || 'none'}</b>`}</p></div>
   <div class="card"><div class="card-h">${ic('check')}<h3>What your account may do</h3><span class="hint">Set by the system administrator</span></div>
@@ -2719,6 +2745,9 @@ const ACT = {
   photoTab: d => { F.photoTab = d.tab; rerender(); },
   editArea: d => editArea(area(d.id)),
   serialModal: d => serialModal(area(d.id), d.item),
+  lookFont: d => { lookSet({ font: d.font }); rerender(); },
+  lookSize: d => { const i = LOOK_SIZES.findIndex(s => s[0] === (lookGet().size || 1)); lookSet({ size: LOOK_SIZES[Math.max(0, Math.min(LOOK_SIZES.length - 1, (i < 0 ? 2 : i) + +d.step))][0] }); rerender(); },
+  lookReset: () => { lookSet({ font: 'default', size: 1 }); rerender(); },
   async dataCheck() {
     toast('Checking all data…', false, 60000);
     try {

@@ -65,7 +65,7 @@ DEFAULT_CONFIG = {
     'peer_addresses': {},
 }
 STATIC = {'/': 'index.html', '/index.html': 'index.html'}
-STATIC_DIRS = ('/css/', '/js/', '/lib/')
+STATIC_DIRS = ('/css/', '/js/', '/lib/', '/fonts/')
 STATIC_EXT = {'.html', '.js', '.css', '.svg', '.png', '.ico', '.woff', '.woff2', '.map', '.json'}
 UPLOAD_EXT = {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.heic', '.pdf', '.doc', '.docx', '.xls', '.xlsx',
               '.ppt', '.pptx', '.txt', '.csv', '.zip'}
@@ -73,7 +73,7 @@ IMAGE_EXT = {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.heic'}
 INLINE_EXT = {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.pdf'}
 TYPES = {'.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.html': 'text/html; charset=utf-8',
          '.json': 'application/json', '.svg': 'image/svg+xml', '.webp': 'image/webp', '.heic': 'image/heic',
-         '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}
+         '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', '.woff2': 'font/woff2'}
 
 
 def load_config():
@@ -957,12 +957,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def serve_static(self, rel):
         """The program's own web pages: from inside BAMS.exe when installed, else from the program folder.
-        Only index.html and files inside css/, js/ and lib/ - never anything else of the program folder (data, keys)."""
+        Only index.html and files inside css/, js/, lib/ and fonts/ - never anything else of the program folder (data, keys)."""
         rel = unquote(rel).replace('\\', '/')
         parts = rel.split('/')
         ext = os.path.splitext(rel)[1].lower()
         if (any(x in ('', '.', '..') or ':' in x for x in parts) or ext not in STATIC_EXT
-                or not (rel == 'index.html' or len(parts) > 1 and parts[0] in ('css', 'js', 'lib'))):
+                or not (rel == 'index.html' or len(parts) > 1 and parts[0] in ('css', 'js', 'lib', 'fonts'))):
             return self.send(404, {'error': 'File not found'})
         if ASSETS is not None:
             data = ASSETS.get(rel)
