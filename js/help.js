@@ -45,6 +45,10 @@ const HELP = [
     ['How do I add or remove items?', `Open the break area → ${helpBold('Add New Item')} (or ${helpBold('Add New')} in the inventory). Choose the item,
       the action (${helpBold('Added')}, ${helpBold('Removed')}, ${helpBold('Replaced')}, ${helpBold('Transferred')}), the quantity and the condition. Every movement is
       saved in ${helpBold('Transactions')}.`],
+    ['How do I record serial numbers?', `When you add items (${helpBold('Update → Added')}) type or scan their serial numbers, one per
+      line – the quantity follows. For pieces that are already there: on the break area page open ${helpBold('Serial numbers')} and press
+      ${helpBold('Add')} or ${helpBold('Edit')}. When you remove or transfer items, tick which pieces go. ${helpBold('Replaced')} can change a serial
+      number. Find a serial number in ${helpBold('Furniture & Equipment → Serial Numbers')}. The same serial number cannot be entered twice.`],
     ['How do I move items to another break area?', `Choose the action ${helpBold('Transferred')} and the break area it goes to. It is removed from
       one and added to the other in one step.`],
     ['Where do I see the totals?', `${helpBold('Furniture & Equipment')} shows every item type with totals and how many are not in good
@@ -96,7 +100,8 @@ const HELP = [
       <li>Optional: install the program on other PCs (they join by themselves) and choose a backup administrator PC.</li></ol>`],
     ['How do I delete the sample data?', `At the very first start you choose: an empty system, or sample break areas to try everything.
       ${helpBold('Settings → Delete Sample Data')} and type ${helpBold('DELETE')}. A backup is made first and everything stays in the
-      ${helpBold('Recycle Bin')}, so nothing is lost. It is never loaded again by itself (${helpBold('Load Sample Data')} brings it back on purpose).`],
+      ${helpBold('Recycle Bin')}, so nothing is lost. Break areas you renamed
+      are kept with their inventory and everything you added; only their sample photos, issues, surveys and history are removed. It is never loaded again by itself (${helpBold('Load Sample Data')} brings it back on purpose).`],
     ['Does the PC with the program have to stay on?', `Yes, for everybody who uses it from another PC or phone (for example with a
       personal link). The program starts by itself after somebody ${helpBold('signs in to Windows')} on that PC and runs in the background –
       you may ${helpBold('lock')} the screen (Windows key + L), but do not sign out or switch the PC off during working hours. If it was

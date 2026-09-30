@@ -201,6 +201,18 @@ Kept up to date with every change (rule in `CLAUDE.md`). New idea → new card i
 - 🇪🇬 **بالعربي:** أول تشغيل لإصدار جديد بياخد نسخة احتياطية ويفحص ويحوّل البيانات لوحده، من غير ما المستخدم
   يحس بأي حاجة.
 
+### 4.5b Serial numbers: one record per piece, the count stays a counter
+- **Problem:** the stock is a number (30 chairs); the customer wants the serial number of every piece. A list of
+  serial numbers inside one record would lose pieces when two PCs add at the same time (last writer wins).
+- **Idea:** every piece is its own small record (item, serial number, break area). Two PCs adding pieces keep both;
+  a transfer only changes the break area of the record. The quantity stays the counter it was.
+- **How:** new entity `pieces`; the inventory window asks the serial numbers when adding (one per line, a barcode
+  scanner types them), asks *which* pieces when removing or transferring, and old → new serial when replacing.
+  Duplicates are refused with the place where the number already is.
+- **Where:** `server/store.py` (`pieces`), `js/app.js` (`invModal`, `serialModal`, `serialList`).
+- 🇪🇬 **بالعربي:** كل قطعة ليها سجل لوحدها بالسيريال بتاعها، والعدد يفضل رقم زي ما هو. كده جهازين يضيفوا قطع في
+  نفس الوقت محدش يمسح التاني، والنقل بيغيّر مكان القطعة بس. والباركود سكانر بيكتب السيريال لوحده.
+
 ### 4.6 Files by fingerprint
 - **Idea:** photos and documents are named by their SHA-256; copying between PCs is resumable and a damaged copy is
   detected.
@@ -250,6 +262,27 @@ Kept up to date with every change (rule in `CLAUDE.md`). New idea → new card i
 - Buttons that cannot work on this PC are greyed out with the reason.
 - 🇪🇬 **بالعربي:** جملة واحدة بسيطة لكل رسالة، فعل واحد واضح في كل شاشة. التفاصيل الفنية للأدمن بس. أول تشغيل
   بيسأل تبدأ فاضي ولا بعينة تجريبية. الحفظ اللي بيفشل ما بيضيّعش اللي كتبته. وفيه صفحة مساعدة بحث بسيط.
+
+### 6.1 Recognise sample records by their fixed ids, not by their names
+- **Problem:** people start real use by *renaming* the sample records ("Break Area 03" → "Main Canteen"). A check by
+  name then says "no sample data left" – the delete button disappears and the fake issues, photos and surveys stay.
+- **Idea:** give every sample record a short fixed id (`ba03`, `is12`, `ba03s81`) and every real record a random
+  8-letter id. Delete by id: untouched sample areas completely, renamed ones keep the area, its inventory and
+  everything added by hand, only their sample records go.
+- **Where:** `js/app.js` (`SAMPLE_REC`, `sampleLeft`, `clearAll`), `js/data.js` (ids).
+- **Reuse when:** any demo data that people may start to use for real.
+- 🇪🇬 **بالعربي:** الناس بتبدأ الشغل الحقيقي بإنها تغيّر اسم البيانات التجريبية. متعرفش التجريبي من اسمه، اعرفه من
+  رقمه الثابت. كده تمسح التجريبي بس وتسيب اللي الناس ضافته بإيديها.
+
+### 6.2 A window must never save "old" records
+- **Problem:** a save fails ("someone else changed it"), the data is loaded again, the window stays open so nothing
+  typed is lost – but the window still points at the *old* records. Pressing Save again said "saved" and saved nothing.
+- **Idea:** every window remembers which data it was opened on and which button opened it. If the data was loaded
+  again in between, the window is opened again on the new data and everything typed is put back.
+- **Where:** `js/app.js` (`modal`, `reopenFresh`, `OPENER`).
+- **Reuse when:** any app that keeps a form open after a failed save and reloads its data.
+- 🇪🇬 **بالعربي:** لو الحفظ فشل والبيانات اتحدّثت، الشباك لازم يتفتح تاني على البيانات الجديدة ومعاه اللي كتبته،
+  عشان مايقولش "اتحفظ" وهو ماحفظش حاجة.
 
 ---
 

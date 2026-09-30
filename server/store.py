@@ -41,6 +41,9 @@ ENTITIES = {
     'inventory': ('inventory', 'Inventory', [
         ('areaId', 'area_id', T, 'Area ID'), ('item', 'item', T, 'Item'), ('qty', 'qty', I, 'Quantity'),
         ('condition', 'condition', T, 'Condition'), ('note', 'note', T, 'Notes')]),
+    'pieces': ('pieces', 'Serial Numbers', [
+        ('areaId', 'area_id', T, 'Area ID'), ('item', 'item', T, 'Item'), ('serial', 'serial', T, 'Serial Number'),
+        ('date', 'date', T, 'Date Added'), ('note', 'note', T, 'Notes')]),
     'surveys': ('surveys', 'Satisfaction Surveys', [
         ('areaId', 'area_id', T, 'Area ID'), ('month', 'month', T, 'Month'), ('department', 'department', T, 'Department'),
         ('percentage', 'percentage', R, 'Satisfaction %'), ('respondents', 'respondents', I, 'Respondents'),
@@ -70,7 +73,7 @@ ENTITIES = {
         ('action', 'action', T, 'Action'), ('prev', 'prev_qty', I, 'Previous Qty'), ('next', 'new_qty', I, 'New Qty'),
         ('details', 'details', T, 'Details'), ('by', 'by_user', T, 'Updated By')]),
 }
-AREA_CHILDREN = ['inventory', 'photos', 'docs', 'issues', 'maintenance', 'inspections', 'surveys']
+AREA_CHILDREN = ['inventory', 'pieces', 'photos', 'docs', 'issues', 'maintenance', 'inspections', 'surveys']
 
 # Merge rules for changes made at the same time on two PCs (see DISTRIBUTED_SYNC_ARCHITECTURE.md, conflict matrix).
 COUNTERS = {'inventory': {'qty'}}  # every movement is a delta: +5 on one PC and -2 on another give +3
@@ -343,6 +346,19 @@ class Store:
     def _bump(self, c):
         c.execute("UPDATE meta SET value=CAST(value AS INTEGER)+1 WHERE key='data_version'")
 
+    @staticmethod
+    def _what(c, entity, title, row, rid):
+        """A record in words for messages (never an internal id when a name is known): 'Inventory "Chairs" of Break Area 01'."""
+        kind = 'Serial number' if entity == 'pieces' else title[:-1] if title.endswith('s') else title
+        # only plain values: a hand-made request must not reach SQL with a list (answer 400 later, not a crash)
+        row = {k: v for k, v in row.items() if isinstance(v, (str, int, float))} if isinstance(row, dict) else {}
+        label = next((str(row[k]) for k in ('name', 'title', 'serial', 'caption', 'department', 'details', 'date') if row.get(k)), '')
+        if entity == 'inventory' and row.get('item'):
+            t = c.execute('SELECT name FROM item_types WHERE id=?', (row['item'],)).fetchone()
+            label = t[0] if t else row['item']
+        a = c.execute('SELECT name FROM areas WHERE id=?', (row.get('areaId'),)).fetchone() if row.get('areaId') else None
+        return f'{kind} "{label or rid}"' + (f' of {a[0]}' if a else '')
+
     def _plan(self, c, op, force):
         """Checks one change against the current row and turns it into (audit entry, journal op)."""
         entity, rid, kind = op.get('e'), op.get('id'), op.get('op')
@@ -353,7 +369,7 @@ class Store:
         names = [js for js, _, _, _ in fields]
         cur = c.execute(f'SELECT * FROM {table} WHERE id=?', (rid,)).fetchone()
         before = self._row_js(entity, cur) if cur and not cur['deleted'] else None
-        what = f'{title[:-1] if title.endswith("s") else title} "{(before or op.get("row") or {}).get("name") or rid}"'
+        what = self._what(c, entity, title, before or op.get('row') or {}, rid)
 
         if before and not force and op.get('ver') != cur['ver']:
             raise Conflict(f'{what} was changed by {cur["updated_by"] or "another user"} at {cur["updated_at"]}. '
@@ -381,6 +397,11 @@ class Store:
             v = row.get(f)
             if isinstance(v, str) and v.startswith('/files/') and ('..' in v or '\\' in v or ':' in v):
                 raise BadRequest('Invalid file reference')
+        if entity == 'pieces':
+            serial = str(row.get('serial') or '').strip()
+            if not serial or len(serial) > 80:
+                raise BadRequest('A serial number is required (at most 80 characters)')
+            row = {**row, 'serial': serial}
         if entity == 'surveys':
             p = _coerce(R, row.get('percentage'))
             if p is None or not 0 <= p <= 100:
@@ -580,7 +601,7 @@ class Store:
                 row = self._row_js(entity, r) if r else {'id': f['rid']}
                 detail = json.loads(f['detail'])
                 item = {'entity': entity, 'title': title, 'id': f['rid'], 'kind': f['kind'], 'deleted': bool(r and r['deleted']),
-                        'name': row.get('name') or row.get('title') or row.get('caption') or row.get('item') or row.get('details') or f['rid'],
+                        'name': row.get('name') or row.get('title') or row.get('caption') or row.get('serial') or row.get('item') or row.get('details') or f['rid'],
                         'area': self._area_of(entity, row) if r else None, 'row': row, 'detail': detail}
                 out.append(item)
             dup = self.conn.execute('SELECT area_id, month, department, COUNT(*) n, GROUP_CONCAT(id) ids FROM surveys WHERE deleted=0 '
@@ -636,7 +657,7 @@ class Store:
             items = {r['id']: r['name'] for r in c.execute('SELECT id, name FROM item_types')}
             items.update({'area': 'Break Area', 'Initial Setup': 'Initial Setup'})
             sheets, deleted = [], []
-            order = ['areas', 'surveys', 'inventory', 'history', 'issues', 'issueLog', 'maintenance', 'inspections', 'photos', 'docs', 'itemTypes', 'settings']
+            order = ['areas', 'surveys', 'inventory', 'pieces', 'history', 'issues', 'issueLog', 'maintenance', 'inspections', 'photos', 'docs', 'itemTypes', 'settings']
             for e in order:
                 table, title, fields = ENTITIES[e]
                 head = ['ID']

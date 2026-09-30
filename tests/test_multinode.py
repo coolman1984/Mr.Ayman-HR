@@ -1285,3 +1285,49 @@ class T38_OpenJoin(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class T39_SerialNumbers(Base):
+    """Version 2.5 (customer's request): every piece can carry its serial number. A piece is its own record, so two PCs
+    adding pieces at the same time both keep theirs; a transfer moves the record to the other break area on every PC."""
+    N = 2
+
+    def test_serial_numbers(self):
+        ac, pc1 = self.ac, self.clients[1]
+        ac.post('/api/commit', {'label': 'areas', 'ops': [area_op('S1', 'Serial One'), area_op('S2', 'Serial Two')]})
+        move(ac, 'S1', 'tv', 2)
+        self.converged()
+        piece = lambda pid, aid, serial: {'e': 'pieces', 'id': pid, 'op': 'put', 'row': {'areaId': aid, 'item': 'tv', 'serial': serial, 'date': '2026-09-29'}}
+        # both PCs add a piece at the same time: both are kept everywhere
+        self.unplug(1)
+        ac.post('/api/commit', {'label': 'sn a', 'ops': [piece('pa000001', 'S1', 'TV-A')]})
+        pc1.post('/api/commit', {'label': 'sn b', 'ops': [piece('pb000001', 'S1', 'TV-B')]})
+        self.plug(1)
+        self.converged()
+        for c in (ac, pc1):
+            self.assertEqual(sorted(p['serial'] for p in get_area(c, 'S1')['pieces']), ['TV-A', 'TV-B'])
+        # a transfer on pc1 moves the record; the serial number is trimmed and required
+        p = next(x for x in get_area(pc1, 'S1')['pieces'] if x['serial'] == 'TV-A')
+        pc1.post('/api/commit', {'label': 'transfer', 'ops': [{'e': 'pieces', 'id': p['id'], 'op': 'put', 'ver': p['ver'],
+                                                                'row': {'item': 'tv', 'serial': ' TV-A ', 'date': '2026-09-29', 'areaId': 'S2'}}]})
+        self.converged()
+        self.assertEqual([x['serial'] for x in get_area(ac, 'S2')['pieces']], ['TV-A'])
+        with self.assertRaises(ApiError) as e:
+            ac.post('/api/commit', {'label': 'empty', 'ops': [piece('pc000001', 'S1', '   ')]})
+        self.assertEqual(e.exception.code, 400)
+        # the permission "inventory.edit" is needed, and only for the person's own break areas
+        ac.post('/api/users/save', {'username': 'serial.viewer', 'full_name': 'Serial Viewer', 'password': 'Plain-look42x', 'must_change': False,
+                                    'perms': ['dashboard.view', 'areas.view'], 'areas': None})
+        ac.post('/api/users/save', {'username': 'serial.keeper', 'full_name': 'Serial Keeper', 'password': 'Store-room42x', 'must_change': False,
+                                    'perms': ['dashboard.view', 'areas.view', 'inventory.edit'], 'areas': ['S1']})
+        viewer, keeper = self.A.client(), self.A.client()
+        viewer.login('serial.viewer', 'Plain-look42x')
+        keeper.login('serial.keeper', 'Store-room42x')
+        with self.assertRaises(ApiError) as e:
+            viewer.post('/api/commit', {'label': 'no', 'ops': [piece('pd000001', 'S1', 'TV-D')]})
+        self.assertEqual(e.exception.code, 403)
+        with self.assertRaises(ApiError) as e:
+            keeper.post('/api/commit', {'label': 'other area', 'ops': [piece('pe000001', 'S2', 'TV-E')]})
+        self.assertEqual(e.exception.code, 403)
+        keeper.post('/api/commit', {'label': 'own area', 'ops': [piece('pf000001', 'S1', 'TV-F')]})
+        self.assertIn('TV-F', [x['serial'] for x in get_area(ac, 'S1')['pieces']])

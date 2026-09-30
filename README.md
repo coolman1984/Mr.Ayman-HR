@@ -56,11 +56,19 @@ See **GUIDE_Users_Permissions.md** for step-by-step instructions.
 
 ## Sample data
 
-On the very first start the database is filled with sample data (22 break areas, inventory, photos, issues,
-transactions and 8 months of satisfaction surveys) so users can see every feature in action.
-When you are ready for real use: **Settings → Delete All Sample Data** (type DELETE to confirm).
+On the very first start the administrator chooses an empty system or sample data (22 break areas, inventory, photos,
+issues, transactions and 8 months of satisfaction surveys) to see every feature in action.
+When you are ready for real use: **Settings → Delete Sample Data** (type DELETE to confirm). Sample break areas that
+were renamed are kept with their inventory and everything added by hand; only their sample records are removed.
 A backup is taken first and everything stays restorable from the Recycle Bin. The sample data is never
 loaded again by itself.
+
+## Serial numbers
+
+Every piece (TV screen, fridge, chair…) can carry its serial number: type or scan them when adding items
+(*Update → Added*, one per line), tick which pieces go when removing or transferring, change one with *Replaced*.
+The break area page lists them, **Furniture & Equipment** finds them, the inventory report and the full Excel export
+show them. See **GUIDE_Serial_Numbers.md**.
 
 ## Where the data is
 

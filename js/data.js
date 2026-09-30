@@ -94,7 +94,7 @@ function buildSeed() {
       description: i === 1
         ? 'Break area for production employees. Includes seating, entertainment and refreshment facilities.'
         : `Break area serving ${location.toLowerCase()} employees.`,
-      inventory, photos, docs: [], issues,
+      inventory, pieces: [], photos, docs: [], issues,
       maintenance: status === 'Under Update'
         ? [{ id: 'm' + seq++, date: '2026-09-30', item: 'chairs', assignedTo: 'Facility Team', details: 'Furniture upgrade in progress.', status: 'Scheduled' }]
         : [],
