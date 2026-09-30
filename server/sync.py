@@ -997,17 +997,40 @@ class SyncService:
             list(ex.map(probe, hosts))
         return sorted(found, key=lambda f: f['address'])
 
+    def parse_address(self, address):
+        """(host, sync port) from what a person types: 192.168.1.10, ADMIN-PC, 192.168.1.10:8443 or the web address of Settings."""
+        a = str(address or '').strip()
+        web = '://' in a  # the web address shown in Settings (http://…:<web port>/): the PCs share on the sync port
+        a = a.split('://', 1)[-1].split('/', 1)[0].strip()
+        h, _, p = a.rpartition(':')
+        host, port = (h, int(p)) if h and p.isdigit() and not web else ((h or a) if web else a, self.port)
+        if not host or ' ' in host:
+            raise ValueError('Type the address of the administrator PC, for example 192.168.1.10.')
+        return host, port
+
+    def probe(self, address):
+        """Is there an administrator PC at this address? Used by the join screen before the person presses Join."""
+        host, port = self.parse_address(address)
+        last = None
+        for prt in dict.fromkeys([int(port), self.port]):
+            c = Connection(self, host, prt, '', None, timeout=6)
+            try:
+                r = c.request('POST', '/sync/hello', {})
+            except (Offline, SyncError) as e:
+                last = e
+                continue
+            finally:
+                c.close()
+            if not r.get('authority'):
+                raise ValueError('The program runs on that PC, but it is not the administrator PC. Ask for the address of the administrator PC (the first PC that was set up).')
+            return {'ok': True, 'name': r.get('name') or host, 'address': f'{host}:{prt}'}
+        raise ValueError('Nothing answers at that address. Check the address, that the administrator PC is switched on with the program running, and that both PCs are on the same network.')
+
     def join_open(self, address, device_name):
         """Joins the administrator PC at this address: added at once, no code, no approval."""
         if self.node.role != 'unconfigured' or self.auth.has_users():
             raise ValueError('This PC is already set up.')
-        a = str(address or '').strip()
-        web = '://' in a  # the web address shown in Settings (http://…:<web port>/): the PCs share on the sync port
-        a = a.split('://', 1)[-1].split('/', 1)[0]
-        h, _, p = a.rpartition(':')
-        host, port = (h, int(p)) if h and p.isdigit() and not web else ((h or a) if web else a, self.port)
-        if not host:
-            raise ValueError('Type the address of the administrator PC, for example 192.168.1.10.')
+        host, port = self.parse_address(address)
         if device_name:
             self.node.set_name(device_name)
         fields = {'node': self.node.id, 'name': self.node.name, 'pub': self.node.pub.hex(), 'cert_fp': self.node.cert_fp, 'port': str(self.port)}

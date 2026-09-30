@@ -78,8 +78,11 @@ function flatten(db) {
   return out;
 }
 
-async function load() {
+/* Loads everything again. Background refreshes pass quiet=true: when a window was opened meanwhile the data is NOT replaced
+   under it (a window holds records of the old data; only a failed save reloads on purpose). Returns false when it did not load. */
+async function load(quiet = false) {
   const s = await api('GET', '/api/state');
+  if (quiet && $('#modal').classList.contains('open')) return false;
   s.settings = { ...DEFAULT_SETTINGS, ...s.settings };
   s.areas.forEach(a => { a.surveys = a.surveys || []; a.pieces = a.pieces || []; a.notes = a.notes || []; a.plans = a.plans || []; a.issues.forEach(i => (i.log = i.log || [])); });
   const vers = {};
@@ -2346,6 +2349,8 @@ function viewUsers() {
       <button class="btn" data-act="profileList">${ic('check')}Profiles</button>
       <button class="btn primary" data-act="userEdit">${ic('plus')}Add Person</button></div></div>
   <div id="usersRO"></div>
+  <div class="card mb"><p class="hint" style="margin:0">${ic('help')} <b>How do people start?</b> With a <b>personal link</b> (just open it) or with a <b>user name and password</b> in any web browser at <span class="mono">${lanAddresses().map(esc).join('</span> or <span class="mono">')}</span>.
+    A person who installs the program on their own PC must choose <b>"Join an existing system"</b> first – a PC that did not join is a separate, empty system.</p></div>
   <div class="card"><div data-async="users"><p class="muted">Loading…</p></div></div>
   <p class="hint">Everything each person does is recorded with their name. A person can log in with their own <b>personal link</b>
     (no user name or password) or with a user name and password. When somebody leaves, disable or delete their account –
@@ -2410,6 +2415,33 @@ function wirePermPicker(form, profiles) {
   sync();
 }
 
+let LAN_URLS = [];
+/* every address other PCs can use (numbers first: a PC name does not always resolve) */
+const lanAddresses = () => {
+  const urls = LAN_URLS.length ? LAN_URLS : [BASE_URL], ip = u => /\/\/\d+\.\d+\.\d+\.\d+/.test(u);
+  return [...urls.filter(ip), ...urls.filter(u => !ip(u))];
+};
+const hostOf = u => { try { return new URL(u).hostname; } catch (e) { return u; } };
+/* how a person with a user name and password starts: a browser needs nothing; a PC with its own copy must JOIN first */
+function startInstructionsText(name, username, password) {
+  const all = lanAddresses(), addr = all.join('\nor ') , host = all.map(hostOf).join(' (or ') + ')'.repeat(Math.max(0, all.length - 1));
+  return `Hello ${name},\n\nYour user name: ${username}\nYour temporary password: ${password}\n\n`
+    + `EASIEST – no installation: open this address in a web browser on any PC or phone in the company network:\n${addr}\nThen log in with the user name and password.\n\n`
+    + `OR on your own PC (keeps working when the administrator PC is switched off):\n1. Install BAMS-Setup.exe and open the program.\n2. Choose "Join an existing system" (NOT "This is the first PC").\n`
+    + `3. Type the address ${host} and press Join. Wait until it says the PC is ready.\n4. Log in with the user name and password above.\n\n`
+    + `Important: a PC that was not joined is a separate, empty system and does not know your user name.`;
+}
+function startInstructionsModal(title, name, username, password, mustChange) {
+  const text = startInstructionsText(name, username, password);
+  modal(title, `<p><b>${esc(name)}</b> can start in one of two ways:</p>
+    <div class="howto"><div><b>1. Easiest – in a web browser (nothing to install)</b><br>Open <span class="mono">${lanAddresses().map(esc).join('</span> or <span class="mono">')}</span> on any PC or phone in the company network and log in.</div>
+      <div><b>2. On their own PC</b> (keeps working when this PC is off)<br>Install <b>BAMS-Setup.exe</b>, open it, choose <b>"Join an existing system"</b> (not "This is the first PC"), type the address
+        <span class="mono">${lanAddresses().map(u => esc(hostOf(u))).join('</span> or <span class="mono">')}</span>, wait until the PC is ready, then log in.
+        <br><span class="bad-txt">A PC that did not join is a separate, empty system and does not know this user.</span></div></div>
+    <dl class="kv"><dt>User name</dt><dd class="mono">${esc(username)}</dd><dt>Password</dt><dd class="mono">${esc(password)}</dd></dl>
+    <p class="hint">Give the password to the person privately. ${mustChange ? 'They choose their own password at the first login. ' : ''}It is not shown again.</p>
+    <textarea class="howto-text" readonly rows="6">${esc(text)}</textarea>`, { extra: `<button type="button" class="btn" data-act="copyLink" data-url="${esc(text)}">${ic('copy')}Copy these instructions</button>`, wide: true });
+}
 function userEdit(uid) {
   const u = uid ? USERS.users.find(x => x.id === uid) : null;
   const def = USERS.profiles.find(p => p.id === 'full-access') || USERS.profiles.find(p => !p.admin) || { name: 'Custom', perms: [] };
@@ -2471,9 +2503,7 @@ function userEdit(uid) {
       await ASYNC.users($('[data-async=users]'));
       if (res.token) { linkModal(res.full_name, res.token, !u); return false; }
       if (!u || (u.login === 'link' && !byLink)) {
-        modal(u ? 'Password set' : 'Person added', `<p><b>${esc(d.full_name)}</b> can now log in on any PC in the network with:</p>
-          <dl class="kv"><dt>Address</dt><dd class="mono">${esc(BASE_URL)}</dd><dt>User name</dt><dd class="mono">${esc(body.username)}</dd><dt>Password</dt><dd class="mono">${esc(d.password)}</dd></dl>
-          <p class="hint">Give the password to the person privately. ${body.must_change ? 'They choose their own password at the first login.' : ''} It is not shown again.</p>`);
+        startInstructionsModal(u ? 'Password set' : 'Person added', d.full_name, body.username, d.password, body.must_change);
         return false;
       }
       toast('Saved');
@@ -2924,10 +2954,10 @@ const ACT = {
   },
   async removeLogo() { DB.settings.logoImage = ''; if (await save('Remove logo image')) rerender(); },
   async startEmpty() {
-    closeModal();
-    // the usual item types (chairs, tables, TV screens...) so inventory can be recorded at once; they can be changed later
-    location.hash = '#/dashboard'; rerender();
-    if (!DB.itemTypes.length) { DB.itemTypes = DEFAULT_ITEM_TYPES.map(t => ({ ...t })); if (await save('Add the usual item types')) rerender(); }
+    // the usual item types (chairs, tables, TV screens...) so inventory can be recorded at once; they can be changed later.
+    // The welcome window stays (locked) until they are saved: the save reloads the data, which must not happen under another window.
+    if (!DB.itemTypes.length) { DB.itemTypes = DEFAULT_ITEM_TYPES.map(t => ({ ...t })); await save('Add the usual item types'); }
+    closeModal(); location.hash = '#/dashboard'; rerender();
   },
   async startSample() { closeModal(); if (await loadSample()) { rerender(); toast('Sample data loaded – delete it in Settings when you start real use'); } },
   async loadDemo() {
@@ -3108,9 +3138,8 @@ setInterval(async () => {
     if (mv !== ME.ver) { // the administrator changed this account - apply the new permissions right away
       ME = await api('GET', '/api/me');
       if (ME.must_change) return start();
-      await load(); rerender();
-      toast('Your permissions were updated by the administrator', false, 5000);
-    } else if (version !== DB.version) { await load(); rerender(); }
+      if (await load(true) !== false) { rerender(); toast('Your permissions were updated by the administrator', false, 5000); }
+    } else if (version !== DB.version) { if (await load(true) !== false) rerender(); }
   } catch (e) { /* server briefly unreachable – try again next time */ }
 }, 10000);
 
@@ -3151,6 +3180,7 @@ async function start() {
   track('session', 'open', navigator.userAgent);
   try {
     const info = await api('GET', '/api/info');
+    LAN_URLS = info.urls || [];
     // QR codes must point to an address phones can reach, not "localhost"
     if (/^(localhost|127\.|\[::1\])/.test(location.hostname)) {
       const lan = info.urls.find(u => /\/\/\d+\.\d+\.\d+\.\d+/.test(u)) || info.urls[0];

@@ -1591,3 +1591,60 @@ class T42_PlansAndImport(Base):
             maker.call('POST', '/api/import/preview', raw=b'this is not an excel file' * 10, headers={'Content-Type': 'application/octet-stream'})
         self.assertEqual(e.exception.code, 400)
         self.assertIn('Excel', e.exception.msg)
+
+
+class T43_NewPcTrap(unittest.TestCase):
+    """The field report: the administrator made a user with a user name and password, the person installed the program on their
+    own PC - and saw no data. A PC that is not joined is a separate system. The screens now explain it, the address is checked before
+    joining, and a PC that was set up alone by mistake can be moved into the company system without losing anything."""
+
+    def test_separate_pc_then_join_the_company_system(self):
+        import glob
+        A, B = Server('company').start(), Server('mistake').start()
+        try:
+            ac = make_authority(A)
+            ac.post('/api/users/save', {'username': 'sara.m', 'full_name': 'Sara Mostafa', 'password': 'Desk-lamp-5531', 'must_change': False,
+                                        'perms': ['dashboard.view', 'areas.view', 'equipment.view'], 'areas': None})
+            ac.post('/api/commit', {'label': 'data', 'ops': [area_op('C1', 'Company Canteen')]})
+            # the person installed the program and chose "first PC": a separate system that does not know the user
+            bc = make_authority(B)
+            bc.post('/api/commit', {'label': 'own', 'ops': [area_op('S1', 'Own Mistake Area')]})
+            with self.assertRaises(ApiError):
+                B.client().login('sara.m', 'Desk-lamp-5531')
+            # only this PC alone may leave; the company PC (which will have a member) may not
+            self.assertEqual(bc.get('/api/devices')['summary']['state'], 'single')
+            viewer_c = B.client()
+            with self.assertRaises(ApiError) as e:
+                viewer_c.post('/api/node/leave', {})
+            self.assertIn(e.exception.code, (401, 403), 'not without logging in')
+            res = bc.post('/api/node/leave', {})
+            self.assertTrue(res['restart'] and res['backup'])
+            B.stop()
+            B.start()
+            st = B.client().get('/api/auth/status')
+            self.assertFalse(st['hasUsers'], 'the PC starts empty, ready to join')
+            copied = glob.glob(os.path.join(B.data_dir, 'copied-*'))
+            self.assertEqual(len(copied), 1)
+            self.assertTrue(os.path.exists(os.path.join(copied[0], 'bams.db')), 'its own data is kept, not deleted')
+            # the join screen checks the address first
+            b = B.client()
+            self.assertTrue(b.post('/api/join/probe', {'address': A.sync_address})['ok'])
+            with self.assertRaises(ApiError) as e:
+                b.post('/api/join/probe', {'address': '127.0.0.1:1'})
+            self.assertEqual(e.exception.code, 400)
+            self.assertIn('administrator PC', e.exception.msg)  # (on one machine the fallback port is this PC itself: 'not the administrator PC'; elsewhere 'Nothing answers')
+            with self.assertRaises(ApiError) as e:
+                b.post('/api/join/probe', {'address': 'has spaces in it'})
+            self.assertEqual(e.exception.code, 400)
+            b.post('/api/join', {'address': A.sync_address, 'code': '', 'name': 'Sara PC'})
+            wait_until(lambda: B.client().get('/api/auth/status')['hasUsers'], 40, what='accounts on the joined PC')
+            c = B.client()
+            c.login('sara.m', 'Desk-lamp-5531')
+            wait_until(lambda: [a['name'] for a in c.get('/api/state')['areas']] == ['Company Canteen'], 40, what='company data on the joined PC')
+            # now the company PC has a member and cannot be moved away by mistake
+            with self.assertRaises(ApiError) as e:
+                ac.post('/api/node/leave', {})
+            self.assertEqual(e.exception.code, 403)
+        finally:
+            A.cleanup()
+            B.cleanup()

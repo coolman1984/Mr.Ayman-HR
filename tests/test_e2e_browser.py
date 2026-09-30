@@ -459,7 +459,7 @@ class BrowserFlow(unittest.TestCase):
             a.fill('input[name=password]', ADMIN[1])
             a.get_by_role('button', name='Log In').click()
             a.get_by_text('Start with my real data').click()
-            a.wait_for_selector('text=Add First Break Area', timeout=30000)
+            a.wait_for_selector('#modal.open', state='detached', timeout=30000)  # the start sets the page itself when it is finished
             body = lambda prop: a.evaluate("p => getComputedStyle(document.body)[p]", prop)
             self.assertEqual(body('fontSize'), '13px')
             a.goto(self.A.base + '/#/settings')
@@ -490,6 +490,65 @@ class BrowserFlow(unittest.TestCase):
             self.assertEqual([e for e in self.errors if '404' not in e], [])  # the two 404 above are the point of the test
             browser.close()
 
+    def test_new_pc_screens_and_instructions(self):
+        """The field report (no data on the new user's PC): join comes first and says who it is for, choosing "first PC" asks to make sure,
+        the address is checked while typing, the administrator gets honest instructions for a person with a user name and password,
+        and a PC set up alone by mistake can move into the company system."""
+        make_authority(self.A)
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(executable_path=CHROME) if CHROME else pw.chromium.launch()
+            # --- the new PC
+            b = browser.new_context(viewport={'width': 1300, 'height': 850}).new_page()
+            asked = []
+            b.on('dialog', lambda d: (asked.append(d.message), d.dismiss()))
+            b.goto(self.B.base)
+            b.wait_for_selector('.choice')
+            titles = b.eval_on_selector_all('.choice > b', 'els => els.map(e => e.textContent)')
+            self.assertEqual(titles, ['Join an existing system', 'This is the first (or only) PC'], 'joining is the first choice')
+            self.assertIn('already used in your company', b.inner_text('#auth'))
+            b.get_by_text('This is the first (or only) PC').click()
+            self.assertEqual(len(asked), 1)
+            self.assertIn('really the very first PC', asked[0])
+            self.assertEqual(b.locator('input[name=full_name]').count(), 0, 'cancelled: still on the first screen')
+            b.get_by_text('Join an existing system').click()
+            b.fill('input[name=address]', '127.0.0.1:1')
+            b.wait_for_selector('#joinCheck.bad-txt', timeout=20000)
+            b.fill('input[name=address]', self.A.sync_address)
+            b.wait_for_selector('#joinCheck.ok-txt', timeout=20000)
+            self.assertIn('Found the administrator PC', b.inner_text('#joinCheck'))
+            # --- the administrator PC: adding a person with a user name and password
+            a = self.page(browser, 'A')
+            a.goto(self.A.base)
+            a.fill('input[name=username]', ADMIN[0])
+            a.fill('input[name=password]', ADMIN[1])
+            a.get_by_role('button', name='Log In').click()
+            a.get_by_text('Start with my real data').click()
+            a.wait_for_selector('#modal.open', state='detached', timeout=30000)  # the start is finished (it sets the page itself)
+            a.goto(self.A.base + '/#/users')
+            a.wait_for_selector('text=How do people start?')
+            a.get_by_role('button', name='Add Person').click()
+            a.fill('#modal input[name=full_name]', 'Sara Mostafa')
+            a.check('#modal input[name=login][value=password]')
+            a.fill('#modal input[name=username]', 'sara.m')
+            a.fill('#modal input[name=password]', 'Desk-lamp-5531')
+            # a background refresh that finishes while a window is open must not replace the data under it (it made "Save" say "someone else changed this")
+            self.assertTrue(a.evaluate("(async () => { const before = DB; const r = await load(true); return r === false && DB === before; })()"))
+            a.click('#modal .modal-f .primary')
+            a.wait_for_selector('text=can start in one of two ways')
+            text = a.inner_text('#modal')
+            self.assertIn('Join an existing system', text)
+            self.assertIn('does not know this user', text)
+            self.assertIn('sara.m', text)
+            a.click('#modal .modal-f button[data-act=closeModal]')
+            # --- a PC that is on its own offers the way into the company system
+            a.goto(self.A.base + '/#/devices')
+            a.wait_for_selector('text=Was this PC set up by mistake?')
+            a.click('button[data-act=devLeave]')
+            a.wait_for_selector('#modal >> text=Please restart this PC')
+            self.assertIn('Join an existing system', a.inner_text('#modal'))
+            self.assertEqual([e for e in self.errors if '403' not in e], [])
+            browser.close()
+
     def test_personal_link(self):
         """The administrator adds a person with only a name (personal link is the default) and a profile; the link is shown
         at once; opening it in another browser logs that person in under their own name. The link list in Devices & Sync
@@ -503,7 +562,7 @@ class BrowserFlow(unittest.TestCase):
             a.fill('input[name=password]', ADMIN[1])
             a.get_by_role('button', name='Log In').click()
             a.get_by_text('Start with my real data').click()  # first start: empty system, no sample data
-            a.wait_for_selector('text=Add First Break Area', timeout=30000)
+            a.wait_for_selector('#modal.open', state='detached', timeout=30000)  # the start sets the page itself when it is finished
             a.goto(self.A.base + '/#/users')
             a.get_by_role('button', name='Add Person').click()
             a.wait_for_selector('#modal.open input[name=full_name]')

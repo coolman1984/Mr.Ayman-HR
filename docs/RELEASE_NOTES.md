@@ -18,6 +18,9 @@
 - **Search everything** with Ctrl K (or the Search button): break areas, serial numbers, plans, issues, pages.
 - **Needs Attention** on the dashboard: late work, urgent issues, plans past their date, warranties ending, pieces repaired 3 times, overdue inspections.
 - **Appearance** (Settings, and *My Account* through the new **Aa** button at the top): choose one of six elegant fonts (Inter, Source Sans 3, IBM Plex Sans, DM Sans, Nunito Sans, Merriweather) or the standard look, and make the text smaller or larger (six sizes). Saved on the PC you use; works without internet.
+- **A new person's PC shows no data?** (field report) The first screen of a new PC now puts **Join an existing system** first and says who it is for, asks before creating a separate "first PC",
+  checks the administrator address while you type, tells you if it cannot reach the administrator PC, and a PC that was set up alone by mistake can move into the company system (**Devices & Sync →
+  Join the company system instead**, nothing is deleted). After adding a person with a user name and password the administrator gets clear instructions (browser address or install + Join) to copy.
 - All PCs must be updated to 2.6: changes made on a 2.6 PC wait on older PCs until they are updated too.
 
 ## 2.5.0

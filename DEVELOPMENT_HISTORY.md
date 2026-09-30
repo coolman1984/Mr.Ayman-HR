@@ -43,6 +43,14 @@ proposed phases were built, each shown with screenshots before the next.
   Not taken (for later if wanted): phone app for inspections with camera and offline outbox (needs a cloud gateway), five colour themes and dark mode, Arabic / RTL, Word forms,
   guided tour and welcome slides.
 - Tests: `T42_PlansAndImport`, `ExcelImportTest`, `test_plans_search_icons_import_and_data_safety`.
+- **Field report: "the administrator made a user with user name and password, gave the person the setup, made changes – no data for the new user".** Investigated with real processes: a PC
+  that JOINS shares everything both ways (accounts, data, changes, users made later, permission changes, works while the administrator PC is off) - nothing was broken there. The trap was the
+  first screen and the texts: the first screen offered "This is the first (or only) PC" before "Join", the administrator's "Person added" text said the person "can log in on any PC in the
+  network" and never said that a PC with its own copy must JOIN first, so the person made a separate empty system (which cannot join later: the PC is "already set up"). Fixed: join is the first
+  choice and explains who it is for, "first PC" asks to make sure, the join screen checks the address while typing (`/api/join/probe`), the waiting screen shows errors and does not silently
+  fall back, the administrator gets honest copyable instructions (every address, numbers first; browser = nothing to install; own PC = install + Join) and a hint on the Users page,
+  and **Devices & Sync → Join the company system instead** (`/api/node/leave`: only on a lone administrator PC, backup first, data set aside in `copied-…` like a copied folder) rescues a PC that was
+  set up alone. Tests: `T43_NewPcTrap`, `test_new_pc_screens_and_instructions`.
 - **Independent review of the whole branch – found and fixed:** one far-away cell (`XFD1048576`) in an Excel file made the import loop run for hours (sheet size capped, only rows
   that hold cells are read); the technician who only completes work could not finish work scheduled from a plan (completing work may update its plan); a person who only plans could
   record work as already done (finished work needs `maintenance.complete`); the id of repeating work grew by 2 letters per generation and would pass the 120 limit after ~4.75 years
@@ -57,6 +65,11 @@ proposed phases were built, each shown with screenshots before the next.
   come back), `test_font_and_text_size_choice`.
 
 **More mistakes and lessons**
+- A window holds records of the data it was opened on, so NOTHING may replace `DB` while a window is open except a failed save: the 10-second background refresh now loads "quietly"
+  (`load(true)` does not replace the data when a window opened meanwhile), and the first-start save (`startEmpty`) finishes before the welcome window closes. A flaky browser test found it
+  ("Someone else changed this" on a plain Add Person). Browser tests that start the program must wait for the welcome window to close (`#modal.open` detached), not for text that is already under it.
+- A route added in the wrong block of `do_POST` (before the session is read) made `need()` refuse everybody: new authenticated routes go after `self.u` is known (the routes before it are the public ones).
+- When a real user reports "it does not work", reproduce their steps with real programs first: the engine was right, the words on the screens were wrong.
 - The static-file rules exist in two places (`STATIC_DIRS` and `serve_static`): a new folder such as `fonts/` must be added to both, and to `tools/make_assets.py` for the installed program.
 - `repr()` of a Python list of tuples is not a JavaScript array: `('name', [...])` is a comma expression, the picker showed nothing. Generate JS with explicit brackets and open the window in a browser.
 - A digest of rows must not depend on the row type: a connection with `sqlite3.Row` gave another `repr` than a plain one and the upgrade check refused a healthy history. Use `tuple(row)`.

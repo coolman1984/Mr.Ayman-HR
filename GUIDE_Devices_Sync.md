@@ -55,6 +55,13 @@ join. To take a PC out: **Devices & Sync → Remove**.)
 
 People who only use a **personal link** need nothing installed – a browser in the same network is enough.
 
+### A person with a user name and password – two ways to start
+1. **In a web browser** (nothing to install): open the address of the administrator PC (*Users & Permissions* shows it) and log in.
+2. **On their own PC**: install, choose **Join an existing system** (**not** "This is the first PC"), type the address, wait until the PC is ready, log in.
+
+**A PC that did not join is a separate, empty system** – it does not know the users and data of the company. If that happened by mistake: on that PC open **Devices & Sync →
+Join the company system instead** (nothing is deleted, a backup is made, the old data is kept in a folder `copied-…`), restart the PC and choose **Join an existing system**.
+
 ---
 
 ## 4. Devices & Sync (administrator only)

@@ -781,3 +781,8 @@ kbd { font: 600 11px/1 Consolas, monospace; background: #f2f5fa; border: 1px sol
 .font-card.f-dm b, .font-card.f-dm .sample { font-family: "DM Sans", sans-serif; }
 .font-card.f-nunito b, .font-card.f-nunito .sample { font-family: "Nunito Sans", sans-serif; }
 .font-card.f-serif b, .font-card.f-serif .sample { font-family: "Merriweather", Georgia, serif; }
+
+/* how a new person starts */
+.howto { display: grid; gap: 10px; margin: 8px 0 12px; }
+.howto > div { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: #fafcff; }
+.howto-text { width: 100%; font-family: Consolas, monospace; font-size: calc(12px * var(--fs)); }

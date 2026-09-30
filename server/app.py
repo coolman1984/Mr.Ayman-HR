@@ -670,6 +670,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(200, SYNC.join(d.get('address'), d.get('code'), d.get('name')))
             except ValueError as e:
                 raise BadRequest(str(e))
+        if p == '/api/join/probe':  # checks an address typed on the join screen
+            if self.ip not in LOCAL_IPS or AUTH.has_users() or NODE.role != 'unconfigured':
+                raise Forbidden('Only on a new, not yet set up PC, on the PC itself.')
+            try:
+                return self.send(200, SYNC.probe(self.json_body().get('address')))
+            except ValueError as e:
+                raise BadRequest(str(e))
         if p == '/api/join/discover':
             if self.ip not in LOCAL_IPS or AUTH.has_users() or NODE.role != 'unconfigured':
                 raise Forbidden('Only on a new, not yet set up PC, on the PC itself.')
@@ -776,6 +783,18 @@ class Handler(BaseHTTPRequestHandler):
             log.info('BACKUP manual by %s: %s', self.user, name)
             STORE.log_activity(self.user, self.ip, [{'type': 'backup', 'action': 'Backup created', 'target': name}])
             return self.send(200, {'name': name})
+        if p == '/api/node/leave':  # "this PC was set up as its own system by mistake - join the company system instead"
+            self.need('users.manage')
+            if self.ip not in LOCAL_IPS:
+                raise Forbidden('This can only be done on the PC itself.')
+            if NODE.role != 'authority' or SYNC.summary().get('state') != 'single':
+                raise Forbidden('This PC already shares data with other PCs, so it cannot be moved into another system.')
+            name = BACKUPS.create('pre-leave')
+            with open(os.path.join(NODE.dir, 'RESET_REQUESTED'), 'w') as f:
+                f.write(now())
+            AUTH.log(self.user, self.ip, 'node-leave', NODE.name, f'This PC was set aside to join another system (backup {name}); its data is kept in data/copied-<date>')
+            say(f'{self.user} asked this PC to join another system; data is set aside at the next start (backup {name})')
+            return self.send(200, {'ok': True, 'restart': True, 'backup': name})
         if p == '/api/backups/folder':  # a second folder (USB drive, other disk) that gets a copy of every backup
             self.need('backups.manage')
             if not is_admin(self.u):

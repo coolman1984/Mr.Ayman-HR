@@ -124,6 +124,9 @@ Check a local compile on Linux: `pip install --target <dir> nuitka ordered-set z
   that REWRITES existing data must be a `MIGRATIONS` step that declares the tables it touches; adding columns / entities is free. Before each release add its commit to
   `T41_UpgradeKeepsData.RELEASES` (the test runs the real old program on a data folder, then the new one). `Server(app=…)` starts another program version in tests.
 - Text sizes: never write `font-size: 13px` in `css/styles.css` - write `calc(13px * var(--fs))` (`AppearanceFilesTest` fails otherwise); the font comes from `var(--font)`. New static folders go into `STATIC_DIRS`, `serve_static` and `tools/make_assets.py`.
+- Never replace `DB` under an open window: background refreshes use `load(true)`; anything else that reloads (a save from outside a window) must finish before a window can open. Browser tests: wait for `#modal.open` to detach after the first-start choice.
+- A PC only shares data after it JOINED (`Join an existing system`); a PC set up as a first PC is a separate system. Every text that tells someone how to start must say so (`startInstructionsModal`). `/api/node/leave` rescues a lone PC.
+- In `do_POST` the routes before the session is read are public; authenticated routes (with `self.need`) go after it.
 - Icons: `js/icons.js` is generated (`tools/make_icons.py`, Lucide, ISC) - never edit it by hand; `IconPackTest` fails when a screen uses an icon that does not exist.
 - Excel import (`excel_import.plan`) never changes what exists; a new importable field needs a column name list, a warning for bad values, and a test in `ExcelImportTest`.
 - `repr()` / `str()` of Python data is not JavaScript: write generated JS with explicit brackets.
