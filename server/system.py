@@ -23,10 +23,12 @@ from datetime import datetime
 
 from auth import USER_FIELDS, Auth
 from backup import Backups
-from journal import Journal
+from journal import SCHEMA, Journal
 from node import Node
 from replica import markers as replica_markers
 from store import ENTITIES, REPLICATED, SPECS, Store
+from upgrade import Upgrade, UpgradeVerificationFailed
+from version import VERSION
 
 BOOT_CHUNK = 300
 
@@ -52,9 +54,17 @@ class System:
         self.data_dir, self.cfg, self.uploads, self.log = data_dir, cfg, uploads, log
         if os.path.exists(os.path.join(data_dir, 'node', 'RESET_REQUESTED')):
             self._archive_copy()
+        # data safety first: refuse data of a newer program, make a verified copy before an update touches the files
+        self.upgrade = Upgrade(data_dir, VERSION, SCHEMA, log=log)
+        try:
+            self.upgrade.before()
+        except (OSError, sqlite3.Error) as e:
+            raise UpgradeVerificationFailed(f'The safety copy of your data could not be made before the update ({e}). Nothing was changed. Free some disk space (or ask '
+                                            'your IT person to allow the program to write to its data folder) and start the program again.')
         self.node = Node(data_dir)
         self.store = Store(data_dir)
         self.auth = Auth(data_dir, cfg)
+        self.upgrade.after_tables()
         self.backups = Backups(self.store, uploads, backup_dir, extra_backup_dirs, cfg.get('keep_auto_backups', 200),
                                cfg.get('backup_interval_hours', 6), log=log, auth=self.auth)
         fresh = not self.node.exists or not self.node.info.get('setup_complete')
@@ -66,6 +76,7 @@ class System:
             self.store.fold_pending()
             self.auth.fold_pending()
         self.backups.journal = self.journal
+        self.upgrade.finish(self, history_kept=not fresh)  # a version-1 upgrade builds the history new (a half-built one is moved aside)
 
     def _archive_copy(self):
         """The data folder was copied from another PC and the administrator chose "set up as a new PC": everything of
@@ -73,7 +84,7 @@ class System:
         dest = os.path.join(self.data_dir, 'copied-' + datetime.now().strftime('%Y%m%d_%H%M%S'))
         os.makedirs(dest)
         for n in os.listdir(self.data_dir):
-            if n == 'node' or n.split('.db')[0] in ('bams', 'auth', 'journal') and '.db' in n:
+            if n in ('node', 'program.json') or n.split('.db')[0] in ('bams', 'auth', 'journal') and '.db' in n:
                 os.replace(os.path.join(self.data_dir, n), os.path.join(dest, n))
         os.remove(os.path.join(dest, 'node', 'RESET_REQUESTED'))
         self.log(f'The copied data was moved to {dest}; this PC starts as a new device.')

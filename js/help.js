@@ -51,6 +51,8 @@ const HELP = [
       number. Find a serial number in ${helpBold('Furniture & Equipment → Serial Numbers')}. The same serial number cannot be entered twice.`],
     ['How do I move items to another break area?', `Choose the action ${helpBold('Transferred')} and the break area it goes to. It is removed from
       one and added to the other in one step.`],
+    ['Can I change the font or make the text bigger?', `Yes, for yourself: press ${helpBold('Aa')} at the top (or open ${helpBold('Settings → Appearance')}). Choose a font and press ${helpBold('A+')} / ${helpBold('A−')} for larger or smaller text, ${helpBold('Back to normal')} to undo. It is saved on the PC and browser you use.`],
+    ['How do I choose an icon for an item type?', `${helpBold('Furniture & Equipment → Add Item Type')} (or Edit): click an icon – there are 124 in seven groups – or type a word in the search box (tv, water, chair…).`],
     ['Where do I see the totals?', `${helpBold('Furniture & Equipment')} shows every item type with totals and how many are not in good
       condition. ${helpBold('Export Excel')} gives the full list.`],
     ['How do I add a new kind of item (e.g. "Microwave")?', `${helpBold('Furniture & Equipment')} → ${helpBold('Add Item Type')} (needs the permission
@@ -63,8 +65,20 @@ const HELP = [
       The bell at the top shows how many issues are open.`],
     ['How do I follow up or close an issue?', `Open the issue, choose the new status (${helpBold('Open')}, ${helpBold('In Progress')}, ${helpBold('Closed')})
       and write what was done. Every step is kept in the issue's log.`],
-    ['How do I plan maintenance?', `Open the break area → ${helpBold('Schedule Maintenance')}. When it is done, open it on the
-      ${helpBold('Maintenance')} page and complete it.`],
+    ['How do I plan maintenance?', `Open the break area → ${helpBold('Schedule Maintenance')}: type of work (repair, painting, renovation…), item, date, who
+      does it, contractor. Choose ${helpBold('Repeat')} for work that comes back (for example every 6 months): when you complete it, the next one is
+      planned by itself. When it is done, open it on the ${helpBold('Maintenance')} page and complete it. Work due within a week or late is
+      marked and counted at the bell.`],
+    ['Where do I write that the room was painted or renovated?', `Open the break area → ${helpBold('Area Log')} → ${helpBold('Add Note')}. Choose the type (Painting, Renovation, Repair,
+      Cleaning, Replacement…), the date and write what happened. The log also shows all work, issues and inspections of the break area on one
+      time line, newest first. You can print it or save it as Excel (the buttons in the log).`],
+    ['The work is already finished. How do I record it?', `Area Log → ${helpBold('Record Finished Work')} (needs the permission to complete maintenance). You do not need to plan it first. Add the contractor, the
+      warranty date and – if you may see costs – what it cost. If it solved an issue, choose the issue: it is closed together with the work.`],
+    ['Can I cancel planned work?', `Yes: the small ${helpBold('×')} next to it → ${helpBold('Cancel the work')} (write why). It stays in the history as Cancelled; nothing is erased.`],
+    ['Who sees what the work cost?', `Only people with the permission "See and enter what maintenance work cost" (administrators always have it). Everybody else does not
+      see costs anywhere: not on the screens, not in reports, not in the change log, not in Excel.`],
+    ['How do I see everything that happened to one TV or fridge?', `Give the piece a serial number (${helpBold('Serial numbers')} on the break area page). Choose the piece when you record work.
+      Then click its serial number: you see every repair and movement. Three repairs or more: the program suggests replacing it.`],
     ['How do inspections work?', `Record an inspection on the break area. The next inspection date is calculated from the inspection
       frequency in ${helpBold('Settings')}. The ${helpBold('Maintenance')} page shows what is due or overdue.`]
   ]},
@@ -76,13 +90,20 @@ const HELP = [
   { id: 'files', title: 'Photos and documents', icon: 'image', items: [
     ['How do I add photos or documents?', `Open the break area → ${helpBold('Upload Photo / Document')}. Photos keep their full quality; you can
       choose the main photo (${helpBold('Set as Main Photo')}). Files up to 50 MB.`],
+    ['How do I write down plans for the future?', `Break area → ${helpBold('Future Plans')} → ${helpBold('Add Plan')}: what, target date (optional), priority. ${helpBold('Schedule')} turns it into planned work with the text filled in;
+      when that work is completed the plan is marked done. The ✓ marks a plan done by hand, the × drops it (it stays in the list). Plans past their date show on the dashboard.`],
+    ['How do I keep the photos of a painting or renovation together?', `Upload with ${helpBold('Category: Before')} and ${helpBold('After')} and choose ${helpBold('Belongs to this work')}.
+      Open the work (the small page symbol in the Area Log) to see its photos together, or press ${helpBold('Add photo')} there.`],
     ['A photo says "Photo is being copied".', `It was added on another PC and is still on its way. It appears by itself in a moment.`]
   ]},
   { id: 'reports', title: 'Reports, printing and Excel', icon: 'report', items: [
     ['Which reports are there?', `${helpBold('Reports')} has: Break Area Register, Inventory by Break Area, Update History, Issues, Inspection
-      Schedule, Satisfaction Survey, Summary by Location and QR labels. Each can be filtered, printed or saved as PDF
+      Schedule, Satisfaction Survey, Summary by Location, Area History (everything that happened in one or all break areas), Maintenance & Work Done and QR labels. Each can be filtered, printed or saved as PDF
       (${helpBold('Print / PDF')}) and exported to Excel.`],
     ['How do I save something as PDF?', `${helpBold('Print / PDF')} → in the print window choose ${helpBold('Save as PDF')} as the printer.`],
+    ['Can I bring my Excel lists in?', `Yes: ${helpBold('Break Areas → Import from Excel')}. Download the template, fill in break areas (sheet 1) and what is in them with serial numbers (sheet 2), choose the file and check
+      what would be added. Nothing that already exists is changed, so importing the same file twice is harmless. A backup is made first.`],
+    ['Can I search for something quickly?', `Press ${helpBold('Ctrl + K')} (or the Search button at the top), type a few letters – break area, serial number, plan, issue or page – and press Enter.`],
     ['Can I export everything?', `${helpBold('Reports → Export Everything')} gives one Excel file with all data and logs (needs the permission
       "Complete database export").`]
   ]},
@@ -102,6 +123,8 @@ const HELP = [
       ${helpBold('Settings → Delete Sample Data')} and type ${helpBold('DELETE')}. A backup is made first and everything stays in the
       ${helpBold('Recycle Bin')}, so nothing is lost. Break areas you renamed
       are kept with their inventory and everything you added; only their sample photos, issues, surveys and history are removed. It is never loaded again by itself (${helpBold('Load Sample Data')} brings it back on purpose).`],
+    ['Is my data safe when the program is updated?', `Yes. Before an update the program makes a verified copy of all data (folder ${helpBold('upgrades')} in the data folder), checks afterwards that every record is still
+      there and unchanged, and refuses to start if the data was saved by a newer program. ${helpBold('Settings → Data Safety')} shows the last update; ${helpBold('Check my data now')} tests the databases and the whole history.`],
     ['Does the PC with the program have to stay on?', `Yes, for everybody who uses it from another PC or phone (for example with a
       personal link). The program starts by itself after somebody ${helpBold('signs in to Windows')} on that PC and runs in the background –
       you may ${helpBold('lock')} the screen (Windows key + L), but do not sign out or switch the PC off during working hours. If it was
@@ -140,7 +163,11 @@ const HELP = [
       It finds the administrator PC in the network by itself (or type its address, shown in ${helpBold('Settings')} on the administrator PC)
       and copies all data. Nothing to do on the administrator PC – no code, no approval. The administrator PC must be switched on.`],
     ['How do people log in?', `Two ways: ${helpBold('personal link')} – just open the link in any browser, nothing to install; or
-      ${helpBold('user name and password')} – on a PC with the program installed.`],
+      ${helpBold('user name and password')} – in any browser at the address of the administrator PC, <b>or</b> on a PC that has the program installed
+      <b>and joined</b> the system (${helpBold('Join an existing system')}). A PC that did not join is a separate, empty system and does not know the users.`],
+    ['A person installed the program and sees no data or the user name does not work.', `Their PC was not joined: on the first screen they chose ${helpBold('This is the first (or only) PC')}, which starts a new empty system.
+      Fix: on that PC open ${helpBold('Devices & Sync')} → ${helpBold('Join the company system instead')} (nothing is deleted, a backup is made), restart the PC, open the program, choose ${helpBold('Join an existing system')}
+      and type the address of the administrator PC. The easier way for a person who does not need their own copy: just open the address of the administrator PC in a web browser.`],
     ['What if the administrator PC is switched off or I am away?', `Everybody keeps working and the PCs keep sharing. Only people,
       permissions and PCs cannot be changed – unless you set up a ${helpBold('backup administrator PC')}: ${helpBold('Devices & Sync')} →
       ${helpBold('Make backup admin')} next to a trusted PC. From then on people with administrator rights can manage people there too.
@@ -169,6 +196,8 @@ const HELP = [
   { id: 'trouble', title: 'Problems and questions', icon: 'alert', items: [
     ['The page says "Cannot connect to the server".', `The PC with the program is off, or you are not in the company network. Open the
       program from its desktop icon on that PC; if it still does not open, restart that PC.`],
+    ['I installed the program, but my user name does not work / I see no data.', `Your PC must first ${helpBold('join')} the system of your company: on the first screen choose ${helpBold('Join an existing system')} (not "first PC"), type the address the administrator gave you and wait until it says the PC is ready.
+      Or simply open the address of the administrator PC in a web browser – nothing to install. If you already chose "first PC" by mistake, ask the administrator of this PC to use ${helpBold('Devices & Sync → Join the company system instead')}.`],
     ['My link says "This link does not work any more".', `The administrator made a new link or switched it off. Ask for your new link.`],
     ['I see "Please tell the administrator".', `Sharing with the other PCs has a problem. Your work on this PC is saved. Tell the
       administrator.`],

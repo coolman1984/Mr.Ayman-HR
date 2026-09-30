@@ -41,6 +41,13 @@ ENTITIES = {
     'inventory': ('inventory', 'Inventory', [
         ('areaId', 'area_id', T, 'Area ID'), ('item', 'item', T, 'Item'), ('qty', 'qty', I, 'Quantity'),
         ('condition', 'condition', T, 'Condition'), ('note', 'note', T, 'Notes')]),
+    'notes': ('notes', 'Area Log', [
+        ('areaId', 'area_id', T, 'Area ID'), ('date', 'date', T, 'Date'), ('kind', 'kind', T, 'Type'),
+        ('text', 'text', T, 'Note'), ('by', 'by_user', T, 'Written By')]),
+    'plans': ('plans', 'Future Plans', [
+        ('areaId', 'area_id', T, 'Area ID'), ('title', 'title', T, 'Plan'), ('details', 'details', T, 'Details'),
+        ('targetDate', 'target_date', T, 'Target Date'), ('priority', 'priority', T, 'Priority'), ('status', 'status', T, 'Status'),
+        ('doneDate', 'done_date', T, 'Done Date'), ('maintId', 'maint_id', T, 'Planned Work'), ('by', 'by_user', T, 'Written By')]),
     'pieces': ('pieces', 'Serial Numbers', [
         ('areaId', 'area_id', T, 'Area ID'), ('item', 'item', T, 'Item'), ('serial', 'serial', T, 'Serial Number'),
         ('date', 'date', T, 'Date Added'), ('note', 'note', T, 'Notes')]),
@@ -51,7 +58,7 @@ ENTITIES = {
     'photos': ('photos', 'Photos', [
         ('areaId', 'area_id', T, 'Area ID'), ('caption', 'caption', T, 'Caption'), ('category', 'category', T, 'Category'),
         ('date', 'date', T, 'Date'), ('main', 'is_main', B, 'Main Photo'), ('src', 'src', T, 'File'), ('thumb', 'thumb', T, 'Thumbnail'),
-        ('variant', 'variant', T, 'Placeholder'), ('seed', 'seed', T, 'Placeholder Seed')]),
+        ('variant', 'variant', T, 'Placeholder'), ('seed', 'seed', T, 'Placeholder Seed'), ('workId', 'work_id', T, 'Related Work')]),
     'docs': ('documents', 'Documents', [
         ('areaId', 'area_id', T, 'Area ID'), ('name', 'name', T, 'File Name'), ('caption', 'caption', T, 'Title'),
         ('size', 'size_bytes', I, 'Size (bytes)'), ('type', 'mime_type', T, 'Type'), ('date', 'date', T, 'Date'), ('src', 'src', T, 'File')]),
@@ -64,7 +71,10 @@ ENTITIES = {
     'maintenance': ('maintenance', 'Maintenance', [
         ('areaId', 'area_id', T, 'Area ID'), ('date', 'date', T, 'Planned Date'), ('item', 'item', T, 'Item'),
         ('assignedTo', 'assigned_to', T, 'Assigned To'), ('details', 'details', T, 'Work'), ('status', 'status', T, 'Status'),
-        ('doneDate', 'done_date', T, 'Done Date'), ('notes', 'notes', T, 'Notes')]),
+        ('doneDate', 'done_date', T, 'Done Date'), ('notes', 'notes', T, 'Notes'),
+        ('kind', 'kind', T, 'Work Type'), ('cost', 'cost', R, 'Cost'), ('contractor', 'contractor', T, 'Contractor'),
+        ('warrantyUntil', 'warranty_until', T, 'Warranty Until'), ('issueId', 'issue_id', T, 'Related Issue'),
+        ('serial', 'serial', T, 'Serial Number'), ('repeatMonths', 'repeat_months', I, 'Repeat Every (months)')]),
     'inspections': ('inspections', 'Inspections', [
         ('areaId', 'area_id', T, 'Area ID'), ('date', 'date', T, 'Date'), ('by', 'by_user', T, 'Inspected By'),
         ('result', 'result', T, 'Result'), ('notes', 'notes', T, 'Notes')]),
@@ -73,13 +83,14 @@ ENTITIES = {
         ('action', 'action', T, 'Action'), ('prev', 'prev_qty', I, 'Previous Qty'), ('next', 'new_qty', I, 'New Qty'),
         ('details', 'details', T, 'Details'), ('by', 'by_user', T, 'Updated By')]),
 }
-AREA_CHILDREN = ['inventory', 'pieces', 'photos', 'docs', 'issues', 'maintenance', 'inspections', 'surveys']
+AREA_CHILDREN = ['inventory', 'pieces', 'notes', 'plans', 'photos', 'docs', 'issues', 'maintenance', 'inspections', 'surveys']
 
 # Merge rules for changes made at the same time on two PCs (see DISTRIBUTED_SYNC_ARCHITECTURE.md, conflict matrix).
 COUNTERS = {'inventory': {'qty'}}  # every movement is a delta: +5 on one PC and -2 on another give +3
 RESOLVERS = {
     'areas': {'lastInspection': 'max', 'nextInspection': 'max', 'inspectedBy': 'follow:lastInspection'},
-    'maintenance': {'status': 'rank:Scheduled,In Progress,Done', 'doneDate': 'follow:status', 'notes': 'follow:status'},
+    'maintenance': {'status': 'rank:Scheduled,In Progress,Cancelled,Done', 'doneDate': 'follow:status', 'notes': 'follow:status'},
+    'plans': {'status': 'rank:Idea,Planned,Dropped,Done', 'doneDate': 'follow:status'},
 }
 SPECS = {e: {'table': t, 'fields': [(js, col, kind) for js, col, kind, _ in f], 'counters': COUNTERS.get(e, set()),
              'resolvers': RESOLVERS.get(e, {})} for e, (t, _, f) in ENTITIES.items()}
@@ -88,6 +99,18 @@ SPECS = {e: {'table': t, 'fields': [(js, col, kind) for js, col, kind, _ in f], 
 FILES = ('attachments', [('sha256', 'sha256', T), ('size', 'size_bytes', I), ('type', 'mime', T)])
 SPECS['files'] = {'table': FILES[0], 'fields': FILES[1], 'counters': set(), 'resolvers': {}}
 REPLICATED = set(SPECS)
+
+
+def strip_cost(text):
+    """A changes / before / after text (JSON) without the cost of maintenance work."""
+    try:
+        v = json.loads(text) if text else None
+    except (TypeError, ValueError):
+        return text
+    if isinstance(v, dict):
+        v.pop('cost', None)
+        return json.dumps(v, ensure_ascii=False)
+    return text
 
 
 class Conflict(Exception):
@@ -234,7 +257,7 @@ class Store:
         return row.get('areaId')
 
     # ------------------------------------------------------------ read
-    def state(self, areas=None, surveys=True):
+    def state(self, areas=None, surveys=True, cost=True):
         """Everything the page needs. areas: only these break area ids (None = all); surveys=False leaves out the survey results."""
         with self.lock:
             rows = {}
@@ -245,6 +268,9 @@ class Store:
             allowed = None if areas is None else set(areas)
             if not surveys:
                 rows['surveys'] = []
+            if not cost:  # what work cost is only for people who may see costs
+                for m in rows['maintenance']:
+                    m.pop('cost', None)
             areas = sorted((a for a in rows['areas'] if allowed is None or a['id'] in allowed), key=lambda a: (a.get('name') or '').lower())
             by_id = {}
             for a in areas:
@@ -343,6 +369,11 @@ class Store:
             self._save([{'e': 'files', 'id': path, 'op': 'insert', 'x': False, 'noaudit': True,
                          's': {'sha256': sha256, 'size': size, 'type': mime}}], user, ip, 'Uploaded file', user_id, begin=True)
 
+    def maintenance_cost(self, rid):
+        with self.lock:
+            r = self.conn.execute('SELECT cost FROM maintenance WHERE id=? AND deleted=0', (rid,)).fetchone()
+            return r[0] if r else None
+
     def _bump(self, c):
         c.execute("UPDATE meta SET value=CAST(value AS INTEGER)+1 WHERE key='data_version'")
 
@@ -352,7 +383,7 @@ class Store:
         kind = 'Serial number' if entity == 'pieces' else title[:-1] if title.endswith('s') else title
         # only plain values: a hand-made request must not reach SQL with a list (answer 400 later, not a crash)
         row = {k: v for k, v in row.items() if isinstance(v, (str, int, float))} if isinstance(row, dict) else {}
-        label = next((str(row[k]) for k in ('name', 'title', 'serial', 'caption', 'department', 'details', 'date') if row.get(k)), '')
+        label = next((str(row[k])[:60] for k in ('name', 'title', 'serial', 'caption', 'department', 'text', 'details', 'date') if row.get(k)), '')
         if entity == 'inventory' and row.get('item'):
             t = c.execute('SELECT name FROM item_types WHERE id=?', (row['item'],)).fetchone()
             label = t[0] if t else row['item']
@@ -397,6 +428,20 @@ class Store:
             v = row.get(f)
             if isinstance(v, str) and v.startswith('/files/') and ('..' in v or '\\' in v or ':' in v):
                 raise BadRequest('Invalid file reference')
+        if entity == 'notes':
+            text = str(row.get('text') or '').strip()
+            if not text or len(text) > 4000:
+                raise BadRequest('A note needs some text (at most 4000 characters)')
+            row = {**row, 'text': text}
+        if entity == 'maintenance' and row.get('cost') not in (None, ''):
+            cost = _coerce(R, row.get('cost'))
+            if cost is None or not 0 <= cost < 1e12:
+                raise BadRequest('The cost must be a number from 0 up')
+        if entity == 'plans':
+            title = str(row.get('title') or '').strip()
+            if not title or len(title) > 200:
+                raise BadRequest('A plan needs a title (at most 200 characters)')
+            row = {**row, 'title': title}
         if entity == 'pieces':
             serial = str(row.get('serial') or '').strip()
             if not serial or len(serial) > 80:
@@ -582,11 +627,11 @@ class Store:
     def log_activity(self, user, ip, events):
         self.journal.log_activity(user, ip, events[:500])
 
-    def query_log(self, kind, q='', user='', typ='', area='', frm='', to='', limit=200, offset=0, areas=None, node='', admin=True):
+    def query_log(self, kind, q='', user='', typ='', area='', frm='', to='', limit=200, offset=0, areas=None, node='', admin=True, hide_cost=False):
         if kind == 'activity':
             self.journal.flush_activity()
         return self.journal.query('audit' if kind == 'audit' else 'activity', q, user, typ, area, frm, to, node, limit, offset, areas,
-                                  business_only=not admin)
+                                  business_only=not admin, hide_cost=hide_cost)
 
     # ------------------------------------------------------------ conflicts and convergence
     def conflicts(self):
@@ -650,28 +695,35 @@ class Store:
         return out
 
     # ------------------------------------------------------------ export
-    def export_sheets(self, admin=False):
+    def export_sheets(self, admin=False, cost=True):
         with self.lock:
             c = self.conn
             areas = {r['id']: r['name'] for r in c.execute('SELECT id, name FROM areas')}
             items = {r['id']: r['name'] for r in c.execute('SELECT id, name FROM item_types')}
             items.update({'area': 'Break Area', 'Initial Setup': 'Initial Setup'})
             sheets, deleted = [], []
-            order = ['areas', 'surveys', 'inventory', 'pieces', 'history', 'issues', 'issueLog', 'maintenance', 'inspections', 'photos', 'docs', 'itemTypes', 'settings']
+            order = ['areas', 'surveys', 'inventory', 'pieces', 'notes', 'plans', 'history', 'issues', 'issueLog', 'maintenance', 'inspections', 'photos', 'docs', 'itemTypes', 'settings']
             for e in order:
                 table, title, fields = ENTITIES[e]
                 head = ['ID']
                 for js, _, _, label in fields:
+                    if js == 'cost' and not cost:
+                        continue
                     head += ['Break Area'] if js == 'areaId' else [label]
                 head += ['Created', 'Created By', 'Last Changed', 'Changed By']
                 rows = []
                 for r in c.execute(f'SELECT * FROM {table} ORDER BY rowid'):
                     if r['deleted']:
+                        gone = self._row_js(e, r)
+                        if not cost:
+                            gone.pop('cost', None)
                         deleted.append([title, r['id'], areas.get(r['area_id']) if 'area_id' in r.keys() else '',
-                                        str(self._row_js(e, r))[:500], r['deleted_at'], r['deleted_by']])
+                                        str(gone)[:500], r['deleted_at'], r['deleted_by']])
                         continue
                     out = [r['id']]
                     for js, col, kind, _ in fields:
+                        if js == 'cost' and not cost:
+                            continue
                         v = _out(kind, r[col])
                         if js == 'areaId':
                             v = areas.get(v, v)
@@ -699,7 +751,9 @@ class Store:
             names = {r['id']: r['name'] for r in j.conn.execute('SELECT id, name FROM nodes')}
             sheets.append(('Data Changes Log', ['#', 'Time', 'User', 'PC', 'IP', 'Action', 'Table', 'Record ID', 'Break Area', 'Operation', 'Changes'],
                            [[r['id'], r['ts'], r['user'], names.get(r['node'], r['node']), r['ip'], r['label'], r['entity'], r['entity_id'],
-                             areas.get(r['area_id'], r['area_id']), r['op'], r['changes'] if r['op'] == 'update' else (r['after'] or r['before'])]
+                             areas.get(r['area_id'], r['area_id']), r['op'],
+                             (r['changes'] if r['op'] == 'update' else (r['after'] or r['before'])) if cost or r['entity'] != 'maintenance'
+                             else strip_cost(r['changes'] if r['op'] == 'update' else (r['after'] or r['before']))]
                             for r in j.conn.execute("SELECT * FROM audit WHERE entity NOT IN ('users', 'nodes', 'userCommands', 'profiles') "
                                                     "ORDER BY ts, id")]))
             if admin:  # what each person clicked is for administrators only (like on the screen)

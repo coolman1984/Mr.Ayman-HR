@@ -1,5 +1,28 @@
 # What is new
 
+## 2.6.0
+
+- **Area Log** on every break area page: write notes (painting, renovation, repairs, visits…) and see everything that happened – notes, work,
+  issues, inspections, Before / After photos – on one time line. Print it or save it as Excel. New reports: **Area History** and **Maintenance & Work Done**.
+- **Record Finished Work**: write down work that is already done, with type, contractor, warranty and (by permission) cost. It can close the related issue.
+- Maintenance has a **type of work**, a contractor, a related issue, and can **repeat** (the next one is planned when it is completed).
+  Work due within a week or late is marked; the bell counts it.
+- **Cancel** work instead of deleting it: it stays in the history.
+- Photos can belong to a piece of work (before / after).
+- **Costs** are only shown to people with the new permission *See and enter what maintenance work cost* (administrators always have it).
+- Click a **serial number** to see everything that happened to that piece; three repairs suggest replacing it.
+- **Future Plans** on every break area (target date, priority, status). *Schedule* turns a plan into planned work; when the work is completed the plan is done. Plans that are late show on the dashboard.
+- **Updates never lose data**: before an update the program makes a verified copy of all data, checks after the update that every record is still there unchanged, refuses to start with data of a newer program, and shows it in **Settings → Data Safety** (with *Check my data now*).
+- **Icon pack**: 124 professional icons in 7 groups for the item types, with a search box (old icons keep working).
+- **Import from Excel** (Break Areas page): break areas, what is in them and serial numbers. You see what would be added first; nothing that exists is changed; a template can be downloaded.
+- **Search everything** with Ctrl K (or the Search button): break areas, serial numbers, plans, issues, pages.
+- **Needs Attention** on the dashboard: late work, urgent issues, plans past their date, warranties ending, pieces repaired 3 times, overdue inspections.
+- **Appearance** (Settings, and *My Account* through the new **Aa** button at the top): choose one of six elegant fonts (Inter, Source Sans 3, IBM Plex Sans, DM Sans, Nunito Sans, Merriweather) or the standard look, and make the text smaller or larger (six sizes). Saved on the PC you use; works without internet.
+- **A new person's PC shows no data?** (field report) The first screen of a new PC now puts **Join an existing system** first and says who it is for, asks before creating a separate "first PC",
+  checks the administrator address while you type, tells you if it cannot reach the administrator PC, and a PC that was set up alone by mistake can move into the company system (**Devices & Sync →
+  Join the company system instead**, nothing is deleted). After adding a person with a user name and password the administrator gets clear instructions (browser address or install + Join) to copy.
+- All PCs must be updated to 2.6: changes made on a 2.6 PC wait on older PCs until they are updated too.
+
 ## 2.5.0
 
 - **Serial numbers** for every piece: when you add items (Update → *Added*) type or scan their serial numbers, one per

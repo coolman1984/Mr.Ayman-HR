@@ -63,6 +63,12 @@ were renamed are kept with their inventory and everything added by hand; only th
 A backup is taken first and everything stays restorable from the Recycle Bin. The sample data is never
 loaded again by itself.
 
+## Area Log and maintenance
+
+Every break area has an **Area Log**: notes (painting, renovation, repairs…) and a time line of all work, issues and inspections; work can be planned
+(also repeating), recorded when already finished, cancelled, linked to an issue, a piece (serial number) and photos; costs are shown by permission only.
+See **GUIDE_Area_Log.md**.
+
 ## Serial numbers
 
 Every piece (TV screen, fridge, chair…) can carry its serial number: type or scan them when adding items

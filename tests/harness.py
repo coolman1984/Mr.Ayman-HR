@@ -83,8 +83,9 @@ class Client:
 
 
 class Server:
-    def __init__(self, name, root=None, data_dir=None, extra_cfg=None):
+    def __init__(self, name, root=None, data_dir=None, extra_cfg=None, app=None):
         self.name = name
+        self.app = app or APP  # another program version can be started on the same data folder (upgrade tests)
         self.root = root or tempfile.mkdtemp(prefix=f'bams-{name}-')
         self.port, self.sync_port = free_port(), free_port()
         self.data_dir = data_dir or os.path.join(self.root, 'data')
@@ -115,7 +116,7 @@ class Server:
 
     def start(self, wait=True):
         env = dict(os.environ, BAMS_CONFIG=self.cfg_path, PYTHONUNBUFFERED='1')
-        self.proc = subprocess.Popen([sys.executable, APP], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        self.proc = subprocess.Popen([sys.executable, self.app], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         threading.Thread(target=self._drain, args=(self.proc,), daemon=True).start()
         if wait:
             wait_until(lambda: self.status(), 60, what=f'{self.name} to start: ' + ''.join(self.out[-20:]))

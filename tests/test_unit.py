@@ -594,3 +594,285 @@ class SecondReviewTest(unittest.TestCase):
         finally:
             shutil.rmtree(root, ignore_errors=True)
         self.assertTrue(c.now() > 0)
+
+
+class UpgradeGuardTest(unittest.TestCase):
+    """server/upgrade.py: what protects the data when the program is updated."""
+
+    def setUp(self):
+        import upgrade
+        self.up = upgrade
+        self.dir = tempfile.mkdtemp(prefix='bams-up-')
+        self.addCleanup(shutil.rmtree, self.dir, True)
+        for name, table in (('bams.db', 'items'), ('auth.db', 'users'), ('journal.db', 'changes')):
+            c = sqlite3.connect(os.path.join(self.dir, name))
+            cols = 'lsn INTEGER PRIMARY KEY, origin TEXT, cseq INTEGER, id TEXT, node TEXT, hlc INTEGER, kind TEXT, body TEXT, hash TEXT, sig TEXT, asig TEXT' \
+                if table == 'changes' else 'id TEXT PRIMARY KEY, name TEXT'
+            c.execute(f'CREATE TABLE {table} ({cols})')
+            for i in range(5):
+                c.execute(f'INSERT INTO {table} VALUES (' + ','.join('?' * (11 if table == "changes" else 2)) + ')',
+                          (i + 1, 'o', i, 'x', 'n', 1, 'data', 'body', 'h', 's', None) if table == 'changes' else (f'r{i}', f'name {i}'))
+            c.commit()
+            c.close()
+        self.write_marker('2.5.0', 4)
+
+    def write_marker(self, version, schema):
+        with open(os.path.join(self.dir, 'program.json'), 'w') as f:
+            json.dump({'version': version, 'schema': schema}, f)
+
+    def guard(self, version='2.6.0', schema=5):
+        return self.up.Upgrade(self.dir, version, schema, log=lambda *_: None)
+
+    def test_fresh_folder_and_same_version_make_no_snapshot(self):
+        os.remove(os.path.join(self.dir, 'program.json'))
+        for n in ('bams.db', 'auth.db', 'journal.db'):
+            os.remove(os.path.join(self.dir, n))
+        self.assertIsNone(self.guard().before())
+        self.write_marker('2.6.0', 5)
+        self.assertIsNone(self.guard().before())
+        self.assertFalse(os.path.exists(os.path.join(self.dir, 'upgrades')))
+
+    def test_update_makes_a_verified_snapshot(self):
+        g = self.guard()
+        name = g.before()
+        snap = os.path.join(self.dir, 'upgrades', name)
+        self.assertTrue(name.endswith('_2.5.0_to_2.6.0'))
+        for n in ('bams.db', 'auth.db', 'journal.db', 'info.json'):
+            self.assertTrue(os.path.exists(os.path.join(snap, n)), n)
+        self.assertEqual(sqlite3.connect(os.path.join(snap, 'bams.db')).execute('SELECT COUNT(*) FROM items').fetchone()[0], 5)
+        self.assertEqual(g.info()['snapshots'][0]['name'], name)
+
+    def test_unknown_old_version_is_also_protected(self):
+        os.remove(os.path.join(self.dir, 'program.json'))  # installed before program.json existed
+        self.assertTrue(self.guard().before().endswith('_to_2.6.0'))
+
+    def test_newer_data_is_refused_untouched(self):
+        self.write_marker('9.0.0', 99)
+        before = {n: open(os.path.join(self.dir, n), 'rb').read() for n in ('bams.db', 'auth.db', 'journal.db')}
+        with self.assertRaises(self.up.DataFromNewerVersion):
+            self.guard().before()
+        self.assertEqual(before, {n: open(os.path.join(self.dir, n), 'rb').read() for n in before})
+        self.assertFalse(os.path.exists(os.path.join(self.dir, 'upgrades')))
+
+    def test_verification_catches_changed_and_lost_rows(self):
+        path = os.path.join(self.dir, 'bams.db')
+        # a new column is fine
+        g = self.guard()
+        g.before()
+        c = sqlite3.connect(path)
+        c.execute('ALTER TABLE items ADD COLUMN extra TEXT')
+        c.commit()
+        c.close()
+        g.after_tables()
+        # a changed value is not
+        g = self.guard()
+        g.before()
+        c = sqlite3.connect(path)
+        c.execute("UPDATE items SET name='changed' WHERE id='r1'")
+        c.commit()
+        c.close()
+        with self.assertRaises(self.up.UpgradeVerificationFailed):
+            g.after_tables()
+        g.after_tables(touches=('items',))  # unless the migration step declared it
+        # a lost row never is, declared or not
+        c = sqlite3.connect(path)
+        c.execute("DELETE FROM items WHERE id='r2'")
+        c.commit()
+        c.close()
+        g = self.guard()
+        self.marker = None
+        self.write_marker('2.5.0', 4)
+        g = self.guard()
+        g.before()
+        c = sqlite3.connect(path)
+        c.execute("DELETE FROM items WHERE id='r3'")
+        c.commit()
+        c.close()
+        with self.assertRaises(self.up.UpgradeVerificationFailed):
+            g.after_tables(touches=('items',))
+
+    def test_only_the_newest_snapshots_are_kept_and_only_after_a_good_update(self):
+        root = os.path.join(self.dir, 'upgrades')
+        for i in range(14):
+            os.makedirs(os.path.join(root, f'2026010{i % 10}_{i:02d}_old'))
+        g = self.guard()
+        g.before()
+        self.assertEqual(len(os.listdir(root)), 15, 'a start that may still fail must not delete anything')
+        g._prune()  # what finish() does after a successful update
+        self.assertEqual(len(os.listdir(root)), self.up.KEEP_SNAPSHOTS)
+
+    def test_a_second_try_of_the_same_update_keeps_the_first_copy(self):
+        first = self.guard().before()
+        c = sqlite3.connect(os.path.join(self.dir, 'bams.db'))
+        c.execute("UPDATE items SET name='touched by the failed first try' WHERE id='r1'")
+        c.commit()
+        c.close()
+        g = self.guard()
+        self.assertEqual(g.before(), first)
+        self.assertEqual(len(os.listdir(os.path.join(self.dir, 'upgrades'))), 1)
+        snap = sqlite3.connect(os.path.join(self.dir, 'upgrades', first, 'bams.db'))
+        self.assertEqual(snap.execute("SELECT name FROM items WHERE id='r1'").fetchone()[0], 'name 1', 'the copy still has the untouched data')
+        with self.assertRaises(self.up.UpgradeVerificationFailed):  # and the change made by the failed try is noticed against it
+            g.after_tables()
+
+    def test_a_snapshot_that_cannot_be_written_leaves_nothing_behind(self):
+        orig = self.up.snapshot_db
+        self.up.snapshot_db = lambda *a: (_ for _ in ()).throw(OSError('disk full'))
+        try:
+            with self.assertRaises(OSError):
+                self.guard().before()
+        finally:
+            self.up.snapshot_db = orig
+        self.assertEqual(os.listdir(os.path.join(self.dir, 'upgrades')), [])
+
+
+class IconPackTest(unittest.TestCase):
+    """Every icon the screens ask for exists (a missing name would show the box icon), the item type window offers only real icons,
+    and the licence of the pack is shipped."""
+
+    def test_icons(self):
+        import re
+        root = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'js')
+        text = {n: open(os.path.join(root, n), encoding='utf-8').read() for n in ('app.js', 'devices.js', 'help.js', 'icons.js', 'data.js')}
+        defined = set()
+        for n in ('app.js', 'devices.js', 'help.js', 'icons.js'):
+            defined |= set(re.findall(r"^\s{2}(\w+): '<", text[n], re.M))
+        used = set()
+        for t in text.values():
+            used |= set(re.findall(r"\bic\('(\w+)'", t)) | set(re.findall(r"\bicon: '(\w+)'", t))
+        used -= {'box'}  # the fallback itself
+        self.assertEqual(sorted(used - defined), [], 'icons used but not defined')
+        groups = re.findall(r"\['([^']+)', \[([^\]]*)\]\]", text['icons.js'].split('const ICON_GROUPS', 1)[1])
+        names = [n for _, g in groups for n in re.findall(r"'(\w+)'", g)]
+        self.assertGreaterEqual(len(names), 100)
+        self.assertEqual(sorted(set(names) - defined), [], 'the picker offers icons that do not exist')
+        self.assertTrue(os.path.exists(os.path.join(os.path.dirname(root), 'docs', 'ICONS_LICENSE.txt')))
+
+
+class ExcelImportTest(unittest.TestCase):
+    """server/excel_import.py: the rules that make an import safe."""
+
+    def plan(self, sheets, areas=(), types=()):
+        import excel_import
+        import xlsx
+        data = xlsx.build(sheets)
+        state = {'areas': list(areas), 'itemTypes': list(types) or [{'id': 'chairs', 'name': 'Chairs', 'short': 'Chair', 'icon': 'chair'}],
+                 'settings': {'locations': ['Production', 'Admin']}}
+        return excel_import.plan(data, state)
+
+    def test_template_is_understood(self):
+        import excel_import
+        p = self.plan([(n, h, r) for n, (h, r) in excel_import.TEMPLATE.items()])
+        self.assertEqual([a['name'] for a in p['areas']], ['Canteen East', 'Canteen West'])
+        self.assertEqual(p['counts']['inventory'], 3)
+        self.assertEqual(p['counts']['serials'], 3)
+        self.assertEqual(sorted(t['name'] for t in p['itemTypes']), ['Refrigerators', 'TV Screens'])
+        chairs = next(i for i in p['inventory'] if i['itemName'] == 'Chair')
+        self.assertEqual(chairs['item'], {'id': 'chairs'}, 'an item type that exists is reused')
+        tv = next(i for i in p['inventory'] if i['itemName'] == 'TV Screens')
+        self.assertEqual(tv['serials'], ['TV-55-0142', 'TV-55-0143'])
+
+    def test_nothing_existing_is_changed_and_a_second_import_adds_nothing(self):
+        import excel_import
+        sheets = [(n, h, r) for n, (h, r) in excel_import.TEMPLATE.items()]
+        first = self.plan(sheets)
+        now = [{'id': 'a1', 'name': 'canteen east', 'inventory': [{'item': 'chairs', 'qty': 5}], 'pieces': []},
+               {'id': 'a2', 'name': 'Canteen West', 'inventory': [], 'pieces': [{'serial': 'fr-2291', 'item': 'fridge'}]}]
+        again = self.plan(sheets, areas=now)
+        self.assertEqual(again['counts']['areas'], 0)
+        reasons = ' | '.join(s['reason'] for s in again['skipped'])
+        self.assertIn('already exists', reasons)
+        self.assertIn('already has Chair', reasons)  # the chairs of Canteen East stay 5, they are not added up
+        self.assertEqual(first['counts']['areas'], 2)
+        west = [i for i in again['inventory'] if i['areaName'] == 'Canteen West']
+        self.assertEqual(west[0]['serials'], [], 'a serial number that is used already is left out')
+        self.assertTrue(any('already used' in w for w in again['warnings']))
+
+    def test_problems_are_lines_not_crashes(self):
+        p = self.plan([
+            ('Areas', ['Name', 'Status', 'Capacity'], [['A One', 'Weird', 'many'], ['A One', 'Good', 10], ['', 'Good', 1]]),
+            ('Stuff', ['Break Area', 'Item', 'Qty', 'Condition', 'Serial'],
+             [['A One', 'Tables', 'x', 'Good', ''], ['Nowhere', 'Tables', 3, '', ''], ['A One', 'Lamps', 2, 'Broken', 'L1; L2; L3'], ['A One', 'Lamps', 1, '', '']]),
+            ('Notes', ['just', 'some', 'text'], [['a', 'b', 'c']]),
+        ])
+        by = {x['name']: x['kind'] for x in p['sheets']}
+        self.assertEqual(by, {'Areas': 'areas', 'Stuff': 'inventory', 'Notes': 'ignored'})
+        self.assertEqual(len(p['areas']), 1)
+        self.assertEqual(p['areas'][0]['status'], 'Good')
+        self.assertIsNone(p['areas'][0]['capacity'])
+        lamps = [i for i in p['inventory'] if i['itemName'] == 'Lamps']
+        self.assertEqual(len(lamps), 1)
+        self.assertEqual((lamps[0]['qty'], lamps[0]['condition'], lamps[0]['serials']), (3, 'Good', ['L1', 'L2', 'L3']), 'a piece with a serial number is a piece')
+        reasons = ' | '.join(s['reason'] for s in p['skipped'])
+        for must in ('appears twice', 'no break area name', 'not a whole number', 'not in the system'):
+            self.assertIn(must, reasons)
+        self.assertGreaterEqual(len(p['warnings']), 3)
+
+    def test_one_far_cell_cannot_hang_the_server(self):
+        import io
+        import time
+        import zipfile
+        import excel_import
+        import xlsx
+        import xlsx_read
+        src = zipfile.ZipFile(io.BytesIO(xlsx.build([('Areas', ['Name', 'Status'], [['A', 'Good']])])))
+        out = io.BytesIO()
+        with zipfile.ZipFile(out, 'w') as z:
+            for n in src.namelist():
+                data = src.read(n)
+                if n == 'xl/worksheets/sheet1.xml':
+                    data = data.replace(b'</sheetData>', b'<row r="1048576"><c r="XFD1048576" t="inlineStr"><is><t>x</t></is></c></row></sheetData>')
+                z.writestr(n, data)
+        started = time.time()
+        with self.assertRaises(xlsx_read.XlsxError):
+            excel_import.plan(out.getvalue(), {'areas': [], 'itemTypes': [], 'settings': {}})
+        self.assertLess(time.time() - started, 3)
+
+    def test_numbers_are_finite_and_sensible(self):
+        import excel_import
+        n = excel_import.number
+        self.assertEqual(n('1,000'), 1000.0)
+        self.assertEqual(n('1,5'), 1.5)
+        self.assertEqual(n(12), 12.0)
+        for bad in ('nan', 'inf', '-inf', 1e300, 'abc', '', None, True):
+            self.assertIsNone(n(bad), repr(bad))
+        p = self.plan([('Areas', ['Name', 'Status'], [['A One', 'Good']]), ('C', ['Break Area', 'Item', 'Qty', 'Serial'],
+                                                          [['A One', 'Lamps', 'inf', ''], ['A One', 'Desks', 2, 'S' * 100 + ', D-1']])])
+        desks = [i for i in p['inventory'] if i['itemName'] == 'Desks']
+        self.assertEqual(desks[0]['serials'], ['D-1'])
+        self.assertEqual(desks[0]['qty'], 2)
+        self.assertTrue(any('longer than 80' in w for w in p['warnings']))
+        self.assertFalse([i for i in p['inventory'] if i['itemName'] == 'Lamps'])
+
+    def test_bad_files_get_a_clear_message(self):
+        import excel_import
+        import xlsx_read
+        for data in (b'', b'not a workbook at all' * 20, b'PK' + b'x' * 200):
+            with self.assertRaises(xlsx_read.XlsxError):
+                excel_import.plan(data, {'areas': [], 'itemTypes': [], 'settings': {}})
+
+
+class AppearanceFilesTest(unittest.TestCase):
+    """The fonts are shipped with the program (no internet), every text size scales with the chosen size, and the licence is there."""
+
+    def test_fonts_and_sizes(self):
+        import re
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        fonts_css = open(os.path.join(root, 'css', 'fonts.css'), encoding='utf-8').read()
+        files = re.findall(r'url\("\.\./(fonts/[^"]+)"\)', fonts_css)
+        self.assertEqual(len(files), 6)
+        for f in files:
+            self.assertGreater(os.path.getsize(os.path.join(root, f)), 10000, f)
+        styles = open(os.path.join(root, 'css', 'styles.css'), encoding='utf-8').read()
+        self.assertEqual(re.findall(r'font-size:\s*[\d.]+px', styles), [], 'a font size that does not follow the chosen text size')
+        self.assertEqual(re.findall(r'(?<![-\w])font:\s*[\d.]+px', styles), [])
+        for fam in ('inter', 'source', 'plex', 'dm', 'nunito', 'serif'):
+            self.assertIn(f'html[data-font="{fam}"]', styles)
+        boot = open(os.path.join(root, 'js', 'boot.js'), encoding='utf-8').read()
+        app = open(os.path.join(root, 'js', 'app.js'), encoding='utf-8').read()
+        for fam in ("'inter'", "'source'", "'plex'", "'dm'", "'nunito'", "'serif'"):
+            self.assertIn(fam, boot)
+            self.assertIn(fam, app)
+        self.assertIn('0.85, 0.92, 1, 1.1, 1.2, 1.35', boot)
+        self.assertTrue(os.path.exists(os.path.join(root, 'docs', 'FONTS_LICENSE.txt')))
+        self.assertIn('fonts', open(os.path.join(root, 'tools', 'make_assets.py')).read())

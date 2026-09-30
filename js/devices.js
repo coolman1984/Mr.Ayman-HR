@@ -81,12 +81,12 @@ ASYNC.devices = async el => {
   if (DTAB.tab === 'history') return devHistory(el);
   if (DTAB.tab === 'links') return devLinks(el);
   if (DTAB.tab === 'problems') { el.innerHTML = devProblems(); return; }
-  el.innerHTML = devSummary() + devKeyCard() + devTable() + devThisPC();
+  el.innerHTML = devSummary() + devOnlyThisPC() + devKeyCard() + devTable() + devThisPC();
 };
 
 function devSummary() {
   const s = DEV.summary, others = DEV.nodes.filter(n => !n.self && n.status === 'active');
-  const [label, tip] = s.state === 'single' ? ['Only this PC', 'No other PC yet. To add one: install the program on it, open it and choose "Join an existing system" – it joins by itself.'] : (SYNC_TEXT[s.state] || SYNC_TEXT.pending);
+  const [label, tip] = s.state === 'single' ? ['Only this PC', 'No other PC yet. On the other PC: install the program, open it, choose "Join an existing system" and type the address of this PC (' + lanAddresses().map(hostOf).join(' or ') + '). Only a PC that joined shares the data and the users – a PC that was set up on its own is a separate system.'] : (SYNC_TEXT[s.state] || SYNC_TEXT.pending);
   const cls = { ok: 'green', pending: 'blue', offline: 'gray', problem: 'red', single: 'gray' }[s.state] || 'gray';
   const agree = others.filter(n => n.status_now.agree === true).length;
   return `<div class="card mb dev-sum s-${s.state}"><div class="dev-sum-in">
@@ -94,6 +94,17 @@ function devSummary() {
       <div><h3>${esc(label)}</h3><p class="muted">${esc(tip)}</p>
         ${others.length ? `<p><b>${s.online}</b> of <b>${others.length}</b> other PC(s) reachable now · data confirmed identical with <b>${agree}</b>
           ${s.files_missing ? ` · <b>${s.files_missing}</b> photo(s)/document(s) still being copied` : ''}</p>` : ''}</div></div></div>`;
+}
+
+/* a PC that was set up as its own system by mistake, while the company data lives on another PC */
+function devOnlyThisPC() {
+  if (DEV.summary.state !== 'single' || DEV.me.role !== 'authority') return '';
+  return `<div class="card mb"><div class="card-h">${ic('plug')}<h3>Was this PC set up by mistake?</h3></div>
+    <p>If another PC in your company already runs the program with your data, and this PC was set up as a <b>first PC</b> by mistake, it shows a separate, empty system –
+      users and data of the other PC do not exist here.</p>
+    <button class="btn" data-act="devLeave">${ic('plug')}Join the company system instead</button>
+    <p class="hint">Nothing is deleted: what is on this PC is put aside (folder <span class="mono">copied-…</span> in the data folder) and a backup is made first.
+      Then restart the PC, open the program and choose <b>Join an existing system</b>.</p></div>`;
 }
 
 /* the administrator key on a USB stick: without it, a lost administrator PC means nobody can manage people any more */
@@ -344,9 +355,10 @@ function showSetup(local, st) {
       <button class="btn" data-act="reloadPage">${ic('restore')}Try again</button>`);
   }
   authScreen(`<h2>Welcome – set up this PC</h2>
+    <p class="muted">Does your company already use this program on another PC (did somebody give you a user name and password)?</p>
     <div class="setup-choice">
-      <button class="choice" data-act="setupCreate">${ic('user')}<b>This is the first (or only) PC</b><small>Create the administrator account. This PC becomes the administrator PC.</small></button>
-      <button class="choice" data-act="setupJoin">${ic('plug')}<b>Join an existing system</b><small>The program already runs on the administrator PC. This PC finds it in the network by itself and copies all data.</small></button>
+      <button class="choice" data-act="setupJoin">${ic('plug')}<b>Join an existing system</b><small><b>Choose this if the program is already used in your company.</b> This PC finds the administrator PC, copies all data and users – then you log in with the user name and password you were given.</small></button>
+      <button class="choice" data-act="setupCreate">${ic('user')}<b>This is the first (or only) PC</b><small>Only if nobody has set up the program before. You create the administrator account and this PC starts a new, empty system.</small></button>
     </div>`);
 }
 function showCreate() {
@@ -369,30 +381,51 @@ function showJoin(name) {
     <div id="joinFound"></div>
     <form class="auth-form" data-form="join">
       <label>Name of this PC<input name="name" required placeholder="e.g. HR Office PC" value="${esc(name || '')}"></label>
-      <label>Administrator PC address<input name="address" id="joinAddress" class="mono" required placeholder="e.g. 192.168.1.10"></label>
+      <label>Administrator PC address<input name="address" id="joinAddress" class="mono" required autocomplete="off" placeholder="e.g. 192.168.1.10"></label>
+      <p class="hint" id="joinCheck"></p>
+      <details class="hint"><summary>Where do I find the address?</summary>On the administrator PC: <b>Settings → Server &amp; Database → Address for other PCs</b>. Type the numbers (or the PC name) after <span class="mono">http://</span>,
+        for example <span class="mono">192.168.1.10</span> – or paste the whole address, it is understood. Both PCs must be in the same company network.</details>
       <p class="auth-msg" id="authMsg"></p>
       <button class="btn primary">${ic('plug')}Join</button>
       <button type="button" class="btn" data-act="reloadPage">${ic('arrowLeft')}Back</button>
     </form>`);
+  let probeTimer;
+  const probe = () => {
+    const v = ($('#joinAddress') || {}).value || '', box = $('#joinCheck');
+    if (!box) return;
+    if (!v.trim()) { box.textContent = ''; return; }
+    box.className = 'hint'; box.textContent = 'Checking…';
+    api('POST', '/api/join/probe', { address: v.trim() }).then(r => { if ($('#joinAddress').value === v) { box.className = 'hint ok-txt'; box.textContent = `✓ Found the administrator PC "${r.name}".`; } })
+      .catch(e => { if ($('#joinAddress') && $('#joinAddress').value === v) { box.className = 'hint bad-txt'; box.textContent = e.message; } });
+  };
+  $('#joinAddress').addEventListener('input', () => { clearTimeout(probeTimer); probeTimer = setTimeout(probe, 700); });
   api('POST', '/api/join/discover', {}).then(r => {
     const f = r.found || [], box = $('#joinFind');
     if (!box) return;
     if (!f.length) { box.textContent = 'The administrator PC was not found by itself. Type its address below (shown on the administrator PC in Settings).'; return; }
     box.textContent = f.length === 1 ? 'Administrator PC found:' : 'Choose the administrator PC:';
     $('#joinFound').innerHTML = f.map(x => `<button type="button" class="choice" data-act="joinPick" data-address="${esc(x.address)}">${ic('check')}<b>${esc(x.name)}</b><small class="mono">${esc(x.address)}</small></button>`).join('');
-    $('#joinAddress').value = f[0].address;
+    $('#joinAddress').value = f[0].address; probe();
   }).catch(() => { const box = $('#joinFind'); if (box) box.textContent = 'Type the address of the administrator PC below (shown on the administrator PC in Settings).'; });
 }
 let JOIN_POLL;
 function showJoinWait() { showReceiving(); }
 function showReceiving() {
-  authScreen(`<h2>Joined – copying the data</h2><p>This PC now receives the user accounts and all data from the other PCs. This can take a few minutes the first time.</p>
-    <p class="muted" id="authMsg">Please wait…</p>`);
+  authScreen(`<h2>Joined – copying the data</h2><p>This PC now receives the user accounts and all data from the administrator PC. This can take a few minutes the first time.
+      <b>Do not close the program.</b></p>
+    <p class="muted" id="authMsg">Please wait…</p>
+    <button type="button" class="btn" data-act="joinCancel">${ic('arrowLeft')}Cancel and start again</button>`);
   clearInterval(JOIN_POLL);
+  const t0 = Date.now();
   JOIN_POLL = setInterval(async () => {
     try {
-      const st = await api('GET', '/api/auth/status');
-      if (st.hasUsers) { clearInterval(JOIN_POLL); showLogin('This PC is ready. Log in with your usual user name and password.'); }
+      const st = await api('GET', '/api/join/status');
+      if (st.hasUsers) { clearInterval(JOIN_POLL); return showLogin('This PC is ready. Log in with the user name and password you were given – you see the same data as on the administrator PC.'); }
+      const box = $('#authMsg');
+      if (!box) return clearInterval(JOIN_POLL);
+      if (st.status === 'none') { clearInterval(JOIN_POLL); return showSetup(true, { node: {} }); }
+      box.textContent = st.error ? `Waiting for the administrator PC… (${st.error}) Check that it is switched on and on the same network.`
+        : Date.now() - t0 > 45000 ? 'Still copying… the first copy can take a few minutes.' : 'Please wait…';
     } catch (e) { /* keep waiting */ }
   }, 2000);
 }
@@ -410,9 +443,19 @@ function showMoved(st) {
     </div>`);
 }
 Object.assign(ACT, {
-  setupCreate: () => showCreate(),
+  setupCreate: () => {
+    if (confirm('Is this really the very first PC?\n\nIf the program is already used on another PC in your company, press Cancel and choose "Join an existing system". Otherwise this PC becomes a separate, empty system that does not know your users and data.')) showCreate();
+  },
   setupJoin: () => showJoin(SETUP_NAME),
-  joinPick: d => { const a = $('#joinAddress'); if (a) a.value = d.address; },
+  async devLeave() {
+    if (!confirm('Join the company system instead?\n\nThe data on THIS PC is put aside (nothing is deleted) and this PC starts empty, ready to join the other PC.\nUse this only if the company data lives on another PC.')) return;
+    try {
+      const r = await api('POST', '/api/node/leave', {});
+      modal('Please restart this PC', `<p>The data of this PC is safe (backup <span class="mono">${esc(r.backup)}</span>, and the original files are kept in the folder <b>copied-…</b> of the data folder).</p>
+        <ol><li><b>Restart the computer.</b></li><li>Open the program (desktop icon).</li><li>Choose <b>Join an existing system</b> and type the address of the administrator PC.</li><li>Log in with your user name and password.</li></ol>`, { locked: true });
+    } catch (e) { toast(e.message, true, 8000); }
+  },
+  joinPick: d => { const a = $('#joinAddress'); if (a) { a.value = d.address; a.dispatchEvent(new Event('input')); } },
   async joinCancel() { try { await api('POST', '/api/join/cancel', {}); } catch (e) { /* ignore */ } location.reload(); },
   async movedSame() { await api('POST', '/api/node/moved', { choice: 'same' }); location.reload(); },
   async movedNew() {

@@ -36,6 +36,9 @@ Two ways to run:
 | `server/version.py` | VERSION, developer, copyright – the build reads it |
 | `js/app.js`, `js/devices.js` | whole UI (views, `ACT` actions, `modal`, `esc` for every value) |
 | `js/data.js` | sample data (`buildSeed`, fixed short ids), `DEFAULT_ITEM_TYPES`, lists (actions, conditions) |
+| `js/palette.js`, `js/icons.js` | Ctrl K search; generated icon pack |
+| `server/upgrade.py` | data safety at every update (snapshot, verification, newer-data refusal, migrations) |
+| `server/xlsx_read.py`, `server/excel_import.py` | Excel reader and the import rules |
 | `js/help.js` | Help & User Guide (`#/help`): Q&A per topic, admin topics hidden from others – **update it with every screen change** |
 | `tools/` | `make_assets.py`, `make_icon.py`, `build_windows.py` |
 | `installer/bams.iss` | Inno Setup script (install + update, firewall, autostart, old data import) |
@@ -113,5 +116,20 @@ Check a local compile on Linux: `pip install --target <dir> nuitka ordered-set z
 - Area-limited users: anything that affects all break areas (item type delete, backup restore, Recycle Bin, new
   break areas) needs "all areas" in the screen *and* on the server.
 - The stylesheet is `css/styles.css` (not style.css).
+- Area Log (`notes` entity, `areaTimeline`) and work: maintenance fields kind, cost, contractor, warrantyUntil, issueId, serial, repeatMonths;
+  status `Cancelled` ranks below `Done`. Use `isOpenWork(m)` (not `status !== 'Done'`) for "still to do".
+- Costs: `maintenance.cost` permission. The server hides `cost` in `/api/state`, `/api/audit` (`hide_costs`) and the Excel export (`cost=`) and
+  restores it on save for people without the right. Any new place that lists maintenance rows or their changes must do the same.
+- **Updates must never lose data**: `server/upgrade.py` runs at every start (snapshot in `data/upgrades/`, old rows compared before / after, refusal of newer data). A change
+  that REWRITES existing data must be a `MIGRATIONS` step that declares the tables it touches; adding columns / entities is free. Before each release add its commit to
+  `T41_UpgradeKeepsData.RELEASES` (the test runs the real old program on a data folder, then the new one). `Server(app=…)` starts another program version in tests.
+- Text sizes: never write `font-size: 13px` in `css/styles.css` - write `calc(13px * var(--fs))` (`AppearanceFilesTest` fails otherwise); the font comes from `var(--font)`. New static folders go into `STATIC_DIRS`, `serve_static` and `tools/make_assets.py`.
+- Never replace `DB` under an open window: background refreshes use `load(true)`; anything else that reloads (a save from outside a window) must finish before a window can open. Browser tests: wait for `#modal.open` to detach after the first-start choice.
+- A PC only shares data after it JOINED (`Join an existing system`); a PC set up as a first PC is a separate system. Every text that tells someone how to start must say so (`startInstructionsModal`). `/api/node/leave` rescues a lone PC.
+- In `do_POST` the routes before the session is read are public; authenticated routes (with `self.need`) go after it.
+- Icons: `js/icons.js` is generated (`tools/make_icons.py`, Lucide, ISC) - never edit it by hand; `IconPackTest` fails when a screen uses an icon that does not exist.
+- Excel import (`excel_import.plan`) never changes what exists; a new importable field needs a column name list, a warning for bad values, and a test in `ExcelImportTest`.
+- `repr()` / `str()` of Python data is not JavaScript: write generated JS with explicit brackets.
+- A new permission is not in the stored permission lists of existing accounts: `Auth._user()` adds `maintenance.cost` for `users.manage`.
 - Script files share one global scope: no short top-level names in new JS files. `<a data-act>` needs `data-href`
   to reach `ACT` – use `<button>` for in-page actions.
