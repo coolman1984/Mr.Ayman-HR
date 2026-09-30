@@ -691,12 +691,39 @@ class UpgradeGuardTest(unittest.TestCase):
         with self.assertRaises(self.up.UpgradeVerificationFailed):
             g.after_tables(touches=('items',))
 
-    def test_only_the_newest_snapshots_are_kept(self):
+    def test_only_the_newest_snapshots_are_kept_and_only_after_a_good_update(self):
         root = os.path.join(self.dir, 'upgrades')
         for i in range(14):
             os.makedirs(os.path.join(root, f'2026010{i % 10}_{i:02d}_old'))
-        self.guard().before()
+        g = self.guard()
+        g.before()
+        self.assertEqual(len(os.listdir(root)), 15, 'a start that may still fail must not delete anything')
+        g._prune()  # what finish() does after a successful update
         self.assertEqual(len(os.listdir(root)), self.up.KEEP_SNAPSHOTS)
+
+    def test_a_second_try_of_the_same_update_keeps_the_first_copy(self):
+        first = self.guard().before()
+        c = sqlite3.connect(os.path.join(self.dir, 'bams.db'))
+        c.execute("UPDATE items SET name='touched by the failed first try' WHERE id='r1'")
+        c.commit()
+        c.close()
+        g = self.guard()
+        self.assertEqual(g.before(), first)
+        self.assertEqual(len(os.listdir(os.path.join(self.dir, 'upgrades'))), 1)
+        snap = sqlite3.connect(os.path.join(self.dir, 'upgrades', first, 'bams.db'))
+        self.assertEqual(snap.execute("SELECT name FROM items WHERE id='r1'").fetchone()[0], 'name 1', 'the copy still has the untouched data')
+        with self.assertRaises(self.up.UpgradeVerificationFailed):  # and the change made by the failed try is noticed against it
+            g.after_tables()
+
+    def test_a_snapshot_that_cannot_be_written_leaves_nothing_behind(self):
+        orig = self.up.snapshot_db
+        self.up.snapshot_db = lambda *a: (_ for _ in ()).throw(OSError('disk full'))
+        try:
+            with self.assertRaises(OSError):
+                self.guard().before()
+        finally:
+            self.up.snapshot_db = orig
+        self.assertEqual(os.listdir(os.path.join(self.dir, 'upgrades')), [])
 
 
 class IconPackTest(unittest.TestCase):
@@ -780,6 +807,42 @@ class ExcelImportTest(unittest.TestCase):
         for must in ('appears twice', 'no break area name', 'not a whole number', 'not in the system'):
             self.assertIn(must, reasons)
         self.assertGreaterEqual(len(p['warnings']), 3)
+
+    def test_one_far_cell_cannot_hang_the_server(self):
+        import io
+        import time
+        import zipfile
+        import excel_import
+        import xlsx
+        import xlsx_read
+        src = zipfile.ZipFile(io.BytesIO(xlsx.build([('Areas', ['Name', 'Status'], [['A', 'Good']])])))
+        out = io.BytesIO()
+        with zipfile.ZipFile(out, 'w') as z:
+            for n in src.namelist():
+                data = src.read(n)
+                if n == 'xl/worksheets/sheet1.xml':
+                    data = data.replace(b'</sheetData>', b'<row r="1048576"><c r="XFD1048576" t="inlineStr"><is><t>x</t></is></c></row></sheetData>')
+                z.writestr(n, data)
+        started = time.time()
+        with self.assertRaises(xlsx_read.XlsxError):
+            excel_import.plan(out.getvalue(), {'areas': [], 'itemTypes': [], 'settings': {}})
+        self.assertLess(time.time() - started, 3)
+
+    def test_numbers_are_finite_and_sensible(self):
+        import excel_import
+        n = excel_import.number
+        self.assertEqual(n('1,000'), 1000.0)
+        self.assertEqual(n('1,5'), 1.5)
+        self.assertEqual(n(12), 12.0)
+        for bad in ('nan', 'inf', '-inf', 1e300, 'abc', '', None, True):
+            self.assertIsNone(n(bad), repr(bad))
+        p = self.plan([('Areas', ['Name', 'Status'], [['A One', 'Good']]), ('C', ['Break Area', 'Item', 'Qty', 'Serial'],
+                                                          [['A One', 'Lamps', 'inf', ''], ['A One', 'Desks', 2, 'S' * 100 + ', D-1']])])
+        desks = [i for i in p['inventory'] if i['itemName'] == 'Desks']
+        self.assertEqual(desks[0]['serials'], ['D-1'])
+        self.assertEqual(desks[0]['qty'], 2)
+        self.assertTrue(any('longer than 80' in w for w in p['warnings']))
+        self.assertFalse([i for i in p['inventory'] if i['itemName'] == 'Lamps'])
 
     def test_bad_files_get_a_clear_message(self):
         import excel_import

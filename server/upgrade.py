@@ -143,7 +143,11 @@ class Upgrade:
     # ------------------------------------------------------------ 1. before the files are opened
     def before(self):
         m = self.marker
-        if m.get('schema') and int(m['schema']) > self.schema:
+        try:
+            newer = int(m.get('schema') or 0) > self.schema
+        except (TypeError, ValueError):
+            newer = False
+        if newer:
             raise DataFromNewerVersion(
                 f'This data was saved by a newer version of the program ({m.get("version", "?")}). This program is version {self.version} '
                 'and cannot read it safely. Nothing was changed. Please install the newest version of the program.')
@@ -151,7 +155,18 @@ class Upgrade:
             return None
         old = m.get('version') or 'earlier than 2.6'
         stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        name = f'{stamp}_{re.sub(r"[^0-9A-Za-z.]+", "-", old)}_to_{self.version}'
+        suffix = f'_{re.sub(r"[^0-9A-Za-z.]+", "-", old)}_to_{self.version}'
+        root = os.path.join(self.data_dir, SNAP_DIR)
+        again = sorted(n for n in (os.listdir(root) if os.path.isdir(root) else []) if n.endswith(suffix) and os.path.exists(os.path.join(root, n, 'info.json')))
+        if again:  # an earlier start of this same update did not finish: the OLDEST copy holds the real data of before, keep it and compare with it
+            self.snapshot = again[0]
+            for f in DB_FILES:
+                p = os.path.join(root, again[0], f)
+                if os.path.exists(p):
+                    self.before_prints[f] = fingerprint(p)
+            self.log(f'Program update to {self.version} continues: the safety copy {SNAP_DIR}/{again[0]} from the first try is used')
+            return again[0]
+        name = stamp + suffix
         folder = os.path.join(self.data_dir, SNAP_DIR, name)
         os.makedirs(folder, exist_ok=True)
         try:
@@ -166,7 +181,6 @@ class Upgrade:
             shutil.rmtree(folder, ignore_errors=True)
             raise
         self.snapshot = name
-        self._prune()
         self.log(f'Program updated from {old} to {self.version}: safety copy of the data in {os.path.join(SNAP_DIR, name)}')
         return name
 
@@ -240,7 +254,12 @@ class Upgrade:
                             'snapshot': self.snapshot, 'verified': bool(self.snapshot), 'migrations': ran, 'records': counts})
         self.marker = {'version': self.version, 'schema': self.schema, 'first_seen': m.get('first_seen') or now(), 'updated': now(),
                        'migrations': applied, 'history': history[-50:]}
-        self._write()
+        try:
+            self._write()
+            if self.snapshot:
+                self._prune()  # only after a fully successful update: a failing start must never push the untouched copy out
+        except OSError as e:  # the data is verified; a scanner holding program.json must not stop the program (the next start just repeats the check)
+            self.log(f'program.json could not be written ({e}); it is tried again at the next start')
 
     # ------------------------------------------------------------ for the screens and tools
     def info(self):

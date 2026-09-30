@@ -1289,6 +1289,12 @@ function areaTimeline(a) {
   return out.sort((x, y) => (y.date || '').localeCompare(x.date || '') || x.ord - y.ord);
 }
 F.alog = { all: false };
+/* 12 letters that depend only on the text (two 32-bit FNV-1a hashes) */
+function stableHash(text) {
+  let a = 0x811c9dc5, b = 0x01000193 ^ 0x5bd1e995;
+  for (const ch of String(text)) { const c = ch.codePointAt(0); a = Math.imul(a ^ c, 0x01000193) >>> 0; b = Math.imul(b ^ c, 0x85ebca6b) >>> 0; }
+  return a.toString(36).padStart(7, '0') + b.toString(36).padStart(7, '0').slice(0, 5);
+}
 /* the same date some months later (31 Jan + 1 month = 28 Feb) */
 function addMonths(d, n) {
   const t = new Date(d + 'T00:00:00'), day = t.getDate();
@@ -1304,8 +1310,8 @@ function planNext(a, m, from) {
   if (n <= 0) return '';
   const date = addMonths(from, n);
   if (!date) return '';
-  // a fixed id: two PCs completing the same work plan the same next one, not two
-  a.maintenance.push({ id: 'nx' + m.id, date, item: m.item || '', serial: m.serial || '', assignedTo: m.assignedTo, details: m.details, status: 'Scheduled', kind: m.kind || '',
+  // a fixed id of a fixed length: two PCs completing the same work plan the same next one, not two (ids may not grow for ever)
+  a.maintenance.push({ id: 'nx' + stableHash(m.id), date, item: m.item || '', serial: m.serial || '', assignedTo: m.assignedTo, details: m.details, status: 'Scheduled', kind: m.kind || '',
     contractor: m.contractor || '', repeatMonths: n });
   return date;
 }
@@ -1357,7 +1363,7 @@ function closeIssueWith(a, m, date, closeIt) {
 }
 function areaLogCard(a) {
   const all = areaTimeline(a), shown = F.alog.all ? all : all.slice(0, 8);
-  const canNote = can(...NOTE_PERMS), canWork = can('maintenance.create', 'maintenance.complete');
+  const canNote = can(...NOTE_PERMS), canWork = can('maintenance.complete');
   return `<div class="card mb"><div class="card-h"><h3>Area Log</h3><span class="muted">(${all.length})</span><span class="sp"></span>
       ${canNote ? `<button class="btn sm" data-act="noteModal" data-id="${a.id}">${ic('edit')}Add Note</button>` : ''}
       ${canWork ? `<button class="btn sm" data-act="workModal" data-id="${a.id}">${ic('checkCircle')}Record Finished Work</button>` : ''}
@@ -1409,7 +1415,7 @@ function doneWorkModal(a) {
     <label>Plan the same work again <span class="hint">(optional)</span><select name="repeatMonths">${options(REPEATS, '')}</select></label>
     ${openIssues(a).length && can('issues.followup') ? `<label class="full">This work solves the issue <span class="hint">(optional)</span><select name="issueId">${issueOptions(a)}</select></label>` : ''}
   </div>`, {
-    submit: 'Save', allow: can('maintenance.create', 'maintenance.complete'),
+    submit: 'Save', allow: can('maintenance.complete'),
     async onSubmit(d) {
       const details = d.details.trim();
       if (!details) { toast('Please describe what was done', true); return false; }
@@ -1501,6 +1507,7 @@ function maintCancel(a, mid) {
     submit: 'Cancel the work', allow: can('maintenance.complete', 'maintenance.create'),
     async onSubmit(d) {
       m.status = 'Cancelled'; m.notes = (d.reason || '').trim();
+      a.plans.filter(x => x.maintId === m.id && isOpenPlan(x)).forEach(x => (x.maintId = ''));  // the plan can be scheduled again
       if (!(await save(`Cancel maintenance – ${a.name}`))) return false;
       toast('Work cancelled');
     }
@@ -2773,6 +2780,7 @@ const ACT = {
     const a = area(d.id), m = a.maintenance.find(x => x.id === d.mid);
     if (!m || !confirm(`Delete this maintenance?\n\n${m.details}`)) return;
     a.maintenance = a.maintenance.filter(x => x !== m);
+    a.plans.filter(x => x.maintId === m.id).forEach(x => (x.maintId = ''));
     if (await save(`Delete maintenance "${m.details}" – ${a.name}`)) { rerender(); toast('Maintenance deleted'); }
   },
   async inspDelete(d) {

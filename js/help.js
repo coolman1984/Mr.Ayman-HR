@@ -71,7 +71,7 @@ const HELP = [
     ['Where do I write that the room was painted or renovated?', `Open the break area → ${helpBold('Area Log')} → ${helpBold('Add Note')}. Choose the type (Painting, Renovation, Repair,
       Cleaning, Replacement…), the date and write what happened. The log also shows all work, issues and inspections of the break area on one
       time line, newest first. You can print it or save it as Excel (the buttons in the log).`],
-    ['The work is already finished. How do I record it?', `Area Log → ${helpBold('Record Finished Work')}. You do not need to plan it first. Add the contractor, the
+    ['The work is already finished. How do I record it?', `Area Log → ${helpBold('Record Finished Work')} (needs the permission to complete maintenance). You do not need to plan it first. Add the contractor, the
       warranty date and – if you may see costs – what it cost. If it solved an issue, choose the issue: it is closed together with the work.`],
     ['Can I cancel planned work?', `Yes: the small ${helpBold('×')} next to it → ${helpBold('Cancel the work')} (write why). It stays in the history as Cancelled; nothing is erased.`],
     ['Who sees what the work cost?', `Only people with the permission "See and enter what maintenance work cost" (administrators always have it). Everybody else does not

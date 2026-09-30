@@ -43,6 +43,12 @@ proposed phases were built, each shown with screenshots before the next.
   Not taken (for later if wanted): phone app for inspections with camera and offline outbox (needs a cloud gateway), five colour themes and dark mode, Arabic / RTL, Word forms,
   guided tour and welcome slides.
 - Tests: `T42_PlansAndImport`, `ExcelImportTest`, `test_plans_search_icons_import_and_data_safety`.
+- **Independent review of the whole branch – found and fixed:** one far-away cell (`XFD1048576`) in an Excel file made the import loop run for hours (sheet size capped, only rows
+  that hold cells are read); the technician who only completes work could not finish work scheduled from a plan (completing work may update its plan); a person who only plans could
+  record work as already done (finished work needs `maintenance.complete`); the id of repeating work grew by 2 letters per generation and would pass the 120 limit after ~4.75 years
+  (fixed-length `nx` + hash); failed starts could push the untouched snapshot out by pruning (pruning only after a good update, the oldest copy of the same update is reused and compared);
+  a full disk or a locked `program.json` ended the start without a message (clear message / not fatal); Ctrl K opened behind a window; `nan`/`inf`/`1,000` in an Excel number; a plan whose
+  work was cancelled could never be scheduled again; `program.json` now moves with copied data; the old start-up message is removed after a good start.
 
 **More mistakes and lessons**
 - `repr()` of a Python list of tuples is not a JavaScript array: `('name', [...])` is a comma expression, the picker showed nothing. Generate JS with explicit brackets and open the window in a browser.

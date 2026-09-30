@@ -46,13 +46,14 @@
   }
   function close() { if (box) { box.remove(); box = null; } document.removeEventListener('keydown', onKey, true); }
   function onKey(e) {
-    if (e.key === 'Escape') { e.preventDefault(); close(); }
+    if (e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); close(); }
     else if (e.key === 'ArrowDown') { e.preventDefault(); sel = Math.min(list.length - 1, sel + 1); render(); }
     else if (e.key === 'ArrowUp') { e.preventDefault(); sel = Math.max(0, sel - 1); render(); }
     else if (e.key === 'Enter') { e.preventDefault(); go(sel); }
   }
   function open() {
     if (box || typeof DB === 'undefined' || !DB || !ME) return;
+    if (document.body.classList.contains('locked') || document.querySelector('#modal.open')) return;  // not over a window or the login screen
     box = document.createElement('div');
     box.className = 'pal-back';
     box.innerHTML = `<div class="pal" role="dialog" aria-modal="true" aria-label="Search"><div class="pal-in">${ic('search')}<input id="palQ" placeholder="Search break areas, serial numbers, plans, issues, pages…" autocomplete="off"><kbd>Esc</kbd></div><div class="pal-list"></div>

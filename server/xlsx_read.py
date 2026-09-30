@@ -13,6 +13,8 @@ from xml.etree import ElementTree as ET
 
 MAX_UNCOMPRESSED = 60 * 1024 * 1024
 MAX_CELLS = 400_000
+MAX_ROW = 100_000
+MAX_COL = 200
 NS = {'m': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main',
       'r': 'http://schemas.openxmlformats.org/officeDocument/2006/relationships',
       'rel': 'http://schemas.openxmlformats.org/package/2006/relationships'}
@@ -160,6 +162,8 @@ def read(data):
                 if count > MAX_CELLS:
                     raise XlsxError('The workbook has too many cells to import safely.')
                 r, col = split_ref(c.get('r'))
+                if r > MAX_ROW or col > MAX_COL:
+                    raise XlsxError(f'A cell far outside the data ({c.get("r")}) makes the sheet too large to import. Delete the empty rows and columns and save again.')
                 cell = _cell(c, strings, formats, date1904)
                 if cell.v is not None or cell.f:
                     sh.cells[(r, col)] = cell

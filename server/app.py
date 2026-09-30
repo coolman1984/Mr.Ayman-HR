@@ -152,8 +152,12 @@ def stop_with_message(text):
     """The program cannot start safely: say why where the person can see it (the installed program has no console), then stop."""
     say('NOT STARTED: ' + text)
     try:
+        os.makedirs(os.path.join(DATA_DIR, 'logs'), exist_ok=True)
         with open(os.path.join(DATA_DIR, 'logs', 'STARTUP_PROBLEM.txt'), 'w', encoding='utf-8') as f:
             f.write(f'{datetime.now():%Y-%m-%d %H:%M:%S}\n{text}\n')
+    except OSError:
+        pass
+    try:
         if os.name == 'nt':
             import ctypes
             ctypes.windll.user32.MessageBoxW(0, text, 'Break Area Management System', 0x10)
@@ -167,6 +171,10 @@ if INSTANCE:
         SYSTEM = System(DATA_DIR, CFG, UPLOADS, resolve(CFG['backup_dir']), [resolve(d) for d in CFG['extra_backup_dirs']], log=say)
     except (DataFromNewerVersion, UpgradeVerificationFailed) as e:
         stop_with_message(str(e))
+    try:
+        os.remove(os.path.join(DATA_DIR, 'logs', 'STARTUP_PROBLEM.txt'))  # a good start: the old message is no longer true
+    except OSError:
+        pass
     STORE, AUTH, BACKUPS, JOURNAL, NODE = SYSTEM.store, SYSTEM.auth, SYSTEM.backups, SYSTEM.journal, SYSTEM.node
     SYNC = SyncService(SYSTEM, CFG, UPLOADS, log=say)
 else:
@@ -207,7 +215,7 @@ def required(entity, op, changed):
     if entity == 'maintenance' and op == 'update' and (changed.get('status') or [None, None])[1] == 'Done':
         return ('maintenance.complete',)  # scheduling work does not allow saying it is done (cancelling does not need it)
     if entity == 'plans':  # decisions about the future of a break area
-        return ('areas.edit',) if op == 'delete' else ('areas.edit', 'maintenance.create')
+        return ('areas.edit',) if op == 'delete' else ('areas.edit', 'maintenance.create', 'maintenance.complete')  # completing work marks its plan done
     if entity == 'notes':  # the log of a break area: anybody who works on the break area writes in it
         return ('areas.edit',) if op == 'delete' else ('areas.edit', 'inventory.edit', 'maintenance.create', 'maintenance.complete',
                                                        'issues.create', 'issues.followup', 'inspections.create')
@@ -260,6 +268,8 @@ def commit_guard(u):
                 continue  # contents of a break area that is being created
             if e != 'areas' and op == 'delete' and area in removed and 'areas.delete' in perms:
                 continue  # contents of a break area that is being deleted
+            if e == 'maintenance' and op == 'insert' and (c.get('after') or {}).get('status') == 'Done' and 'maintenance.complete' not in perms:
+                raise Forbidden(f'You are not allowed to record finished work. Ask the administrator for the permission "{PERM_LABEL["maintenance.complete"]}".')
             need = required(e, op, c['changes'])
             if not perms.intersection(need):
                 raise Forbidden(f'You are not allowed to {OP_WORD[op]} {ENTITY_TITLE[e]}. Ask the administrator for the permission "{PERM_LABEL[need[0]]}".')

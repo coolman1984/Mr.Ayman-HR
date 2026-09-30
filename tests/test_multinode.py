@@ -1381,6 +1381,24 @@ class T40_AreaLogAndWork(Base):
         self.assertNotIn('1200', log)
         self.assertIn('1200', json.dumps(ac.get('/api/audit?limit=200')['rows']))
 
+        # rights: scheduling work does not allow finishing it; completing work may update its plan
+        ac.post('/api/users/save', {'username': 'only.create', 'full_name': 'Only Create', 'password': 'Red-brick-77xz', 'must_change': False,
+                                    'perms': ['dashboard.view', 'areas.view', 'maintenance.create'], 'areas': None})
+        ac.post('/api/users/save', {'username': 'only.done', 'full_name': 'Only Done', 'password': 'Blue-glass-58xz', 'must_change': False,
+                                    'perms': ['dashboard.view', 'areas.view', 'maintenance.complete'], 'areas': None})
+        creator, finisher = self.A.client(), self.A.client()
+        creator.login('only.create', 'Red-brick-77xz')
+        finisher.login('only.done', 'Blue-glass-58xz')
+        with self.assertRaises(ApiError) as e:
+            creator.post('/api/commit', {'label': 'done by a planner', 'ops': [work('w0000003', cost=None)]})
+        self.assertEqual(e.exception.code, 403)
+        creator.post('/api/commit', {'label': 'planned', 'ops': [work('w0000003', status='Scheduled', cost=None)]})
+        finisher.post('/api/commit', {'label': 'recorded', 'ops': [work('w0000004', cost=None)]})
+        ac.post('/api/commit', {'label': 'plan', 'ops': [{'e': 'plans', 'id': 'pl000009', 'op': 'put', 'row': {'areaId': 'L1', 'title': 'Door', 'status': 'Planned', 'maintId': 'w0000003'}}]})
+        pl = next(p for p in get_area(finisher, 'L1')['plans'] if p['id'] == 'pl000009')
+        finisher.post('/api/commit', {'label': 'plan done', 'ops': [{'e': 'plans', 'id': 'pl000009', 'op': 'put', 'ver': pl['ver'], 'row': {
+            **{k: v for k, v in pl.items() if k != 'ver'}, 'areaId': 'L1', 'status': 'Done', 'doneDate': '2026-09-30'}}]})
+
         # cancelled here, done there: done wins everywhere
         ac.post('/api/commit', {'label': 'w2', 'ops': [work('w0000002', status='Scheduled', cost=None)]})
         self.converged()

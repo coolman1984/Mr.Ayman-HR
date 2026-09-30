@@ -408,7 +408,13 @@ class BrowserFlow(unittest.TestCase):
             a.click(f'.card button[data-act=maintDone][data-mid="{pid}"]')
             submit()
             self.assertEqual(a.evaluate("area('ba02').plans.find(p => p.title === 'Repaint the walls').status"), 'Done')
-            # search everything: Ctrl K, type, Enter
+            self.assertEqual(a.evaluate("[stableHash('x'.repeat(300)).length, stableHash('a') === stableHash('a'), stableHash('a') === stableHash('b')]"), [12, True, False])
+            # search everything: Ctrl K does not open behind a window; Esc closes only the search
+            a.goto(self.A.base + '/#/area/ba02')
+            a.click('button[data-act=noteModal]:not([data-nid])')
+            a.keyboard.press('Control+k')
+            self.assertEqual(a.locator('#palQ').count(), 0)
+            a.click('#modal .modal-f button[data-act=closeModal]')
             a.goto(self.A.base + '/#/dashboard')
             a.keyboard.press('Control+k')
             a.wait_for_selector('#palQ')

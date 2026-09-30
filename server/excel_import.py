@@ -9,6 +9,7 @@ The rules that make it safe to use (also twice with the same file):
     it returns a plan that the screen shows and applies in one saved change.
 """
 import datetime as dt
+import math
 import re
 
 import xlsx_read
@@ -68,10 +69,14 @@ def find_header(sheet, cols):
 
 
 def number(v):
+    """A finite number up to a million, or None (1,000 is a thousand, 1,5 is one and a half)."""
     try:
         if isinstance(v, bool) or v in (None, ''):
             return None
-        return float(str(v).replace(',', '.').strip())
+        t = str(v).strip()
+        t = t.replace(',', '') if re.fullmatch(r'\d{1,3}(,\d{3})+(\.\d+)?', t) else t.replace(',', '.')
+        n = float(t)
+        return n if math.isfinite(n) and abs(n) <= 1e6 else None
     except ValueError:
         return None
 
@@ -108,9 +113,12 @@ def plan(data, state):
             out['warnings'].append(f'Sheet "{sh.name}" was ignored: no header row with break area or item columns was found.')
             continue
         head, cols = (ar if kind == 'areas' else inv)
-        for r in range(head + 1, sh.max_row + 1):
-            get = lambda f: sh.value(r, cols[f]) if f in cols else None
-            if not any(sh.value(r, c) not in (None, '') for c in range(1, sh.max_col + 1)):
+        by_row = {}
+        for (row, _), cell in sh.cells.items():
+            by_row.setdefault(row, []).append(cell)
+        for r in sorted(k for k in by_row if k > head):  # only rows that hold something
+            get = lambda f, r=r: sh.value(r, cols[f]) if f in cols else None
+            if not any(c.v not in (None, '') for c in by_row[r]):
                 continue
             rows_total += 1
             if rows_total > MAX_ROWS:
@@ -169,7 +177,9 @@ def plan(data, state):
             continue
         good = []
         for s in serials:
-            if norm(s) in used_serials:
+            if len(s) > 80:
+                out['warnings'].append(f'{sheet} row {r}: serial number {s[:20]}… is longer than 80 characters - left out.')
+            elif norm(s) in used_serials:
                 out['warnings'].append(f'{sheet} row {r}: serial number {s} is already used in {used_serials[norm(s)]} - left out.')
             else:
                 used_serials[norm(s)] = area_name
