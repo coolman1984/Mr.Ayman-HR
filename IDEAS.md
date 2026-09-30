@@ -274,6 +274,24 @@ Kept up to date with every change (rule in `CLAUDE.md`). New idea → new card i
 - 🇪🇬 **بالعربي:** الناس بتبدأ الشغل الحقيقي بإنها تغيّر اسم البيانات التجريبية. متعرفش التجريبي من اسمه، اعرفه من
   رقمه الثابت. كده تمسح التجريبي بس وتسيب اللي الناس ضافته بإيديها.
 
+### 1.5 Updates must never lose data (snapshot, verify, refuse newer)
+- **Problem:** people keep working for months; an update must show exactly their data, and a wrong install (older program on newer data) must not damage anything.
+- **Idea:** a small marker file says which program version and data model wrote the data. At start: newer data → refuse, touch nothing; version changed → verified snapshot of the databases,
+  fingerprint of every table; after the update compare (old columns of old rows identical, no row lost, integrity ok, history append-only); only then go on. Changes that rewrite data
+  must be registered migration steps that declare what they touch. The best test runs the REAL previous release on a data folder, then the new one.
+- **Where:** `server/upgrade.py`, `T41_UpgradeKeepsData`, Settings → Data Safety.
+- 🇪🇬 **بالعربي:** قبل أي تحديث البرنامج بيعمل نسخة متأكد منها، وبعد التحديث بيقارن كل سجل قديم بالجديد، وبيرفض يشتغل لو الداتا من نسخة أحدث. والاختبار الحقيقي بيشغّل النسخة القديمة بجد وبعدين الجديدة على نفس الملفات.
+
+### 6.5 Import from Excel that cannot hurt
+- **Problem:** people already have lists in Excel; typing them again is slow and a bad import can overwrite good data.
+- **Idea:** find the columns by their names in any order, show a preview (what is new, what is left out and why), never change what exists (so the same file twice adds nothing), one saved change after a backup.
+- **Where:** `server/excel_import.py`, `server/xlsx_read.py`, `importExcelModal` in `js/app.js`.
+- 🇪🇬 **بالعربي:** استيراد من إكسل بيوريك المعاينة الأول، مابيغيّرش أي حاجة موجودة، فلو استوردت نفس الملف مرتين مفيش حاجة بتتكرر.
+
+### 6.6 "Needs attention" and Ctrl K
+- Put the few things a person must look at on the first screen (late work, urgent issues, warranties ending, a piece repaired 3 times); one keyboard shortcut searches everything.
+- 🇪🇬 **بالعربي:** أهم الحاجات اللي محتاجة انتباه على أول شاشة، وCtrl K يدوّر في كل حاجة.
+
 ### 6.3 One time line per place: notes + work + issues + inspections
 - **Problem:** "was this room painted? when was the last repair?" – the answer was spread over issues, maintenance, inspections and photos.
 - **Idea:** one *Area Log*: free notes with a type (painting, renovation…) plus everything else merged into one list, newest first, printable.

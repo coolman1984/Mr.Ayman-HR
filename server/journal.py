@@ -754,7 +754,7 @@ class Journal:
         return out
 
     # ------------------------------------------------------------ log queries (monitoring)
-    def query(self, table, q='', user='', typ='', area='', frm='', to='', node='', limit=200, offset=0, areas=None, business_only=False):
+    def query(self, table, q='', user='', typ='', area='', frm='', to='', node='', limit=200, offset=0, areas=None, business_only=False, hide_cost=False):
         cols = {'audit': ['label', 'entity', 'entity_id', 'changes', 'before', 'after'], 'activity': ['action', 'target', 'page', 'detail'],
                 'security': ['target', 'detail', 'user']}[table]
         where, args = [], []
@@ -763,7 +763,12 @@ class Journal:
         if areas is not None and table == 'audit':
             where.append(f'area_id IN ({",".join("?" * len(areas)) or "NULL"})')
             args += list(areas)
-        if q:
+        if q and hide_cost and table == 'audit':  # searching inside the text of maintenance changes would reveal costs digit by digit
+            plain = [c for c in cols if c not in ('changes', 'before', 'after')]
+            where.append("((entity='maintenance' AND (" + ' OR '.join(f'{c} LIKE ?' for c in plain) + ")) OR (entity!='maintenance' AND ("
+                         + ' OR '.join(f'{c} LIKE ?' for c in cols) + ')))')
+            args += [f'%{q}%'] * (len(plain) + len(cols))
+        elif q:
             where.append('(' + ' OR '.join(f'{c} LIKE ?' for c in cols) + ')')
             args += [f'%{q}%'] * len(cols)
         if user:

@@ -28,3 +28,11 @@ on screens, reports, the change log or Excel, and saving a work cannot change or
 
 ## History of one piece
 Break area page → **Serial numbers** → click a serial number: all repairs, movements and planned work of that piece. Three repairs or more: *think about replacing it*.
+
+## Future plans
+**Future Plans** (under the log): *Add Plan* – what, target date (optional), priority. **Schedule** plans the work with the text filled in; completing that work marks the plan done.
+The ✓ marks a plan done by hand, the × drops it (it stays in the list). Plans past their date are on the dashboard (*Needs Attention*) and the Maintenance page shows what is coming.
+
+## Import, search, icons
+**Break Areas → Import from Excel** (template to download; nothing that exists is changed, so importing twice is harmless), **Ctrl K** searches everything, item types get an icon
+from 124 icons in the item type window, **Settings → Data Safety** shows what the last update did to your data and can check it at any time.

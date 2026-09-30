@@ -370,6 +370,78 @@ class BrowserFlow(unittest.TestCase):
             self.assertEqual(self.errors, [])
             browser.close()
 
+    def test_plans_search_icons_import_and_data_safety(self):
+        """2.6: future plans (schedule it, complete the work, the plan is done), Ctrl K search, the icon picker, the Excel import
+        with its preview, the Needs Attention card and the Data Safety card."""
+        import excel_import
+        import xlsx
+        make_authority(self.A)
+        xlsx_path = os.path.join(self.A.root, 'import.xlsx')
+        with open(xlsx_path, 'wb') as f:
+            f.write(xlsx.build([(n, h, r) for n, (h, r) in excel_import.TEMPLATE.items()]))
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(executable_path=CHROME) if CHROME else pw.chromium.launch()
+            a = self.page(browser, 'A')
+            a.goto(self.A.base)
+            a.fill('input[name=username]', ADMIN[0])
+            a.fill('input[name=password]', ADMIN[1])
+            a.get_by_role('button', name='Log In').click()
+            a.get_by_text('Try it with sample data first').click()
+            a.wait_for_selector('text=Break Area 01', timeout=30000)
+            submit = lambda: (a.click('#modal .modal-f .primary'), a.wait_for_selector('#modal.open', state='detached', timeout=15000))
+            # the dashboard: attention card; the search button is there
+            a.wait_for_selector('h3:text-is("Needs Attention")')
+            self.assertTrue(a.locator('#searchBtn').is_visible())
+            # future plans: add, schedule it (the dialog is filled in), complete the work -> the plan is done
+            a.goto(self.A.base + '/#/area/ba02')
+            a.click('button[data-act=planModal]:not([data-pid])')
+            a.fill('#modal input[name=title]', 'Repaint the walls')
+            a.fill('#modal input[name=targetDate]', '2030-03-01')
+            submit()
+            a.wait_for_selector('.plan-row >> text=Repaint the walls')
+            a.click('.plan-row:has-text("Repaint the walls") button[data-act=planSchedule]')
+            self.assertEqual(a.input_value('#modal textarea[name=details]'), 'Repaint the walls')
+            self.assertEqual(a.input_value('#modal input[name=date]'), '2030-03-01')
+            submit()
+            pid = a.evaluate("area('ba02').plans.find(p => p.title === 'Repaint the walls').maintId")
+            self.assertTrue(pid)
+            a.click(f'.card button[data-act=maintDone][data-mid="{pid}"]')
+            submit()
+            self.assertEqual(a.evaluate("area('ba02').plans.find(p => p.title === 'Repaint the walls').status"), 'Done')
+            # search everything: Ctrl K, type, Enter
+            a.goto(self.A.base + '/#/dashboard')
+            a.keyboard.press('Control+k')
+            a.wait_for_selector('#palQ')
+            a.fill('#palQ', 'break area 07')
+            a.keyboard.press('Enter')
+            a.wait_for_url('**/#/area/ba07')
+            # the icon picker: search, choose, saved
+            a.goto(self.A.base + '/#/equipment')
+            a.click('button[data-act=itemTypeModal]:not([data-tid])')
+            a.fill('#modal input[name=name]', 'Kettles')
+            a.fill('#modal .ico-search', 'kettle')
+            a.click('#modal .ico-pick[data-ico=kettle]')
+            submit()
+            self.assertEqual(a.evaluate("itemType('kettles').icon"), 'kettle')
+            # the Excel import: preview then import; a second import adds nothing
+            a.goto(self.A.base + '/#/areas')
+            a.click('button[data-act=importExcel]')
+            a.set_input_files('#modal input[type=file]', xlsx_path)
+            a.wait_for_selector('text=What the import would add')
+            self.assertIn('Canteen East', a.inner_text('#modal'))
+            submit()
+            self.assertEqual(a.evaluate("area(DB.areas.find(x => x.name === 'Canteen East').id).pieces.map(p => p.serial).sort()"), ['TV-55-0142', 'TV-55-0143'])
+            a.click('button[data-act=importExcel]')
+            a.set_input_files('#modal input[type=file]', xlsx_path)
+            a.wait_for_selector('text=Nothing new to import')
+            # data safety
+            a.goto(self.A.base + '/#/settings')
+            a.wait_for_selector('h3:text-is("Data Safety")')
+            a.click('button[data-act=dataCheck]')
+            a.wait_for_selector('#toast >> text=All good')
+            self.assertEqual(self.errors, [])
+            browser.close()
+
     def test_personal_link(self):
         """The administrator adds a person with only a name (personal link is the default) and a profile; the link is shown
         at once; opening it in another browser logs that person in under their own name. The link list in Devices & Sync

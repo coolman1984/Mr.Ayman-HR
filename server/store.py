@@ -44,6 +44,10 @@ ENTITIES = {
     'notes': ('notes', 'Area Log', [
         ('areaId', 'area_id', T, 'Area ID'), ('date', 'date', T, 'Date'), ('kind', 'kind', T, 'Type'),
         ('text', 'text', T, 'Note'), ('by', 'by_user', T, 'Written By')]),
+    'plans': ('plans', 'Future Plans', [
+        ('areaId', 'area_id', T, 'Area ID'), ('title', 'title', T, 'Plan'), ('details', 'details', T, 'Details'),
+        ('targetDate', 'target_date', T, 'Target Date'), ('priority', 'priority', T, 'Priority'), ('status', 'status', T, 'Status'),
+        ('doneDate', 'done_date', T, 'Done Date'), ('maintId', 'maint_id', T, 'Planned Work'), ('by', 'by_user', T, 'Written By')]),
     'pieces': ('pieces', 'Serial Numbers', [
         ('areaId', 'area_id', T, 'Area ID'), ('item', 'item', T, 'Item'), ('serial', 'serial', T, 'Serial Number'),
         ('date', 'date', T, 'Date Added'), ('note', 'note', T, 'Notes')]),
@@ -79,13 +83,14 @@ ENTITIES = {
         ('action', 'action', T, 'Action'), ('prev', 'prev_qty', I, 'Previous Qty'), ('next', 'new_qty', I, 'New Qty'),
         ('details', 'details', T, 'Details'), ('by', 'by_user', T, 'Updated By')]),
 }
-AREA_CHILDREN = ['inventory', 'pieces', 'notes', 'photos', 'docs', 'issues', 'maintenance', 'inspections', 'surveys']
+AREA_CHILDREN = ['inventory', 'pieces', 'notes', 'plans', 'photos', 'docs', 'issues', 'maintenance', 'inspections', 'surveys']
 
 # Merge rules for changes made at the same time on two PCs (see DISTRIBUTED_SYNC_ARCHITECTURE.md, conflict matrix).
 COUNTERS = {'inventory': {'qty'}}  # every movement is a delta: +5 on one PC and -2 on another give +3
 RESOLVERS = {
     'areas': {'lastInspection': 'max', 'nextInspection': 'max', 'inspectedBy': 'follow:lastInspection'},
     'maintenance': {'status': 'rank:Scheduled,In Progress,Cancelled,Done', 'doneDate': 'follow:status', 'notes': 'follow:status'},
+    'plans': {'status': 'rank:Idea,Planned,Dropped,Done', 'doneDate': 'follow:status'},
 }
 SPECS = {e: {'table': t, 'fields': [(js, col, kind) for js, col, kind, _ in f], 'counters': COUNTERS.get(e, set()),
              'resolvers': RESOLVERS.get(e, {})} for e, (t, _, f) in ENTITIES.items()}
@@ -378,7 +383,7 @@ class Store:
         kind = 'Serial number' if entity == 'pieces' else title[:-1] if title.endswith('s') else title
         # only plain values: a hand-made request must not reach SQL with a list (answer 400 later, not a crash)
         row = {k: v for k, v in row.items() if isinstance(v, (str, int, float))} if isinstance(row, dict) else {}
-        label = next((str(row[k]) for k in ('name', 'title', 'serial', 'caption', 'department', 'details', 'date') if row.get(k)), '')
+        label = next((str(row[k])[:60] for k in ('name', 'title', 'serial', 'caption', 'department', 'text', 'details', 'date') if row.get(k)), '')
         if entity == 'inventory' and row.get('item'):
             t = c.execute('SELECT name FROM item_types WHERE id=?', (row['item'],)).fetchone()
             label = t[0] if t else row['item']
@@ -428,6 +433,15 @@ class Store:
             if not text or len(text) > 4000:
                 raise BadRequest('A note needs some text (at most 4000 characters)')
             row = {**row, 'text': text}
+        if entity == 'maintenance' and row.get('cost') not in (None, ''):
+            cost = _coerce(R, row.get('cost'))
+            if cost is None or not 0 <= cost < 1e12:
+                raise BadRequest('The cost must be a number from 0 up')
+        if entity == 'plans':
+            title = str(row.get('title') or '').strip()
+            if not title or len(title) > 200:
+                raise BadRequest('A plan needs a title (at most 200 characters)')
+            row = {**row, 'title': title}
         if entity == 'pieces':
             serial = str(row.get('serial') or '').strip()
             if not serial or len(serial) > 80:
@@ -613,11 +627,11 @@ class Store:
     def log_activity(self, user, ip, events):
         self.journal.log_activity(user, ip, events[:500])
 
-    def query_log(self, kind, q='', user='', typ='', area='', frm='', to='', limit=200, offset=0, areas=None, node='', admin=True):
+    def query_log(self, kind, q='', user='', typ='', area='', frm='', to='', limit=200, offset=0, areas=None, node='', admin=True, hide_cost=False):
         if kind == 'activity':
             self.journal.flush_activity()
         return self.journal.query('audit' if kind == 'audit' else 'activity', q, user, typ, area, frm, to, node, limit, offset, areas,
-                                  business_only=not admin)
+                                  business_only=not admin, hide_cost=hide_cost)
 
     # ------------------------------------------------------------ conflicts and convergence
     def conflicts(self):
@@ -688,7 +702,7 @@ class Store:
             items = {r['id']: r['name'] for r in c.execute('SELECT id, name FROM item_types')}
             items.update({'area': 'Break Area', 'Initial Setup': 'Initial Setup'})
             sheets, deleted = [], []
-            order = ['areas', 'surveys', 'inventory', 'pieces', 'notes', 'history', 'issues', 'issueLog', 'maintenance', 'inspections', 'photos', 'docs', 'itemTypes', 'settings']
+            order = ['areas', 'surveys', 'inventory', 'pieces', 'notes', 'plans', 'history', 'issues', 'issueLog', 'maintenance', 'inspections', 'photos', 'docs', 'itemTypes', 'settings']
             for e in order:
                 table, title, fields = ENTITIES[e]
                 head = ['ID']

@@ -11,6 +11,12 @@
 - Photos can belong to a piece of work (before / after).
 - **Costs** are only shown to people with the new permission *See and enter what maintenance work cost* (administrators always have it).
 - Click a **serial number** to see everything that happened to that piece; three repairs suggest replacing it.
+- **Future Plans** on every break area (target date, priority, status). *Schedule* turns a plan into planned work; when the work is completed the plan is done. Plans that are late show on the dashboard.
+- **Updates never lose data**: before an update the program makes a verified copy of all data, checks after the update that every record is still there unchanged, refuses to start with data of a newer program, and shows it in **Settings → Data Safety** (with *Check my data now*).
+- **Icon pack**: 124 professional icons in 7 groups for the item types, with a search box (old icons keep working).
+- **Import from Excel** (Break Areas page): break areas, what is in them and serial numbers. You see what would be added first; nothing that exists is changed; a template can be downloaded.
+- **Search everything** with Ctrl K (or the Search button): break areas, serial numbers, plans, issues, pages.
+- **Needs Attention** on the dashboard: late work, urgent issues, plans past their date, warranties ending, pieces repaired 3 times, overdue inspections.
 - All PCs must be updated to 2.6: changes made on a 2.6 PC wait on older PCs until they are updated too.
 
 ## 2.5.0

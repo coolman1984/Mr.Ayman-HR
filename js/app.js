@@ -63,10 +63,10 @@ function flatten(db) {
   Object.entries(db.settings).forEach(([id, value]) => put('settings', { id, value }));
   db.itemTypes.forEach(t => put('itemTypes', t));
   db.areas.forEach(a => {
-    const { inventory, pieces, notes, photos, docs, issues, maintenance, inspections, surveys, ...base } = a;
+    const { inventory, pieces, notes, plans, photos, docs, issues, maintenance, inspections, surveys, ...base } = a;
     put('areas', base);
     inventory.forEach(x => put('inventory', { ...x, id: x.id || a.id + ':' + x.item, areaId: a.id }));
-    [['pieces', pieces || []], ['notes', notes || []], ['photos', photos], ['docs', docs], ['maintenance', maintenance], ['inspections', inspections], ['surveys', surveys || []]]
+    [['pieces', pieces || []], ['notes', notes || []], ['plans', plans || []], ['photos', photos], ['docs', docs], ['maintenance', maintenance], ['inspections', inspections], ['surveys', surveys || []]]
       .forEach(([e, list]) => list.forEach(x => put(e, { ...x, areaId: a.id })));
     issues.forEach(i => {
       const { log, ...b } = i;
@@ -81,7 +81,7 @@ function flatten(db) {
 async function load() {
   const s = await api('GET', '/api/state');
   s.settings = { ...DEFAULT_SETTINGS, ...s.settings };
-  s.areas.forEach(a => { a.surveys = a.surveys || []; a.pieces = a.pieces || []; a.notes = a.notes || []; a.issues.forEach(i => (i.log = i.log || [])); });
+  s.areas.forEach(a => { a.surveys = a.surveys || []; a.pieces = a.pieces || []; a.notes = a.notes || []; a.plans = a.plans || []; a.issues.forEach(i => (i.log = i.log || [])); });
   const vers = {};
   const walk = (e, x) => { if (x.ver) vers[e + '|' + x.id] = x.ver; };
   (s.settingsVer ? Object.entries(s.settingsVer) : []).forEach(([id, ver]) => (vers['settings|' + id] = ver));
@@ -90,7 +90,7 @@ async function load() {
   s.areas.forEach(a => {
     walk('areas', a);
     a.inventory.forEach(x => walk('inventory', x));
-    ['pieces', 'notes', 'photos', 'docs', 'maintenance', 'inspections', 'surveys'].forEach(e => a[e].forEach(x => walk(e, x)));
+    ['pieces', 'notes', 'plans', 'photos', 'docs', 'maintenance', 'inspections', 'surveys'].forEach(e => a[e].forEach(x => walk(e, x)));
     a.issues.forEach(i => { walk('issues', i); i.log.forEach(l => walk('issueLog', l)); });
   });
   DB = s;
@@ -322,7 +322,7 @@ const IC = {
   expand: '<path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>',
   trend: '<path d="m3 17 6-6 4 4 8-8"/><path d="M14 7h7v7"/>'
 };
-const ITEM_ICONS = ['chair', 'table', 'tv', 'dispenser', 'rug', 'fridge', 'microwave', 'coffee', 'plant', 'sofa', 'box'];
+Object.assign(IC, ICON_PACK); // the icon pack (js/icons.js); names that older data uses keep working
 const ic = (n, cls = '') => `<svg class="ic ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${IC[n] || IC.box}</svg>`;
 const itemIcon = id => ic((itemType(id) || {}).icon || 'box');
 
@@ -331,7 +331,7 @@ const STATUS_CLS = {
   'Good': 'b-green', 'Need Maintenance': 'b-orange', 'Under Update': 'b-blue',
   'Need Repair': 'b-orange', 'Damaged': 'b-red', 'Out of Service': 'b-gray',
   'Open': 'b-orange', 'In Progress': 'b-blue', 'Closed': 'b-green',
-  'Scheduled': 'b-blue', 'Done': 'b-green', 'Cancelled': 'b-gray', 'Active': 'b-green', 'Inactive': 'b-gray',
+  'Scheduled': 'b-blue', 'Done': 'b-green', 'Cancelled': 'b-gray', 'Idea': 'b-gray', 'Planned': 'b-blue', 'Dropped': 'b-gray', 'Active': 'b-green', 'Inactive': 'b-gray',
   'High': 'b-red', 'Medium': 'b-orange', 'Low': 'b-gray',
   'Added': 'b-green', 'Removed': 'b-red', 'Replaced': 'b-blue', 'Transferred': 'b-purple',
   'Maintenance': 'b-orange', 'Created': 'b-gray', 'Condition Update': 'b-gray',
@@ -482,6 +482,7 @@ function renderShell(route) {
   const open = DB.areas.reduce((n, a) => n + openIssues(a).length, 0) + dueWork().length;
   $('#bell').innerHTML = ic('bell') + (open ? `<span class="cnt">${open}</span>` : '');
   $('#bell').title = 'Open issues and work that is due soon or late';
+  $('#searchBtn').classList.remove('hidden'); $('#searchBtn .sb-ic').innerHTML = ic('search');
   $('#user').innerHTML = `<div class="avatar">${esc(initials(me()))}</div><div class="who"><b>${esc(me())}</b><small>${esc(ME.title || ME.role || ME.username)} ▾</small></div>`;
   $('#user').dataset.act = 'accountMenu';
   $('#user').title = 'My account, change password, log out';
@@ -633,6 +634,31 @@ function viewSatisfactionCard() {
   </div>`;
 }
 
+/* what needs a person's eye: late work, warranties ending, pieces that keep breaking, plans that are over, urgent issues */
+function attentionItems() {
+  const out = [], A = DB.areas, t = today();
+  const late = A.flatMap(a => a.maintenance.filter(m => isOpenWork(m) && m.date && m.date < t).map(m => ({ a, m })));
+  if (late.length) out.push({ icon: 'alert', level: 'red', text: `${late.length} planned work ${late.length === 1 ? 'is' : 'items are'} late`, sub: late.slice(0, 2).map(x => `${x.a.name}: ${x.m.details}`).join(' · '), href: '#/maintenance' });
+  const high = A.flatMap(a => a.issues.filter(i => i.status !== 'Closed' && i.priority === 'High').map(i => ({ a, i })));
+  if (high.length) out.push({ icon: 'warning', level: 'red', text: `${high.length} open issue${high.length === 1 ? '' : 's'} with high priority`, sub: high.slice(0, 2).map(x => `${x.a.name}: ${x.i.title}`).join(' · '), href: '#/maintenance' });
+  const over = A.flatMap(a => a.plans.filter(p => isOpenPlan(p) && p.targetDate && p.targetDate < t).map(p => ({ a, p })));
+  if (over.length) out.push({ icon: 'plan', level: 'orange', text: `${over.length} plan${over.length === 1 ? ' is' : 's are'} past the target date`, sub: over.slice(0, 2).map(x => `${x.a.name}: ${x.p.title}`).join(' · '), href: '#/maintenance' });
+  const soon = addDays(t, 60), ending = A.flatMap(a => a.maintenance.filter(m => m.status === 'Done' && m.warrantyUntil && m.warrantyUntil >= t && m.warrantyUntil <= soon).map(m => ({ a, m })));
+  if (ending.length) out.push({ icon: 'shield', level: 'orange', text: `${ending.length} warrant${ending.length === 1 ? 'y ends' : 'ies end'} within 60 days`, sub: ending.slice(0, 2).map(x => `${x.a.name}: ${x.m.details} (until ${fmt(x.m.warrantyUntil)})`).join(' · '), href: '#/reports' });
+  const repairs = {};
+  A.forEach(a => a.maintenance.filter(m => m.status === 'Done' && m.kind === 'Repair' && m.serial).forEach(m => { const k = m.serial.toLowerCase(); (repairs[k] = repairs[k] || { a, serial: m.serial, n: 0 }).n++; }));
+  const often = Object.values(repairs).filter(r => r.n >= 3);
+  if (often.length) out.push({ icon: 'wrench', level: 'orange', text: `${often.length} piece${often.length === 1 ? ' has' : 's have'} been repaired 3 times or more`, sub: often.slice(0, 3).map(r => `${r.serial} (${r.n}×)`).join(' · ') + ' – think about replacing', href: '#/area/' + often[0].a.id });
+  const insp = A.filter(a => inspStatus(a) === 'Overdue');
+  if (insp.length) out.push({ icon: 'clipboard', level: 'orange', text: `${insp.length} inspection${insp.length === 1 ? ' is' : 's are'} overdue`, sub: insp.slice(0, 3).map(a => a.name).join(' · '), href: '#/maintenance' });
+  return out;
+}
+function attentionCard() {
+  const items = attentionItems();
+  return `<div class="card mb attention"><div class="card-h">${ic('bell')}<h3>Needs Attention</h3><span class="muted">(${items.length})</span></div>
+    ${items.length ? items.map(i => `<a class="att-row ${i.level}" href="${i.href}">${ic(i.icon)}<div><b>${esc(i.text)}</b><small>${esc(i.sub)}</small></div>${ic('chevR')}</a>`).join('')
+      : `<p class="muted" style="margin:4px 0">${ic('checkCircle')} Nothing needs attention right now.</p>`}</div>`;
+}
 function viewDashboard() {
   const A = DB.areas;
   if (!A.length) return viewWelcome();
@@ -647,6 +673,7 @@ function viewDashboard() {
 
   return `
   <div class="kpis">${kpis.map(([i, l, v]) => `<div class="card kpi"><div class="kic">${ic(i)}</div><div><div class="lbl">${l}</div><div class="val">${v.toLocaleString()}</div></div></div>`).join('')}</div>
+  ${can('maintenance.view') ? attentionCard() : ''}
 
   <div class="row3">
     <div class="card"><div class="card-h"><h3>Break Areas by Status</h3></div>${donut(statusData, 'Break Areas')}</div>
@@ -795,6 +822,7 @@ function viewAreas() {
     <div class="actions">
       ${can('export.excel') ? `<button class="btn" data-act="exportAreas">${ic('download')}Export Excel</button>` : ''}
       ${can('report.labels') ? `<button class="btn" data-act="printLabelsFiltered">${ic('qr')}Print QR Labels</button>` : ''}
+      ${can('areas.create') && allAreas() ? `<button class="btn" data-act="importExcel">${ic('import')}Import from Excel</button>` : ''}
       ${can('areas.create') && allAreas() ? `<a class="btn primary" href="#/areas/new">${ic('plus')}Add New Break Area</a>` : ''}
     </div></div>
   <div class="card">
@@ -858,7 +886,7 @@ async function submitNewArea(form) {
   if (!d.name.trim()) return toast('Name is required', true);
   let id;  // random, so two PCs adding a break area at the same time never get the same id
   do { id = 'ba' + Date.now().toString(36).slice(-4) + uid().slice(0, 4); } while (area(id));
-  const a = { id, inventory: [], pieces: [], notes: [], photos: [], docs: [], issues: [], maintenance: [], inspections: [], surveys: [], lastInspection: '', nextInspection: addDays(d.startDate || today(), setting('inspectionDays')), inspectedBy: '' };
+  const a = { id, inventory: [], pieces: [], notes: [], plans: [], photos: [], docs: [], issues: [], maintenance: [], inspections: [], surveys: [], lastInspection: '', nextInspection: addDays(d.startDate || today(), setting('inspectionDays')), inspectedBy: '' };
   applyAreaFields(a, d);
   DB.itemTypes.forEach(t => { const q = +d['qty_' + t.id] || 0; if (q > 0) a.inventory.push({ item: t.id, qty: q, condition: d['cond_' + t.id] }); });
   const btn = $('button.primary', form);
@@ -985,6 +1013,8 @@ function viewArea(a) {
   </div>
 
   ${areaLogCard(a)}
+
+  ${plansCard(a)}
 
   <div class="grid2">
     <div class="card">
@@ -1238,7 +1268,7 @@ const WORK_KINDS = ['Repair', 'Painting', 'Renovation', 'Cleaning', 'Replacement
 const NOTE_KINDS = ['Note', ...WORK_KINDS];
 const NOTE_PERMS = ['areas.edit', 'inventory.edit', 'maintenance.create', 'maintenance.complete', 'issues.create', 'issues.followup', 'inspections.create'];
 const TL_CLS = { Note: 'b-gray', Painting: 'b-purple', Renovation: 'b-purple', Repair: 'b-orange', Cleaning: 'b-blue', Replacement: 'b-blue', Other: 'b-gray',
-  'Work done': 'b-green', Planned: 'b-blue', Cancelled: 'b-gray', 'Issue reported': 'b-orange', 'Issue closed': 'b-green', Inspection: 'b-gray', Photo: 'b-gray' };
+  'Work done': 'b-green', Planned: 'b-blue', Cancelled: 'b-gray', 'Issue reported': 'b-orange', 'Issue closed': 'b-green', Inspection: 'b-gray', Photo: 'b-gray', Plan: 'b-blue' };
 function areaTimeline(a) {
   const out = [];
   const add = (date, type, text, by, ref) => out.push({ date: date || '', type, text, by: by || '', ref, ord: out.length });
@@ -1254,6 +1284,7 @@ function areaTimeline(a) {
     if (i.status === 'Closed' && i.closedDate) add(i.closedDate, 'Issue closed', i.title, '', { issue: i.id });
   });
   a.inspections.forEach(i => add(i.date, 'Inspection', i.result + (i.notes ? '. ' + i.notes : ''), i.by, {}));
+  (a.plans || []).filter(p => p.status === 'Idea' || p.status === 'Planned').forEach(p => add(p.targetDate, 'Plan', p.title + (p.details ? ': ' + p.details : ''), p.by, { plan: p.id }));
   a.photos.filter(p => p.category === 'Before' || p.category === 'After').forEach(p => add(p.date, 'Photo', `${p.category}: ${p.caption}`, '', { photo: p.id }));
   return out.sort((x, y) => (y.date || '').localeCompare(x.date || '') || x.ord - y.ord);
 }
@@ -1261,6 +1292,7 @@ F.alog = { all: false };
 /* the same date some months later (31 Jan + 1 month = 28 Feb) */
 function addMonths(d, n) {
   const t = new Date(d + 'T00:00:00'), day = t.getDate();
+  if (isNaN(t)) return '';
   t.setDate(1); t.setMonth(t.getMonth() + n);
   t.setDate(Math.min(day, new Date(t.getFullYear(), t.getMonth() + 1, 0).getDate()));
   return iso(t);
@@ -1271,14 +1303,16 @@ function planNext(a, m, from) {
   const n = +m.repeatMonths || 0;
   if (n <= 0) return '';
   const date = addMonths(from, n);
-  a.maintenance.push({ id: uid(), date, item: m.item || '', serial: m.serial || '', assignedTo: m.assignedTo, details: m.details, status: 'Scheduled', kind: m.kind || '',
+  if (!date) return '';
+  // a fixed id: two PCs completing the same work plan the same next one, not two
+  a.maintenance.push({ id: 'nx' + m.id, date, item: m.item || '', serial: m.serial || '', assignedTo: m.assignedTo, details: m.details, status: 'Scheduled', kind: m.kind || '',
     contractor: m.contractor || '', repeatMonths: n });
   return date;
 }
 /* work due within a week, or late (the bell and the Maintenance page) */
 const dueWork = () => DB.areas.flatMap(a => a.maintenance.filter(m => m.status === 'Scheduled' || m.status === 'In Progress').map(m => ({ ...m, a })))
   .filter(m => m.date && daysFromToday(m.date) <= 7);
-const dueBadge = m => { const d = daysFromToday(m.date || today()); return d < 0 ? `<span class="badge b-red">Late ${-d}d</span>` : d <= 7 ? `<span class="badge b-orange">${d === 0 ? 'Today' : 'In ' + d + 'd'}</span>` : ''; };
+const dueBadge = m => { if (!m.date) return ''; const d = daysFromToday(m.date); return d < 0 ? `<span class="badge b-red">Late ${-d}d</span>` : d <= 7 ? `<span class="badge b-orange">${d === 0 ? 'Today' : 'In ' + d + 'd'}</span>` : ''; };
 /* the serial numbers of the pieces of one item in this break area, as options for a work dialog */
 const serialSelect = (a, item, sel) => options([['', 'Not one particular piece'], ...piecesOf(a, item).map(p => [p.serial, p.serial])], sel || '');
 function serialField(form, a) {
@@ -1316,7 +1350,7 @@ const warrantyBadge = m => !m.warrantyUntil ? '' : daysFromToday(m.warrantyUntil
   ? `<span class="badge b-gray">Warranty ended ${esc(fmt(m.warrantyUntil))}</span>` : `<span class="badge b-green">Warranty until ${esc(fmt(m.warrantyUntil))}</span>`;
 /* the related issue is closed together with the work */
 function closeIssueWith(a, m, date, closeIt) {
-  const i = m.issueId && closeIt ? a.issues.find(x => x.id === m.issueId) : null;
+  const i = m.issueId && closeIt && can('issues.followup') ? a.issues.find(x => x.id === m.issueId) : null;
   if (!i || i.status === 'Closed') return;
   i.status = 'Closed'; i.closedDate = date; i.log = i.log || [];
   i.log.push({ id: uid(), date, by: me(), text: `Closed together with the work: ${m.kind ? m.kind + ' – ' : ''}${m.details}` });
@@ -1373,7 +1407,7 @@ function doneWorkModal(a) {
     <label>Warranty until <span class="hint">(optional)</span><input name="warrantyUntil" type="date"></label>
     <label>Break area status afterwards<select name="status">${options(['Keep current status', ...STATUSES], 'Keep current status')}</select></label>
     <label>Plan the same work again <span class="hint">(optional)</span><select name="repeatMonths">${options(REPEATS, '')}</select></label>
-    ${openIssues(a).length ? `<label class="full">This work solves the issue <span class="hint">(optional)</span><select name="issueId">${issueOptions(a)}</select></label>` : ''}
+    ${openIssues(a).length && can('issues.followup') ? `<label class="full">This work solves the issue <span class="hint">(optional)</span><select name="issueId">${issueOptions(a)}</select></label>` : ''}
   </div>`, {
     submit: 'Save', allow: can('maintenance.create', 'maintenance.complete'),
     async onSubmit(d) {
@@ -1396,12 +1430,58 @@ function doneWorkModal(a) {
   serialField(form, a);
 }
 
+/* ============================== Future plans of a break area ============================== */
+const PLAN_PERMS = ['areas.edit', 'maintenance.create'];
+const isOpenPlan = p => p.status === 'Idea' || p.status === 'Planned';
+const planWhen = p => { if (!p.targetDate) return '<span class="muted">no date yet</span>'; const d = daysFromToday(p.targetDate);
+  return `${esc(fmt(p.targetDate))} ${isOpenPlan(p) ? (d < 0 ? `<span class="badge b-red">${-d} days over</span>` : d <= 30 ? `<span class="badge b-orange">in ${d} days</span>` : '') : ''}`; };
+const sortPlans = list => [...list].sort((x, y) => (x.targetDate || '9999').localeCompare(y.targetDate || '9999') || PRIORITIES.indexOf(y.priority) - PRIORITIES.indexOf(x.priority));
+function plansCard(a) {
+  const open = sortPlans(a.plans.filter(isOpenPlan)), closed = a.plans.filter(p => !isOpenPlan(p)).sort((x, y) => (y.doneDate || '').localeCompare(x.doneDate || ''));
+  const can_ = can(...PLAN_PERMS);
+  const row = p => `<div class="plan-row"><div class="plan-main"><b>${esc(p.title)}</b>${p.details ? `<small class="muted">${esc(p.details)}</small>` : ''}
+      <small class="muted">${esc(p.by ? 'Written by ' + p.by : '')}${p.maintId && a.maintenance.some(m => m.id === p.maintId && isOpenWork(m)) ? ' · work is scheduled' : ''}</small></div>
+    <div class="plan-when">${planWhen(p)}</div><div>${badge(p.priority || 'Medium')} ${badge(p.status)}</div>
+    <div class="nowrap plan-act">${can_ && isOpenPlan(p) ? `${!p.maintId && can('maintenance.create') ? `<button class="btn sm" data-act="planSchedule" data-id="${a.id}" data-pid="${p.id}" title="Plan the work for it">${ic('calendar')}Schedule</button>` : ''}
+        <button class="icon-btn" title="Mark as done" data-act="planStatus" data-id="${a.id}" data-pid="${p.id}" data-to="Done">${ic('checkCircle')}</button>
+        <button class="icon-btn" title="Drop this plan (it stays in the list)" data-act="planStatus" data-id="${a.id}" data-pid="${p.id}" data-to="Dropped">${ic('x')}</button>` : ''}
+      ${can_ ? `<button class="icon-btn" title="Edit" data-act="planModal" data-id="${a.id}" data-pid="${p.id}">${ic('edit')}</button>` : ''}
+      ${can('areas.edit') ? `<button class="icon-btn" title="Delete" data-act="planDelete" data-id="${a.id}" data-pid="${p.id}">${ic('trash')}</button>` : ''}</div></div>`;
+  return `<div class="card mb"><div class="card-h">${ic('plan')}<h3>Future Plans</h3><span class="muted">(${open.length})</span><span class="sp"></span>
+      ${can_ ? `<button class="btn sm" data-act="planModal" data-id="${a.id}">${ic('plus')}Add Plan</button>` : ''}</div>
+    <p class="hint" style="margin:-4px 0 8px">What should happen here in the future: a new coat of paint next spring, new chairs, a bigger fridge. Plan the work when the time comes.</p>
+    <div class="plans">${open.map(row).join('') || '<p class="muted">No plans yet. Use "Add Plan" for anything you want to do here later.</p>'}</div>
+    ${closed.length ? `<details class="plans-closed"><summary>${closed.length} finished or dropped</summary><div class="plans">${closed.map(row).join('')}</div></details>` : ''}</div>`;
+}
+function planModal(a, pid) {
+  const p = pid ? a.plans.find(x => x.id === pid) : null;
+  if (pid && !p) return;
+  modal(p ? `Edit Plan – ${esc(a.name)}` : `Add Plan – ${esc(a.name)}`, `<div class="form-grid">
+    <label class="full">What is planned<input name="title" required maxlength="200" value="${esc(p ? p.title : '')}" placeholder="e.g. Repaint the walls, buy 10 new chairs"></label>
+    <label>Target date <span class="hint">(optional)</span><input name="targetDate" type="date" value="${esc(p ? p.targetDate || '' : '')}"></label>
+    <label>Priority<select name="priority">${options(PRIORITIES, p ? p.priority : 'Medium')}</select></label>
+    <label>Status<select name="status">${options(p ? ['Idea', 'Planned', 'Done', 'Dropped'] : ['Idea', 'Planned'], p ? p.status : 'Idea')}</select></label>
+    <label class="full">Details <span class="hint">(optional)</span><textarea name="details" rows="4" placeholder="Why, what is needed, who decides…">${esc(p ? p.details || '' : '')}</textarea></label>
+  </div>`, {
+    submit: p ? 'Save Plan' : 'Add Plan', allow: can(...PLAN_PERMS),
+    async onSubmit(d) {
+      const title = d.title.trim();
+      if (!title) { toast('Please write what is planned', true); return false; }
+      const fields = { title, details: d.details.trim(), targetDate: d.targetDate || '', priority: d.priority, status: d.status };
+      if (p) { Object.assign(p, fields); p.doneDate = d.status === 'Done' ? (p.doneDate || today()) : ''; }
+      else a.plans.push({ id: uid() + uid().slice(0, 4), ...fields, doneDate: '', maintId: '', by: me() });
+      if (!(await save(`${p ? 'Edit' : 'Add'} plan – ${a.name}`))) return false;
+      toast('Plan saved');
+    }
+  });
+}
+
 /* everything about one piece of work; photos taken for it are shown here */
 function maintView(a, mid) {
   const m = a.maintenance.find(x => x.id === mid);
   if (!m) return;
   const issue = m.issueId ? a.issues.find(x => x.id === m.issueId) : null, photos = a.photos.filter(p => p.workId === m.id);
-  const row = (k, v) => v ? `<div class="kv"><span>${k}</span><b>${v}</b></div>` : '';
+  const row = (k, v) => k && v ? `<div class="kv"><span>${k}</span><b>${v}</b></div>` : '';
   modal(`${esc(m.kind || 'Maintenance')} – ${esc(a.name)}`, `<p style="white-space:pre-wrap;margin:0 0 10px">${esc(m.details)}</p>
     <div class="kvs">${row('Status', badge(m.status))}${row(m.status === 'Done' && m.date === m.doneDate ? '' : 'Planned', esc(fmt(m.date)))}${row('Done', m.doneDate ? esc(fmt(m.doneDate)) : '')}
       ${row('Item', m.item ? esc(itemName(m.item)) + (m.serial ? ' · ' + esc(m.serial) : '') : '')}${row('Done by', esc(m.assignedTo || ''))}${row('Contractor', esc(m.contractor || ''))}
@@ -1512,22 +1592,24 @@ function issueView(a, iid) {
   });
 }
 
-function maintModal(a) {
+function maintModal(a, pre = {}) {
   const form = modal(`Schedule Maintenance – ${esc(a.name)}`, `<div class="form-grid">
     <label>Type of work<select name="kind">${options(WORK_KINDS, 'Repair')}</select></label>
     <label>Item<select name="item"><option value="">General / Area</option>${itemOptions('')}</select></label>
     <label class="hidden" data-show="serial">Which piece <span class="hint">(serial number)</span><select name="serial"></select></label>
-    <label>Planned Date<input type="date" name="date" value="${addDays(today(), 7)}" required></label>
+    <label>Planned Date<input type="date" name="date" value="${esc(pre.date || addDays(today(), 7))}" required></label>
     <label>Repeat<select name="repeatMonths">${options(REPEATS, '')}</select></label>
     <label>Assigned To<input name="assignedTo" value="Maintenance Team" required></label>
     <label>Contractor / company <span class="hint">(optional)</span><input name="contractor" autocomplete="off"></label>
     ${openIssues(a).length ? `<label>Related issue <span class="hint">(optional)</span><select name="issueId">${issueOptions(a)}</select></label>` : ''}
     <label>Set status<select name="status">${options(['Keep current status', 'Under Update', 'Need Maintenance'], 'Keep current status')}</select></label>
-    <label class="full">Work Description<textarea name="details" required placeholder="e.g. Replace damaged chair cushions"></textarea></label>
+    <label class="full">Work Description<textarea name="details" required placeholder="e.g. Replace damaged chair cushions">${esc(pre.details || '')}</textarea></label>
   </div>`, {
     submit: 'Schedule',
     async onSubmit(d) {
-      a.maintenance.push({ id: uid(), date: d.date, item: d.item, assignedTo: d.assignedTo, details: d.details.trim(), status: 'Scheduled', kind: d.kind, contractor: (d.contractor || '').trim(), issueId: d.issueId || '',
+      const wid = uid(), plan = pre.planId ? a.plans.find(x => x.id === pre.planId) : null;
+      if (plan) { plan.maintId = wid; plan.status = 'Planned'; if (!plan.targetDate) plan.targetDate = d.date; }  // the plan is now real work
+      a.maintenance.push({ id: wid, date: d.date, item: d.item, assignedTo: d.assignedTo, details: d.details.trim(), status: 'Scheduled', kind: d.kind, contractor: (d.contractor || '').trim(), issueId: d.issueId || '',
         serial: d.item ? d.serial || '' : '', repeatMonths: +d.repeatMonths || undefined });
       if (d.status !== 'Keep current status') a.status = d.status;
       if (!(await save(`Schedule maintenance – ${a.name}`))) return false;
@@ -1540,14 +1622,14 @@ function maintModal(a) {
 }
 function maintDone(a, mid) {
   const m = a.maintenance.find(x => x.id === mid);
-  if (!m) return;
+  if (!m || !isOpenWork(m)) return toast('This work is already done or cancelled.', true);
   modal('Complete Maintenance', `<p><b>${esc(m.details)}</b><br><span class="muted">${m.item ? esc(itemName(m.item)) + ' · ' : ''}${esc(m.assignedTo)}</span></p>
-    <div class="form-grid"><label>Completion Date<input type="date" name="date" value="${today()}"></label>
+    <div class="form-grid"><label>Completion Date<input type="date" name="date" value="${today()}" required></label>
     <label>Area status after work<select name="status">${options(STATUSES, 'Good')}</select></label>
     <label>Contractor / company <span class="hint">(optional)</span><input name="contractor" value="${esc(m.contractor || '')}" autocomplete="off"></label>
     ${canCost() ? `<label>Cost <span class="hint">(optional)</span><input name="cost" type="number" min="0" step="any" value="${esc(m.cost ?? '')}"></label>` : ''}
     <label>Warranty until <span class="hint">(optional)</span><input name="warrantyUntil" type="date" value="${esc(m.warrantyUntil || '')}"></label>
-    ${(a.issues.find(x => x.id === m.issueId && x.status !== 'Closed')) ? `<label class="full chk"><input type="checkbox" name="closeIssue" checked> Close the related issue too: <b>${esc(a.issues.find(x => x.id === m.issueId).title)}</b></label>` : ''}
+    ${(can('issues.followup') && a.issues.find(x => x.id === m.issueId && x.status !== 'Closed')) ? `<label class="full chk"><input type="checkbox" name="closeIssue" checked> Close the related issue too: <b>${esc(a.issues.find(x => x.id === m.issueId).title)}</b></label>` : ''}
     <label class="full">Notes<textarea name="notes"></textarea></label></div>`, {
     submit: 'Mark as Done',
     async onSubmit(d) {
@@ -1555,6 +1637,7 @@ function maintDone(a, mid) {
       m.contractor = (d.contractor || '').trim(); m.warrantyUntil = d.warrantyUntil || '';
       if (canCost() && d.cost !== '' && d.cost != null) m.cost = Math.max(0, +d.cost);
       closeIssueWith(a, m, d.date, d.closeIssue);
+      a.plans.filter(x => x.maintId === m.id && isOpenPlan(x)).forEach(x => { x.status = 'Done'; x.doneDate = d.date; });  // the plan behind this work is done
       const next = planNext(a, m, d.date);
       a.status = d.status;
       const q = m.item ? qty(a, m.item) : null;
@@ -1614,7 +1697,7 @@ function uploadModal(a, cat = 'Current', work = '') {
     <label class="full">Files<input type="file" name="files" multiple required accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.zip"></label>
     <label>Category<select name="category">${options([...PHOTO_CATEGORIES.map(c => [c, c + ' Photo']), ['Document', 'Document / Report']], cat)}</select></label>
     <label>Caption / Title<input name="caption" placeholder="e.g. Seating area after renovation"></label>
-    ${a.maintenance.some(m => m.status !== 'Cancelled') ? `<label class="full">Belongs to this work <span class="hint">(optional – e.g. photos before and after painting)</span><select name="work">${options([['', 'None'], ...[...a.maintenance].filter(m => m.status !== 'Cancelled').sort(byDateDesc).map(m => [m.id, `${fmt(m.doneDate || m.date)} – ${m.kind ? m.kind + ': ' : ''}${m.details.slice(0, 60)}`])], work)}</select></label>` : ''}
+    ${a.maintenance.some(m => m.status !== 'Cancelled') ? `<label class="full">Belongs to this work <span class="hint">(optional – e.g. photos before and after painting)</span><select name="work">${options([['', 'None'], ...[...a.maintenance].filter(m => m.status !== 'Cancelled').sort(byDateDesc).map(m => [m.id, `${fmt(m.doneDate || m.date)} – ${m.kind ? m.kind + ': ' : ''}${(m.details || '').slice(0, 60)}`])], work)}</select></label>` : ''}
     <p class="full hint">Photos are stored in their original full quality on the server. Files up to 50 MB each.</p>
   </div>`, {
     submit: 'Upload',
@@ -1718,10 +1801,13 @@ function viewEquipment() {
 }
 function itemTypeModal(tid) {
   const t = tid ? itemType(tid) : null;
-  modal(t ? 'Edit Item Type' : 'Add Item Type', `<div class="form-grid">
+  const form = modal(t ? 'Edit Item Type' : 'Add Item Type', `<div class="form-grid">
     <label>Name (plural)<input name="name" required value="${esc(t ? t.name : '')}" placeholder="e.g. Microwaves"></label>
     <label>Singular<input name="short" value="${esc(t ? t.short : '')}" placeholder="e.g. Microwave"></label>
-    <label class="full">Icon<select name="icon">${options(ITEM_ICONS, t ? t.icon : 'box')}</select></label></div>`, {
+    <div class="full"><b class="lbl-sm">Icon</b> <span class="hint" data-icon-name></span>
+      <input type="hidden" name="icon" value="${esc(t ? t.icon : 'box')}">
+      <input class="ico-search" placeholder="Search icons (for example: tv, water, chair)…" autocomplete="off">
+      <div class="ico-groups">${ICON_GROUPS.map(([g, names]) => `<div class="ico-group"><small>${esc(g)}</small><div class="ico-grid">${names.map(n => `<button type="button" class="ico-pick ${n === (t ? t.icon : 'box') ? 'on' : ''}" data-ico="${n}" title="${n}">${ic(n)}</button>`).join('')}</div></div>`).join('')}</div></div></div>`, {
     submit: t ? 'Save' : 'Add',
     extra: t ? `<button type="button" class="btn danger" data-act="itemTypeDelete" data-tid="${t.id}">${ic('trash')}Delete Item Type</button>` : '',
     async onSubmit(d) {
@@ -1735,6 +1821,16 @@ function itemTypeModal(tid) {
       toast('Item type saved');
     }
   });
+  const hidden = form.querySelector('[name=icon]'), label = form.querySelector('[data-icon-name]');
+  const mark = () => { label.textContent = hidden.value; form.querySelectorAll('.ico-pick').forEach(b => b.classList.toggle('on', b.dataset.ico === hidden.value)); };
+  form.addEventListener('click', e => { const b = e.target.closest('.ico-pick'); if (b) { hidden.value = b.dataset.ico; mark(); } });
+  form.querySelector('.ico-search').addEventListener('input', e => {
+    const q = e.target.value.trim().toLowerCase();
+    form.querySelectorAll('.ico-pick').forEach(b => b.classList.toggle('hidden', !!q && !b.dataset.ico.includes(q)));
+    form.querySelectorAll('.ico-group').forEach(g => g.classList.toggle('hidden', !g.querySelector('.ico-pick:not(.hidden)')));
+  });
+  form.querySelector('.ico-search').addEventListener('keydown', e => { if (e.key === 'Enter') e.preventDefault(); });
+  mark();
 }
 
 /* ============================== Transactions ============================== */
@@ -1795,6 +1891,11 @@ function viewMaintenance() {
       <td>${badge(i.priority)}</td><td>${badge(i.status)}</td><td class="num">${-daysFromToday(i.date)}</td><td>${esc(i.reportedBy)}</td>
       <td><button class="btn sm" data-act="issueView" data-id="${i.a.id}" data-iid="${i.id}">Follow up</button></td></tr>`).join('') || '<tr><td colspan="9" class="empty">No open issues 🎉</td></tr>'}
     </tbody></table></div></div>
+  ${(() => { const all = sortPlans(DB.areas.flatMap(a => a.plans.filter(isOpenPlan).map(p => ({ ...p, a })))).slice(0, 10);
+    return all.length ? `<div class="card mb"><div class="card-h">${ic('plan')}<h3>Coming Up: Future Plans</h3><span class="muted">(${DB.areas.reduce((n, a) => n + a.plans.filter(isOpenPlan).length, 0)})</span></div>
+      <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Target</th><th>Break Area</th><th>Plan</th><th>Priority</th><th>Status</th></tr></thead><tbody>
+      ${all.map(p => `<tr><td>${planWhen(p)}</td><td><a class="link" href="#/area/${p.a.id}">${esc(p.a.name)}</a></td><td class="wrap">${esc(p.title)}</td><td>${badge(p.priority || 'Medium')}</td><td>${badge(p.status)}</td></tr>`).join('')}
+      </tbody></table></div></div>` : ''; })()}
   <div class="grid2">
     <div class="card"><div class="card-h"><h3>Scheduled Maintenance</h3></div>
       <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Planned</th><th>Break Area</th><th>Work</th><th>Assigned To</th><th></th></tr></thead><tbody>
@@ -1851,6 +1952,12 @@ const REPORTS = {
       .filter(({ m }) => { const d = m.doneDate || m.date || ''; return (!from || d >= from) && (!to || d <= to); })
       .sort((x, y) => (y.m.doneDate || y.m.date || '').localeCompare(x.m.doneDate || x.m.date || ''))
       .map(({ a, m }) => [m.doneDate || m.date, a.name, m.kind || '', m.status, m.item ? itemName(m.item) : '', m.serial || '', m.details, m.assignedTo || '', m.contractor || '', m.warrantyUntil || '', ...(canCost() ? [m.cost ?? ''] : [])])
+  },
+  plans: {
+    title: 'Future Plans', desc: 'What is planned for the break areas: target date, priority and status.', byArea: true, perm: 'report.history',
+    head: () => ['Target Date', 'Break Area', 'Plan', 'Details', 'Priority', 'Status', 'Written By'],
+    rows: (from, to, areaId) => sortPlans(DB.areas.filter(a => !areaId || a.id === areaId).flatMap(a => a.plans.map(p => ({ ...p, a }))))
+      .map(p => [p.targetDate || '', p.a.name, p.title, p.details || '', p.priority || '', p.status, p.by || ''])
   },
   areahistory: {
     title: 'Area History', desc: 'Everything that happened in one or all break areas: notes, painting, renovation, repairs, maintenance, issues and inspections.',
@@ -1927,6 +2034,10 @@ function viewSettings() {
       </div>` : ''}
     </div>
   </div>
+  ${can('backups.manage', 'backups.restore') ? `<div class="card mb">
+      <div class="card-h">${ic('shield')}<h3>Data Safety</h3><span class="hint">Updates never lose your data</span><span class="sp"></span>${can('backups.manage') ? `<button class="btn sm" data-act="dataCheck">${ic('check')}Check my data now</button>` : ''}</div>
+      <div data-async="dataSafety"><p class="muted">Loading…</p></div>
+    </div>` : ''}
   <div class="grid2">
     ${can('backups.manage', 'backups.restore') ? `<div class="card">
       <div class="card-h">${ic('restore')}<h3>Backups</h3><span class="sp"></span>${can('backups.manage') ? `<button class="btn sm primary" data-act="backupNow">${ic('download')}Backup Now</button>` : ''}</div>
@@ -1943,7 +2054,7 @@ function viewSettings() {
 /* ============================== Activity log ============================== */
 const ENTITY_NAME = {
   areas: 'Break Area', inventory: 'Inventory', surveys: 'Satisfaction', photos: 'Photo', docs: 'Document', issues: 'Issue',
-  pieces: 'Serial Number', notes: 'Log Note', issueLog: 'Issue Follow-up', maintenance: 'Maintenance', inspections: 'Inspection', history: 'Transaction', itemTypes: 'Item Type', settings: 'Setting',
+  pieces: 'Serial Number', notes: 'Log Note', plans: 'Future Plan', issueLog: 'Issue Follow-up', maintenance: 'Maintenance', inspections: 'Inspection', history: 'Transaction', itemTypes: 'Item Type', settings: 'Setting',
   users: 'Person', profiles: 'Profile', nodes: 'PC'
 };
 const OP_BADGE = { insert: ['Added', 'b-green'], update: ['Changed', 'b-blue'], delete: ['Deleted', 'b-red'] };
@@ -2050,6 +2161,17 @@ const ASYNC = {
     </dl>
     ${i.lastBackupError ? `<p class="err-box">${ic('alert')} Last backup problem: ${esc(i.lastBackupError)}</p>` : ''}
     <div class="counts">${counts}</div>`;
+  },
+  async dataSafety(el) {
+    const d = await api('GET', '/api/data-safety'), h = d.history[0];
+    const line = h && h.snapshot ? `Updated from ${h.from || 'an earlier version'} to ${h.to} on ${fmt(String(h.at).slice(0, 10))} – every record was checked and kept`
+      : `Version ${d.program} – no update has changed your data`;
+    el.innerHTML = `<div class="bk-folder ok">${ic('check')}<div><b>${esc(line)}</b>
+        <small>Before every update the program makes a verified copy of all data (${d.snapshots.length} kept on this PC, in the folder "upgrades" of the data folder), checks that every record is still there unchanged,
+        and refuses to start if data was saved by a newer program. Nothing is ever deleted by an update.</small></div></div>
+      ${d.history.length > 1 || (h && h.snapshot) ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>When</th><th>From</th><th>To</th><th>Checked</th><th class="num">Break areas</th></tr></thead><tbody>
+        ${d.history.map(x => `<tr><td>${esc(fmt(String(x.at).slice(0, 10)))}</td><td>${esc(x.from || '–')}</td><td>${esc(x.to)}</td><td>${x.verified ? '<span class="badge b-green">All records kept</span>' : '<span class="badge b-gray">New installation</span>'}</td><td class="num">${esc((x.records || {})['Break Areas'] ?? '')}</td></tr>`).join('')}
+        </tbody></table></div>` : ''}`;
   },
   async backupFolder(el) {
     const f = await api('GET', '/api/backups/folder');
@@ -2463,6 +2585,67 @@ async function loadSample() {
   return save('Load sample data', { force: true });
 }
 
+/* ============================== Import from Excel ============================== */
+function importExcelModal() {
+  modal('Import from Excel', `<p>Bring your break areas and what is in them from an Excel file. <b>Nothing that already exists is changed</b> – you see what will be added before anything is saved,
+      and the same file can be imported twice without harm.</p>
+    <ol class="hint" style="margin:8px 0 12px 18px"><li>Download the template and fill it in (or use your own sheets: the columns are found by their names).</li>
+      <li>Choose the file. You see what would be added.</li><li>Press <b>Import</b>. A backup is made first.</li></ol>
+    <div style="display:flex;gap:8px;flex-wrap:wrap"><button type="button" class="btn" data-act="importTemplate">${ic('download')}Download the template</button>
+      <label class="btn primary">${ic('upload')}Choose the Excel file<input type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" data-act-change="importPlan" hidden></label></div>
+    <p class="hint" style="margin-top:10px">Sheet 1 <b>Break Areas</b>: Break Area, Location, Building, Floor, Capacity, Responsible, Area Size (m2), Status, Start Date, Description.
+      Sheet 2 <b>Contents</b>: Break Area, Item, Quantity, Condition, Serial Numbers (several: separated by commas), Notes. Old .xls files must be saved as .xlsx first.</p>`);
+}
+async function importPlanFile(file) {
+  toast('Reading the Excel file…', false, 30000);
+  let plan;
+  try { plan = await api('POST', '/api/import/preview', file, { raw: true }); }
+  catch (e) { return toast(e.message, true, 8000); }
+  toast('Checked');
+  const c = plan.counts, list = (rows, n) => rows.slice(0, n).map(x => `<li>${x}</li>`).join('');
+  modal('What the import would add', `<div class="kvs"><div class="kv"><span>New break areas</span><b>${c.areas}</b></div><div class="kv"><span>Contents (items in break areas)</span><b>${c.inventory}</b></div>
+      <div class="kv"><span>New item types</span><b>${c.itemTypes}</b></div><div class="kv"><span>Serial numbers</span><b>${c.serials}</b></div></div>
+    ${plan.areas.length ? `<h4 style="margin:12px 0 4px">New break areas</h4><ul class="hint">${list(plan.areas.map(a => esc(a.name) + ' <span class="muted">· ' + esc(a.location) + '</span>'), 12)}${plan.areas.length > 12 ? `<li>…and ${plan.areas.length - 12} more</li>` : ''}</ul>` : ''}
+    ${plan.itemTypes.length ? `<h4 style="margin:12px 0 4px">New item types (they get the box icon – change it later)</h4><p class="hint">${plan.itemTypes.map(t => esc(t.name)).join(', ')}</p>` : ''}
+    ${plan.skipped.length ? `<details style="margin-top:10px"><summary><b>${plan.skipped.length} rows left out</b> <span class="muted">(nothing is overwritten)</span></summary><ul class="hint">${list(plan.skipped.map(x => `${esc(x.sheet)} row ${x.row}: ${esc(x.reason)}`), 25)}${plan.skipped.length > 25 ? `<li>…and ${plan.skipped.length - 25} more</li>` : ''}</ul></details>` : ''}
+    ${plan.warnings.length ? `<details style="margin-top:6px"><summary><b>${plan.warnings.length} notes</b></summary><ul class="hint">${list(plan.warnings.map(esc), 25)}</ul></details>` : ''}
+    ${c.areas || c.inventory ? '' : '<p class="empty">Nothing new to import.</p>'}`, {
+    submit: 'Import', allow: !!(c.areas || c.inventory), wide: true,
+    async onSubmit() {
+      if (can('backups.manage')) { try { await api('POST', '/api/backups', {}); } catch (e) { /* the import itself is safe; the backup is an extra */ } }
+      const keyType = {}, keyArea = {};
+      for (const t of plan.itemTypes) {
+        let id = t.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || uid();
+        while (itemType(id)) id += '_';
+        keyType[t.key] = id;
+        DB.itemTypes.push({ id, name: t.name, short: t.short, icon: 'box' });
+      }
+      for (const x of plan.areas) {
+        let id;
+        do { id = 'ba' + Date.now().toString(36).slice(-4) + uid().slice(0, 4); } while (area(id));
+        keyArea[x.key] = id;
+        const start = x.startDate || today();
+        const a = { id, name: x.name, location: x.location, building: x.building, floor: x.floor, startDate: start, size: x.size ?? undefined, capacity: x.capacity ?? undefined,
+          responsible: x.responsible, status: x.status, active: true, description: x.description, inventory: [], pieces: [], notes: [], plans: [], photos: [], docs: [], issues: [],
+          maintenance: [], inspections: [], surveys: [], lastInspection: '', nextInspection: addDays(start, setting('inspectionDays')), inspectedBy: '' };
+        a.photos.push({ id: uid(), caption: 'Seating Area', variant: 'seating', seed: id + 'seating', category: 'Current', date: today(), main: true });
+        DB.areas.push(a);
+        pushHistory({ areaId: id, date: start, item: 'Initial Setup', action: 'Created', prev: null, next: null, details: 'Break area created by the Excel import', by: me() });
+      }
+      for (const i of plan.inventory) {
+        const a = area(i.area.id || keyArea[i.area.key]), item = i.item.id || keyType[i.item.key];
+        if (!a || !item) continue;
+        setQty(a, item, i.qty, i.condition);
+        if (i.note) invEntry(a, item).note = i.note;
+        i.serials.forEach(sn => a.pieces.push(newPiece(item, sn)));
+        pushHistory({ areaId: a.id, date: today(), item, action: 'Added', prev: 0, next: i.qty, details: `Added ${i.qty} by the Excel import` + (i.serials.length ? ` (serial ${i.serials.join(', ')})` : ''), by: me() });
+      }
+      if (!(await save(`Import from Excel – ${c.areas} break areas, ${c.inventory} contents`))) return false;
+      toast(`Imported: ${c.areas} break areas, ${c.inventory} contents`);
+    }
+  });
+}
+
 /* ============================== Import ============================== */
 async function dataURLToBlob(u) { return (await fetch(u)).blob(); }
 const extOf = type => ({ 'image/png': '.png', 'image/gif': '.gif', 'image/webp': '.webp', 'application/pdf': '.pdf' }[type] || '.jpg');
@@ -2475,7 +2658,7 @@ async function importOldBackup(file) {
   try {
     for (const a of data.areas) {
       a.surveys = a.surveys || [];
-      a.issues = a.issues || []; a.docs = a.docs || []; a.photos = a.photos || []; a.maintenance = a.maintenance || []; a.inspections = a.inspections || []; a.inventory = a.inventory || []; a.pieces = a.pieces || []; a.notes = a.notes || [];
+      a.issues = a.issues || []; a.docs = a.docs || []; a.photos = a.photos || []; a.maintenance = a.maintenance || []; a.inspections = a.inspections || []; a.inventory = a.inventory || []; a.pieces = a.pieces || []; a.notes = a.notes || []; a.plans = a.plans || [];
       for (const p of a.photos) if (p.src && p.src.startsWith('data:')) {
         const b = await dataURLToBlob(p.src);
         p.src = await uploadFile(b, 'photo' + extOf(b.type));
@@ -2529,7 +2712,34 @@ const ACT = {
   photoTab: d => { F.photoTab = d.tab; rerender(); },
   editArea: d => editArea(area(d.id)),
   serialModal: d => serialModal(area(d.id), d.item),
+  async dataCheck() {
+    toast('Checking all data…', false, 60000);
+    try {
+      const r = await api('POST', '/api/data-safety/check', {});
+      if (r.ok) toast(`All good: the databases are healthy and all ${r.checked_changes ?? ''} saved changes in the history are intact.`, false, 7000);
+      else modal('The check found problems', `<p>${r.problems.map(esc).join('<br>')}</p><p class="hint">Do not delete anything. Tell the person who looks after the program; the data can be rebuilt from the history.</p>`);
+    } catch (e) { toast('Check failed: ' + e.message, true); }
+  },
+  importExcel: () => importExcelModal(),
+  async importTemplate() { try { download('Break-Areas-Import-Template.xlsx', await api('GET', '/api/import/template.xlsx', undefined, { blob: true })); } catch (e) { toast(e.message, true); } },
   noteModal: d => noteModal(area(d.id), d.nid),
+  planModal: d => planModal(area(d.id), d.pid),
+  planSchedule: d => {
+    const a = area(d.id), p = a.plans.find(x => x.id === d.pid);
+    if (p) maintModal(a, { details: p.title + (p.details ? ': ' + p.details : ''), date: p.targetDate && p.targetDate >= today() ? p.targetDate : addDays(today(), 7), planId: p.id });
+  },
+  async planStatus(d) {
+    const a = area(d.id), p = a.plans.find(x => x.id === d.pid);
+    if (!p) return;
+    p.status = d.to; p.doneDate = d.to === 'Done' ? today() : '';
+    if (await save(`${d.to === 'Done' ? 'Plan done' : 'Plan dropped'} – ${a.name}`)) { rerender(); toast(d.to === 'Done' ? 'Plan marked as done' : 'Plan dropped'); }
+  },
+  async planDelete(d) {
+    const a = area(d.id), p = a.plans.find(x => x.id === d.pid);
+    if (!p || !confirm(`Delete this plan?\n\n${p.title}`)) return;
+    a.plans = a.plans.filter(x => x !== p);
+    if (await save(`Delete plan – ${a.name}`)) { rerender(); toast('Plan deleted'); }
+  },
   workModal: d => doneWorkModal(area(d.id)),
   logAll: () => { F.alog.all = !F.alog.all; rerender(); },
   exportAreaLog: d => { const a = area(d.id); exportXLSX('area_log_' + a.name.replace(/\W+/g, '_'), LOG_HEAD, logRows(a), 'Area Log'); },
@@ -2794,6 +3004,11 @@ document.addEventListener('change', async e => {
   onFilter(e);
   if (e.target.dataset.f) track('filter', e.target.dataset.f, e.target.value);
   if (e.target.dataset.logf && (e.target.tagName === 'SELECT' || e.target.type === 'date')) onLogFilter(e);
+  if (e.target.dataset.actChange === 'importPlan') {
+    const f = e.target.files[0];
+    e.target.value = '';
+    if (f) { closeModal(); await importPlanFile(f); }
+  }
   if (e.target.dataset.actChange === 'importBackup') {
     const f = e.target.files[0];
     e.target.value = '';
@@ -2921,7 +3136,7 @@ const isSampleArea = a => /^ba\d\d$/.test(a.id) && /^Break Area \d\d$/.test(a.na
    the id alone is not enough - the very first program version saved real records with short ids like h121 or ba23. */
 const SAMPLE_KEY = {
   photos: x => [x.caption, x.variant, x.src || ''], surveys: x => [x.month, x.department], issues: x => [x.date, x.title],
-  maintenance: x => [x.date, x.details], inspections: x => [x.date, x.by], history: x => [x.areaId, x.date, x.action, x.details]
+  maintenance: x => [x.date, x.details, x.cost == null && !x.contractor ? '' : 'edited'], inspections: x => [x.date, x.by], history: x => [x.areaId, x.date, x.action, x.details]
 };
 const SAMPLE_REC = { photos: 1, surveys: 1, issues: 1, maintenance: 1, inspections: 1 };
 let SEED_KEYS = null;

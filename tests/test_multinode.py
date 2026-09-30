@@ -10,7 +10,7 @@ import tempfile
 import time
 import unittest
 
-from harness import ADMIN, ApiError, Server, TcpProxy, make_authority, pair, wait_until
+from harness import ADMIN, APP, ApiError, Server, TcpProxy, make_authority, pair, wait_until
 
 
 def area_op(aid, name, **kw):
@@ -1393,3 +1393,183 @@ class T40_AreaLogAndWork(Base):
         self.converged()
         for c in (ac, pc1):
             self.assertEqual(next(m for m in get_area(c, 'L1')['maintenance'] if m['id'] == 'w0000002')['status'], 'Done')
+
+
+class T41_UpgradeKeepsData(unittest.TestCase):
+    """Version 2.6 (owner's request): after an update everything the people saved with the OLD program is there, unchanged.
+    The real previous releases are started from git on a data folder, filled through their own API, stopped, and the
+    current program is started on the same folder. Needs the git history (CI checks out everything)."""
+    RELEASES = {'2.5.0': 'a8c8c63', '2.4.0': '5f5b3ce'}
+
+    def old_program(self, commit):
+        import subprocess
+        import tarfile
+        import io
+        dest = tempfile.mkdtemp(prefix='bams-old-')
+        try:
+            out = subprocess.run(['git', 'archive', commit, 'server', 'js', 'css', 'index.html', 'config.json'], cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                 capture_output=True, check=True).stdout
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            shutil.rmtree(dest, ignore_errors=True)
+            self.skipTest('the git history of ' + commit + ' is not available')
+        tarfile.open(fileobj=io.BytesIO(out)).extractall(dest)
+        return dest
+
+    def content(self, c):
+        """Everything the screens show, without version counters."""
+        st = c.get('/api/state')
+
+        def clean(x):
+            if isinstance(x, dict):
+                return {k: clean(v) for k, v in x.items() if k != 'ver'}
+            if isinstance(x, list):
+                return [clean(v) for v in x]
+            return x
+        return clean({'areas': st['areas'], 'history': st['history'], 'itemTypes': st['itemTypes'], 'settings': st['settings']})
+
+    def subset(self, old, new, where='state'):
+        """Every old value is still there with the same value (new fields may exist, empty)."""
+        if isinstance(old, dict):
+            self.assertIsInstance(new, dict, where)
+            for k, v in old.items():
+                self.assertIn(k, new, f'{where}.{k} was lost')
+                self.subset(v, new[k], f'{where}.{k}')
+        elif isinstance(old, list):
+            self.assertEqual(len(old), len(new), f'{where}: number of records changed')
+            key = lambda x: json.dumps(x.get('id') if isinstance(x, dict) else x, sort_keys=True)
+            for o, n in zip(sorted(old, key=key), sorted(new, key=key)):
+                self.subset(o, n, f'{where}[{key(o)}]')
+        else:
+            self.assertEqual(old, new, where)
+
+    def test_update_from_previous_releases(self):
+        for version, commit in self.RELEASES.items():
+            with self.subTest(version=version):
+                program = self.old_program(commit)
+                s = Server('upg-' + version, app=os.path.join(program, 'server', 'app.py')).start()
+                try:
+                    c = make_authority(s)
+                    chairs = {'e': 'itemTypes', 'id': 'chairs', 'op': 'put', 'row': {'name': 'Chairs', 'short': 'Chair', 'icon': 'chair'}}
+                    c.post('/api/commit', {'label': 'old data', 'ops': [chairs, area_op('U1', 'Upgrade One', building='Main', floor='Floor 2', capacity=30),
+                                                                         area_op('U2', 'Upgrade Two')]})
+                    move(c, 'U1', 'chairs', 12)
+                    c.post('/api/commit', {'label': 'more', 'ops': [
+                        {'e': 'issues', 'id': 'i1', 'op': 'put', 'row': {'areaId': 'U1', 'title': 'Loose leg', 'status': 'Open', 'priority': 'High', 'date': '2026-09-01'}},
+                        {'e': 'maintenance', 'id': 'm1', 'op': 'put', 'row': {'areaId': 'U1', 'date': '2026-10-01', 'details': 'Repaint', 'status': 'Scheduled', 'assignedTo': 'Team'}},
+                        {'e': 'surveys', 'id': 's1', 'op': 'put', 'row': {'areaId': 'U2', 'month': '2026-08', 'department': 'Line 1', 'percentage': 88, 'respondents': 20}},
+                        {'e': 'inspections', 'id': 'n1', 'op': 'put', 'row': {'areaId': 'U2', 'date': '2026-09-02', 'by': 'Sara', 'result': 'Pass'}}]})
+                    if version >= '2.5':
+                        c.post('/api/commit', {'label': 'pieces', 'ops': [{'e': 'pieces', 'id': 'p1', 'op': 'put', 'row': {'areaId': 'U1', 'item': 'chairs', 'serial': 'CH-1', 'date': '2026-09-03'}}]})
+                    c.post('/api/users/save', {'username': 'old.user', 'full_name': 'Old User', 'password': 'Keep-me-safe77', 'must_change': False,
+                                               'perms': ['dashboard.view', 'areas.view'], 'areas': ['U1']})
+                    before = self.content(c)
+                    users_before = sorted(u['username'] for u in c.get('/api/users')['users'])
+                    s.stop()
+                    # the new program on the same data folder
+                    s.app = APP
+                    s.start()
+                    c = s.client()
+                    c.login(*ADMIN)
+                    self.subset(before, self.content(c), 'after the update')
+                    self.assertEqual(sorted(u['username'] for u in c.get('/api/users')['users']), users_before)
+                    s.client().login('old.user', 'Keep-me-safe77')
+                    info = c.get('/api/data-safety')
+                    last = info['history'][0]
+                    self.assertTrue(last['verified'])
+                    self.assertTrue(last['snapshot'] and info['snapshots'], 'a safety copy was made before the update')
+                    self.assertEqual(last['records']['Break Areas'], 2)
+                    self.assertTrue(c.post('/api/data-safety/check', {})['ok'])
+                    snap = os.path.join(s.data_dir, 'upgrades', last['snapshot'])
+                    self.assertTrue(os.path.exists(os.path.join(snap, 'bams.db')) and os.path.exists(os.path.join(snap, 'journal.db')))
+                    # the snapshot really is the old data: it opens with plain SQLite and has the areas
+                    import sqlite3
+                    n = sqlite3.connect(os.path.join(snap, 'bams.db')).execute('SELECT COUNT(*) FROM areas WHERE deleted=0').fetchone()[0]
+                    self.assertEqual(n, 2)
+                    # one more restart: nothing is updated twice
+                    s.stop()
+                    s.start()
+                    c = s.client()
+                    c.login(*ADMIN)
+                    self.assertEqual(len(c.get('/api/data-safety')['snapshots']), 1)
+                finally:
+                    s.cleanup()
+                    shutil.rmtree(program, ignore_errors=True)
+
+    def test_data_of_a_newer_program_is_refused_and_untouched(self):
+        s = Server('newer').start()
+        try:
+            make_authority(s)
+            s.stop()
+            marker = os.path.join(s.data_dir, 'program.json')
+            with open(marker) as f:
+                m = json.load(f)
+            m.update(version='9.9.9', schema=99)
+            with open(marker, 'w') as f:
+                json.dump(m, f)
+            files = {n: hashlib.sha256(open(os.path.join(s.data_dir, n), 'rb').read()).hexdigest() for n in ('bams.db', 'journal.db', 'auth.db')}
+            with self.assertRaises(Exception):
+                s.start()
+            self.assertIn('newer version', open(os.path.join(s.data_dir, 'logs', 'STARTUP_PROBLEM.txt')).read())
+            for n, h in files.items():
+                self.assertEqual(hashlib.sha256(open(os.path.join(s.data_dir, n), 'rb').read()).hexdigest(), h, n + ' was touched')
+            self.assertFalse(os.path.exists(os.path.join(s.data_dir, 'upgrades')))
+        finally:
+            s.cleanup()
+
+
+class T42_PlansAndImport(Base):
+    """2.6: future plans of a break area (done wins over dropped on two PCs, who may write them) and the Excel import
+    (only for people who work with all break areas, bad files are a clear message, nothing is saved by the preview)."""
+    N = 2
+
+    def test_plans_and_import(self):
+        import excel_import
+        import xlsx
+        ac, pc1 = self.ac, self.clients[1]
+        ac.post('/api/commit', {'label': 'area', 'ops': [area_op('P1', 'Plan One')]})
+        self.converged()
+        plan = lambda pid, **kw: {'e': 'plans', 'id': pid, 'op': 'put', 'row': {'areaId': 'P1', 'title': 'Repaint next spring', 'priority': 'Medium', 'status': 'Planned',
+                                                                               'targetDate': '2027-03-01', 'by': 'x', **kw}}
+        ac.post('/api/commit', {'label': 'plan', 'ops': [plan('pl000001')]})
+        with self.assertRaises(ApiError) as e:
+            ac.post('/api/commit', {'label': 'empty', 'ops': [plan('pl000002', title='  ')]})
+        self.assertEqual(e.exception.code, 400)
+        self.converged()
+        get = lambda c: next(p for p in get_area(c, 'P1')['plans'] if p['id'] == 'pl000001')
+        a1, a2 = get(ac), get(pc1)
+        put = lambda p, **kw: {'e': 'plans', 'id': 'pl000001', 'op': 'put', 'ver': p['ver'], 'row': {**{k: v for k, v in p.items() if k != 'ver'}, 'areaId': 'P1', **kw}}
+        self.unplug(1)
+        ac.post('/api/commit', {'label': 'drop', 'ops': [put(a1, status='Dropped')]})
+        pc1.post('/api/commit', {'label': 'done', 'ops': [put(a2, status='Done', doneDate='2026-09-30')]})
+        self.plug(1)
+        self.converged()
+        for c in (ac, pc1):
+            self.assertEqual((get(c)['status'], get(c)['doneDate']), ('Done', '2026-09-30'))
+
+        # who may write plans / import
+        ac.post('/api/users/save', {'username': 'view.only', 'full_name': 'View Only', 'password': 'Calm-morning64', 'must_change': False,
+                                    'perms': ['dashboard.view', 'areas.view'], 'areas': None})
+        ac.post('/api/users/save', {'username': 'area.maker', 'full_name': 'Area Maker', 'password': 'Bright-hall58x', 'must_change': False,
+                                    'perms': ['dashboard.view', 'areas.view', 'areas.create', 'areas.edit'], 'areas': None})
+        ac.post('/api/users/save', {'username': 'one.area', 'full_name': 'One Area', 'password': 'Quiet-lane49x', 'must_change': False,
+                                    'perms': ['dashboard.view', 'areas.view', 'areas.create', 'areas.edit'], 'areas': ['P1']})
+        viewer, maker, limited = self.A.client(), self.A.client(), self.A.client()
+        viewer.login('view.only', 'Calm-morning64')
+        maker.login('area.maker', 'Bright-hall58x')
+        limited.login('one.area', 'Quiet-lane49x')
+        with self.assertRaises(ApiError) as e:
+            viewer.post('/api/commit', {'label': 'no', 'ops': [plan('pl000003')]})
+        self.assertEqual(e.exception.code, 403)
+        data = xlsx.build([(n, h, r) for n, (h, r) in excel_import.TEMPLATE.items()])
+        for c, code in ((viewer, 403), (limited, 403)):
+            with self.assertRaises(ApiError) as e:
+                c.call('POST', '/api/import/preview', raw=data, headers={'Content-Type': 'application/octet-stream'})
+            self.assertEqual(e.exception.code, code)
+        before = len(ac.get('/api/state')['areas'])
+        res = maker.call('POST', '/api/import/preview', raw=data, headers={'Content-Type': 'application/octet-stream'})
+        self.assertEqual(res['counts']['areas'], 2)
+        self.assertEqual(len(ac.get('/api/state')['areas']), before, 'the preview saves nothing')
+        with self.assertRaises(ApiError) as e:
+            maker.call('POST', '/api/import/preview', raw=b'this is not an excel file' * 10, headers={'Content-Type': 'application/octet-stream'})
+        self.assertEqual(e.exception.code, 400)
+        self.assertIn('Excel', e.exception.msg)

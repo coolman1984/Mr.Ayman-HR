@@ -32,6 +32,9 @@ from auth import ADMIN_PERMS, ALL, PERMISSIONS, AuthError, Forbidden  # noqa: E4
 from store import BadRequest, Conflict, now, strip_cost  # noqa: E402
 from sync import SyncService  # noqa: E402
 from system import System, lock_data  # noqa: E402
+from upgrade import DataFromNewerVersion, UpgradeVerificationFailed, check_now  # noqa: E402
+import excel_import  # noqa: E402
+import xlsx_read  # noqa: E402
 
 ROOT = os.path.dirname(HERE)  # program files (web pages); in the installed program they are built into BAMS.exe (_assets)
 HOME = os.environ.get('BAMS_HOME') or ROOT  # config.json, data and backups: %ProgramData%\BAMS when installed
@@ -145,8 +148,25 @@ def say(msg):
 
 
 INSTANCE = lock_data(DATA_DIR)  # taken before anything touches the data
+def stop_with_message(text):
+    """The program cannot start safely: say why where the person can see it (the installed program has no console), then stop."""
+    say('NOT STARTED: ' + text)
+    try:
+        with open(os.path.join(DATA_DIR, 'logs', 'STARTUP_PROBLEM.txt'), 'w', encoding='utf-8') as f:
+            f.write(f'{datetime.now():%Y-%m-%d %H:%M:%S}\n{text}\n')
+        if os.name == 'nt':
+            import ctypes
+            ctypes.windll.user32.MessageBoxW(0, text, 'Break Area Management System', 0x10)
+    except Exception:  # noqa: BLE001 - the log line above is already written
+        pass
+    raise SystemExit(3)
+
+
 if INSTANCE:
-    SYSTEM = System(DATA_DIR, CFG, UPLOADS, resolve(CFG['backup_dir']), [resolve(d) for d in CFG['extra_backup_dirs']], log=say)
+    try:
+        SYSTEM = System(DATA_DIR, CFG, UPLOADS, resolve(CFG['backup_dir']), [resolve(d) for d in CFG['extra_backup_dirs']], log=say)
+    except (DataFromNewerVersion, UpgradeVerificationFailed) as e:
+        stop_with_message(str(e))
     STORE, AUTH, BACKUPS, JOURNAL, NODE = SYSTEM.store, SYSTEM.auth, SYSTEM.backups, SYSTEM.journal, SYSTEM.node
     SYNC = SyncService(SYSTEM, CFG, UPLOADS, log=say)
 else:
@@ -162,11 +182,11 @@ CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';
        "connect-src 'self' data: blob:; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
 PERM_LABEL = {p: label for _, ps in PERMISSIONS for p, label in ps}
 REPORT_PERMS = [p for p in ALL if p.startswith('report.')] + ['export.excel', 'logs.view', 'logs.activity', 'logs.security']
-ENTITY_TITLE = {'areas': 'break areas', 'inventory': 'inventory', 'pieces': 'serial numbers', 'notes': 'area log notes', 'surveys': 'satisfaction results', 'photos': 'photos',
+ENTITY_TITLE = {'areas': 'break areas', 'inventory': 'inventory', 'pieces': 'serial numbers', 'notes': 'area log notes', 'plans': 'future plans', 'surveys': 'satisfaction results', 'photos': 'photos',
                 'docs': 'documents', 'issues': 'issues', 'issueLog': 'issue follow-ups', 'maintenance': 'maintenance',
                 'inspections': 'inspections', 'history': 'transactions', 'itemTypes': 'item types', 'settings': 'settings'}
 OP_WORD = {'insert': 'add', 'update': 'change', 'delete': 'delete'}
-HISTORY_PERMS = ('inventory.edit', 'inventory.delete', 'areas.create', 'areas.edit', 'maintenance.complete')
+HISTORY_PERMS = ('inventory.edit', 'inventory.delete', 'areas.create', 'areas.edit', 'maintenance.complete', 'maintenance.create')
 
 
 def required(entity, op, changed):
@@ -184,6 +204,10 @@ def required(entity, op, changed):
         return ('areas.edit',)
     if entity == 'inventory':
         return ('inventory.delete', 'itemtypes.manage') if op == 'delete' else ('inventory.edit',)
+    if entity == 'maintenance' and op == 'update' and (changed.get('status') or [None, None])[1] == 'Done':
+        return ('maintenance.complete',)  # scheduling work does not allow saying it is done (cancelling does not need it)
+    if entity == 'plans':  # decisions about the future of a break area
+        return ('areas.edit',) if op == 'delete' else ('areas.edit', 'maintenance.create')
     if entity == 'notes':  # the log of a break area: anybody who works on the break area writes in it
         return ('areas.edit',) if op == 'delete' else ('areas.edit', 'inventory.edit', 'maintenance.create', 'maintenance.complete',
                                                        'issues.create', 'issues.followup', 'inspections.create')
@@ -528,6 +552,13 @@ class Handler(BaseHTTPRequestHandler):
         if p == '/api/backups':
             self.need('backups.manage', 'backups.restore')
             return self.send(200, BACKUPS.list())
+        if p == '/api/import/template.xlsx':  # an empty workbook with the columns the import understands, and examples
+            self.need('areas.create')
+            return self.send(200, xlsx.build([(n, h, r) for n, (h, r) in excel_import.TEMPLATE.items()]), TYPES['.xlsx'],
+                             {'Content-Disposition': 'attachment; filename="Break-Areas-Import-Template.xlsx"'})
+        if p == '/api/data-safety':  # what the last program update did to the data, and the safety copies it made
+            self.need('backups.manage', 'backups.restore')
+            return self.send(200, {**SYSTEM.upgrade.info(), 'program': VERSION})
         if p == '/api/backups/folder':
             self.need('backups.manage')
             return self.send(200, {'dirs': BACKUPS.extra, 'error': BACKUPS.last_error, 'local': self.ip in LOCAL_IPS,
@@ -544,7 +575,7 @@ class Handler(BaseHTTPRequestHandler):
             res = STORE.query_log('audit' if p == '/api/audit' else 'activity', qs.get('q', ''), qs.get('user', ''),
                                                   qs.get('type', ''), qs.get('area', ''), qs.get('from', ''), qs.get('to', ''),
                                                   max(1, min(1000, int(qs.get('limit', 200)))), max(0, int(qs.get('offset', 0))), self.u['areas'], node,
-                                                  admin=is_admin(self.u))
+                                                  admin=is_admin(self.u), hide_cost=not self.can('maintenance.cost'))
             if p == '/api/audit' and not self.can('maintenance.cost'):
                 hide_costs(res['rows'])
             return self.send(200, res)
@@ -693,7 +724,7 @@ class Handler(BaseHTTPRequestHandler):
                 raise Forbidden('Conflicts are decided only in Devices & Sync by an administrator.')
             if not self.can('maintenance.cost') and isinstance(d.get('ops'), list):
                 for o in d['ops']:  # a person who may not see costs can neither read, change nor wipe them
-                    if isinstance(o, dict) and o.get('e') == 'maintenance' and isinstance(o.get('row'), dict):
+                    if isinstance(o, dict) and o.get('e') == 'maintenance' and isinstance(o.get('id'), str) and isinstance(o.get('row'), dict):
                         o['row'] = {**o['row'], 'cost': STORE.maintenance_cost(o.get('id'))}
             res = STORE.commit(self.user, self.ip, label, d.get('ops'), force, guard=commit_guard(self.u), user_id=self.u['id'])
             log.info('COMMIT %s (%s) "%s" %s changes', self.user, self.ip, label, res['changes'])
@@ -713,6 +744,22 @@ class Handler(BaseHTTPRequestHandler):
             data = xlsx.build([(s.get('name', 'Sheet'), s.get('head', []), s.get('rows', [])) for s in d.get('sheets', [])])
             name = ''.join(ch for ch in str(d.get('filename') or 'export') if ch.isalnum() or ch in ' _-.')[:80]
             return self.send(200, data, TYPES['.xlsx'], {'Content-Disposition': f'attachment; filename="{name}.xlsx"'})
+        if p == '/api/import/preview':  # reads an Excel workbook and returns what an import would add (saves nothing)
+            self.need('areas.create')
+            if self.u['areas'] is not None:
+                raise Forbidden('Importing adds break areas, so it is only for people who work with all break areas.')
+            data = self.body(20 * 1048576)
+            try:
+                res = excel_import.plan(data, STORE.state(None, False, False))
+            except xlsx_read.XlsxError as e:
+                raise BadRequest(str(e))
+            STORE.log_activity(self.user, self.ip, [{'type': 'import', 'action': 'Excel import checked', 'target': f'{res["counts"]["areas"]} areas, {res["counts"]["inventory"]} contents'}])
+            return self.send(200, res)
+        if p == '/api/data-safety/check':  # "Check my data now": integrity of the databases and the whole history
+            self.need('backups.manage')
+            res = check_now(SYSTEM)
+            STORE.log_activity(self.user, self.ip, [{'type': 'backup', 'action': 'Data check', 'target': 'ok' if res['ok'] else 'problems found'}])
+            return self.send(200, res)
         if p == '/api/backups':
             self.need('backups.manage')
             name = BACKUPS.create('manual')

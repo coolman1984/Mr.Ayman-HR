@@ -701,3 +701,54 @@ details.help-q > summary:hover { color: var(--blue-2); }
 .kv span { color: var(--muted); font-size: 12px; }
 .chk { display: flex; align-items: center; gap: 8px; font-weight: 400; }
 @media (max-width: 600px) { .kvs { grid-template-columns: 1fr; } }
+
+/* icon picker of the item type window */
+.ico-search { width: 100%; margin: 6px 0 8px; }
+.ico-groups { max-height: 280px; overflow: auto; border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; }
+.ico-group { margin-bottom: 8px; }
+.ico-group small { display: block; color: var(--muted); font-weight: 700; margin-bottom: 4px; }
+.ico-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(42px, 1fr)); gap: 6px; }
+.ico-pick { display: flex; align-items: center; justify-content: center; height: 42px; border: 1px solid var(--line); border-radius: 10px; background: #fff; color: var(--navy); cursor: pointer; }
+.ico-pick .ic { width: 22px; height: 22px; }
+.ico-pick:hover { border-color: #bcd0f5; background: #fafcff; }
+.ico-pick.on { border-color: var(--blue); background: var(--blue-l); color: var(--blue); box-shadow: 0 0 0 2px rgba(29, 78, 216, .15); }
+
+/* future plans */
+.plans { display: flex; flex-direction: column; }
+.plan-row { display: grid; grid-template-columns: minmax(0, 1fr) 150px 170px 250px; gap: 10px; align-items: center; padding: 9px 0; border-bottom: 1px solid var(--line); }
+.plan-row:last-child { border-bottom: 0; }
+.plan-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
+.plan-when { font-size: 13px; }
+.plans-closed { margin-top: 8px; } .plans-closed summary { cursor: pointer; color: var(--muted); font-weight: 600; }
+@media (max-width: 800px) { .plan-row { grid-template-columns: 1fr; } }
+
+/* search everything (Ctrl K) */
+.search-btn { display: inline-flex; align-items: center; gap: 8px; border: 1px solid var(--line); background: #fff; color: var(--muted); border-radius: 10px; padding: 6px 10px; cursor: pointer; font: inherit; font-size: 13px; }
+.search-btn:hover { border-color: #bcd0f5; color: var(--navy); }
+.search-btn .sb-ic { display: inline-flex; } .search-btn .ic { width: 16px; height: 16px; }
+kbd { font: 600 11px/1 Consolas, monospace; background: #f2f5fa; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5px; padding: 3px 6px; color: #475467; }
+.pal-back { position: fixed; inset: 0; background: rgba(11, 31, 77, .38); z-index: 90; display: flex; justify-content: center; align-items: flex-start; padding-top: 12vh; }
+.pal { width: min(640px, calc(100vw - 24px)); background: #fff; border-radius: 14px; box-shadow: 0 24px 60px rgba(11, 31, 77, .35); overflow: hidden; }
+.pal-in { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+.pal-in .ic { width: 18px; height: 18px; color: var(--muted); }
+.pal-in input { flex: 1; border: 0; outline: 0; font: inherit; font-size: 16px; min-width: 0; }
+.pal-list { max-height: 52vh; overflow: auto; padding: 6px; }
+.pal-item { display: flex; align-items: center; gap: 12px; padding: 9px 10px; border-radius: 10px; cursor: pointer; }
+.pal-item .ic { width: 20px; height: 20px; color: var(--blue); flex: none; }
+.pal-item div { min-width: 0; } .pal-item b { display: block; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pal-item small { color: var(--muted); }
+.pal-item.on, .pal-item:hover { background: var(--blue-l); }
+.pal-empty { padding: 18px; text-align: center; color: var(--muted); }
+.pal-foot { display: flex; gap: 16px; padding: 8px 14px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+@media (max-width: 700px) { .search-btn .sb-txt, .search-btn kbd { display: none; } .pal-back { padding-top: 6vh; } }
+
+/* needs attention (dashboard) */
+.att-row { display: flex; align-items: center; gap: 12px; padding: 9px 10px; border-radius: 10px; text-decoration: none; color: inherit; border-left: 4px solid transparent; }
+.att-row:hover { background: var(--bg); }
+.att-row > .ic:first-child { width: 22px; height: 22px; flex: none; }
+.att-row > .ic:last-child { width: 16px; height: 16px; color: var(--muted); margin-left: auto; flex: none; }
+.att-row div { min-width: 0; flex: 1; } .att-row small { display: block; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.att-row.red { border-left-color: var(--red); } .att-row.red > .ic:first-child { color: var(--red); }
+.att-row.orange { border-left-color: #f59e0b; } .att-row.orange > .ic:first-child { color: #b45309; }
+
+.plan-act { justify-self: end; }

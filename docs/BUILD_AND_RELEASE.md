@@ -14,6 +14,13 @@ Everything below happens on GitHub; no Windows PC is needed for building. For th
    A version that already has a release is not published twice (raise the version for a new release).
 4. The installer of every build (also pull requests) is under **Actions → the run → Artifacts** for 30 days.
 
+## Data safety of every release
+
+Before a release: add the commit of the PREVIOUS release to `RELEASES` in `tests/test_multinode.py` (`T41_UpgradeKeepsData`). The test starts that real program on a
+data folder, fills it, and starts the new program on the same folder: everything must still be there. Nothing else may rewrite user data without a `MIGRATIONS` step
+(`server/upgrade.py`). The installer never touches `%ProgramData%\BAMS`; the program itself makes a verified copy of the data (`data/upgrades/`) before an update
+changes anything, and refuses to start with data of a newer version.
+
 ## Give it to the company
 
 1. Install it on the **administrator PC** first, then on every other PC **that has the program**.

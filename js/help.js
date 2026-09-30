@@ -51,6 +51,7 @@ const HELP = [
       number. Find a serial number in ${helpBold('Furniture & Equipment → Serial Numbers')}. The same serial number cannot be entered twice.`],
     ['How do I move items to another break area?', `Choose the action ${helpBold('Transferred')} and the break area it goes to. It is removed from
       one and added to the other in one step.`],
+    ['How do I choose an icon for an item type?', `${helpBold('Furniture & Equipment → Add Item Type')} (or Edit): click an icon – there are 124 in seven groups – or type a word in the search box (tv, water, chair…).`],
     ['Where do I see the totals?', `${helpBold('Furniture & Equipment')} shows every item type with totals and how many are not in good
       condition. ${helpBold('Export Excel')} gives the full list.`],
     ['How do I add a new kind of item (e.g. "Microwave")?', `${helpBold('Furniture & Equipment')} → ${helpBold('Add Item Type')} (needs the permission
@@ -88,6 +89,8 @@ const HELP = [
   { id: 'files', title: 'Photos and documents', icon: 'image', items: [
     ['How do I add photos or documents?', `Open the break area → ${helpBold('Upload Photo / Document')}. Photos keep their full quality; you can
       choose the main photo (${helpBold('Set as Main Photo')}). Files up to 50 MB.`],
+    ['How do I write down plans for the future?', `Break area → ${helpBold('Future Plans')} → ${helpBold('Add Plan')}: what, target date (optional), priority. ${helpBold('Schedule')} turns it into planned work with the text filled in;
+      when that work is completed the plan is marked done. The ✓ marks a plan done by hand, the × drops it (it stays in the list). Plans past their date show on the dashboard.`],
     ['How do I keep the photos of a painting or renovation together?', `Upload with ${helpBold('Category: Before')} and ${helpBold('After')} and choose ${helpBold('Belongs to this work')}.
       Open the work (the small page symbol in the Area Log) to see its photos together, or press ${helpBold('Add photo')} there.`],
     ['A photo says "Photo is being copied".', `It was added on another PC and is still on its way. It appears by itself in a moment.`]
@@ -97,6 +100,9 @@ const HELP = [
       Schedule, Satisfaction Survey, Summary by Location, Area History (everything that happened in one or all break areas), Maintenance & Work Done and QR labels. Each can be filtered, printed or saved as PDF
       (${helpBold('Print / PDF')}) and exported to Excel.`],
     ['How do I save something as PDF?', `${helpBold('Print / PDF')} → in the print window choose ${helpBold('Save as PDF')} as the printer.`],
+    ['Can I bring my Excel lists in?', `Yes: ${helpBold('Break Areas → Import from Excel')}. Download the template, fill in break areas (sheet 1) and what is in them with serial numbers (sheet 2), choose the file and check
+      what would be added. Nothing that already exists is changed, so importing the same file twice is harmless. A backup is made first.`],
+    ['Can I search for something quickly?', `Press ${helpBold('Ctrl + K')} (or the Search button at the top), type a few letters – break area, serial number, plan, issue or page – and press Enter.`],
     ['Can I export everything?', `${helpBold('Reports → Export Everything')} gives one Excel file with all data and logs (needs the permission
       "Complete database export").`]
   ]},
@@ -116,6 +122,8 @@ const HELP = [
       ${helpBold('Settings → Delete Sample Data')} and type ${helpBold('DELETE')}. A backup is made first and everything stays in the
       ${helpBold('Recycle Bin')}, so nothing is lost. Break areas you renamed
       are kept with their inventory and everything you added; only their sample photos, issues, surveys and history are removed. It is never loaded again by itself (${helpBold('Load Sample Data')} brings it back on purpose).`],
+    ['Is my data safe when the program is updated?', `Yes. Before an update the program makes a verified copy of all data (folder ${helpBold('upgrades')} in the data folder), checks afterwards that every record is still
+      there and unchanged, and refuses to start if the data was saved by a newer program. ${helpBold('Settings → Data Safety')} shows the last update; ${helpBold('Check my data now')} tests the databases and the whole history.`],
     ['Does the PC with the program have to stay on?', `Yes, for everybody who uses it from another PC or phone (for example with a
       personal link). The program starts by itself after somebody ${helpBold('signs in to Windows')} on that PC and runs in the background –
       you may ${helpBold('lock')} the screen (Windows key + L), but do not sign out or switch the PC off during working hours. If it was
