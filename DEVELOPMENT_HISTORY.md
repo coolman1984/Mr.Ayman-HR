@@ -44,6 +44,9 @@ a managed company network). Nothing in the program can open a port that the netw
   was written. Lesson: a page on 127.0.0.1 is reachable by every web site through DNS rebinding – always check Host, not only Origin.
 - Automatic PR review (Codex): another name of the same PC (DNS alias, second network card) passed the "this PC" check, so a lone PC could point to
   itself and lock itself out. Now the name is resolved, and the answer's PC id is compared with this PC's id.
+- CI once failed the old test `T03.test_g_revoke` (not this change): pc2's change after its removal reached the administrator PC through pc1, which
+  did not know the removal yet. That is the intended offline-first rule (a change made without knowing of the removal still counts); the test now
+  waits until pc1 knows the removal. Lesson: "removal seen by the removed PC" is not "removal known by every PC".
 - `T44` checks the sharing port is *not* accepted as a web address (`Nothing answers`), the address of this PC is refused, and another web site cannot
   change the saved address (Origin check on the small page).
 

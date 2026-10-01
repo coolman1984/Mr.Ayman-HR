@@ -408,6 +408,10 @@ class T03_Cluster(Base):
         self.converged()
         ac.post('/api/devices/revoke', {'id': self.servers[2].node_id})
         wait_until(lambda: any(a['kind'] == 'revoked' for a in self.clients[2].get('/api/devices')['alerts']), 30, what='revocation seen')
+        # every other PC must know the removal first: a PC that does not know it yet still passes on what the removed PC made
+        # without knowing it was removed (by design - offline-first); CI once ran pc2's change through pc1 that way
+        wait_until(lambda: {n['name']: n['status'] for n in self.clients[1].get('/api/devices')['nodes']}.get('pc2') == 'revoked', 30,
+                   what='removal known on pc1')
         self.clients[2].post('/api/commit', {'label': 'after revoke', 'ops': [area_op('RV2', 'After revoke')]})
         time.sleep(4)
         self.assertIsNone(get_area(self.ac, 'RV2'))
