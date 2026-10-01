@@ -408,6 +408,10 @@ class T03_Cluster(Base):
         self.converged()
         ac.post('/api/devices/revoke', {'id': self.servers[2].node_id})
         wait_until(lambda: any(a['kind'] == 'revoked' for a in self.clients[2].get('/api/devices')['alerts']), 30, what='revocation seen')
+        # every other PC must know the removal first: a PC that does not know it yet still passes on what the removed PC made
+        # without knowing it was removed (by design - offline-first); CI once ran pc2's change through pc1 that way
+        wait_until(lambda: {n['name']: n['status'] for n in self.clients[1].get('/api/devices')['nodes']}.get('pc2') == 'revoked', 30,
+                   what='removal known on pc1')
         self.clients[2].post('/api/commit', {'label': 'after revoke', 'ops': [area_op('RV2', 'After revoke')]})
         time.sleep(4)
         self.assertIsNone(get_area(self.ac, 'RV2'))
@@ -1417,7 +1421,7 @@ class T41_UpgradeKeepsData(unittest.TestCase):
     """Version 2.6 (owner's request): after an update everything the people saved with the OLD program is there, unchanged.
     The real previous releases are started from git on a data folder, filled through their own API, stopped, and the
     current program is started on the same folder. Needs the git history (CI checks out everything)."""
-    RELEASES = {'2.5.0': 'a8c8c63', '2.4.0': '5f5b3ce'}
+    RELEASES = {'2.6.0': '2c5dc66', '2.5.0': 'a8c8c63', '2.4.0': '5f5b3ce'}
 
     def old_program(self, commit):
         import subprocess
@@ -1645,6 +1649,141 @@ class T43_NewPcTrap(unittest.TestCase):
             with self.assertRaises(ApiError) as e:
                 ac.post('/api/node/leave', {})
             self.assertEqual(e.exception.code, 403)
+        finally:
+            A.cleanup()
+            B.cleanup()
+
+
+def page_of(base, path='/'):
+    """(status, Location, body) of one GET, without following a redirect."""
+    import http.client
+    from urllib.parse import urlparse
+    u = urlparse(base)
+    c = http.client.HTTPConnection(u.hostname, u.port, timeout=30)
+    try:
+        c.request('GET', path)
+        r = c.getresponse()
+        return r.status, r.getheader('Location'), r.read().decode('utf-8', 'replace')
+    finally:
+        c.close()
+
+
+def local_post(c, path, body):
+    """A POST like the browser on the PC itself sends it (with Origin)."""
+    return c.call('POST', path, body, headers={'Origin': c.base})
+
+
+class T44_OfficeMode(unittest.TestCase):
+    """The field report after 2.6: in the office only the web address of the administrator PC can be reached (personal links work,
+    "Join" never connects - the sharing port is blocked). A PC in office mode keeps no data and opens the administrator PC like a
+    personal link: the person logs in there with user name and password and sees the company data."""
+
+    def test_new_pc_uses_the_office_system(self):
+        A, B = Server('office-admin').start(), Server('office-desk').start()
+        try:
+            ac = make_authority(A)
+            ac.post('/api/users/save', {'username': 'sara.m', 'full_name': 'Sara Mostafa', 'password': 'Desk-lamp-5531', 'must_change': False,
+                                        'perms': ['dashboard.view', 'areas.view', 'equipment.view'], 'areas': None})
+            ac.post('/api/commit', {'label': 'data', 'ops': [area_op('C1', 'Company Canteen')]})
+            b = B.client()
+            # the address is checked first: the web address of the administrator PC (what a personal link uses)
+            found = local_post(b, '/api/office/probe', {'address': A.base + '/k/some-personal-link'})
+            self.assertEqual((found['role'], found['url']), ('authority', A.base + '/'))
+            for bad, why in (('127.0.0.1:1', 'Nothing answers'), (B.base, 'this PC'), ('has spaces', 'address of the administrator PC'),
+                             ('127.0.0.1:' + str(A.sync_port), 'Nothing answers')):  # the sharing port is not a web address
+                with self.assertRaises(ApiError, msg=bad) as e:
+                    local_post(b, '/api/office/probe', {'address': bad})
+                self.assertEqual(e.exception.code, 400, bad)
+                self.assertIn(why, e.exception.msg, bad)
+            with self.assertRaises(ApiError) as e:  # never on a PC that is already set up
+                local_post(ac, '/api/office/use', {'address': B.base})
+            self.assertEqual(e.exception.code, 403)
+            # review finding: a web page whose name was switched to 127.0.0.1 (DNS rebinding) or a request without the page's Origin
+            # must not choose the address (it could send everybody to a fake login page)
+            with self.assertRaises(ApiError) as e:
+                b.post('/api/office/use', {'address': A.base})
+            self.assertEqual(e.exception.code, 403, 'no Origin')
+            import http.client
+            c = http.client.HTTPConnection('127.0.0.1', B.port, timeout=30)
+            c.request('POST', '/api/office/use', json.dumps({'address': A.base}),
+                      {'Host': f'evil.example:{B.port}', 'Origin': f'http://evil.example:{B.port}', 'Content-Type': 'application/json'})
+            self.assertEqual(c.getresponse().status, 403, 'DNS rebinding: Host is not this PC')
+            c.close()
+            r = local_post(b, '/api/office/use', {'address': A.base.split('//')[1]})
+            self.assertEqual(r['url'], A.base + '/')
+            with open(B.cfg_path) as f:
+                self.assertEqual(json.load(f)['office_url'], A.base + '/', 'remembered in config.json of this PC')
+            # the program on this PC is now only the small page that sends the browser to the administrator PC
+            wait_until(lambda: page_of(B.base)[1] == A.base + '/', 20, what='office redirect on ' + B.name)
+            self.assertEqual(page_of(B.base, '/api/auth/status')[0], 404, 'no system (no data) on this PC any more')
+            # the person logs in on the administrator PC with user name and password and sees the company data
+            s = A.client()
+            s.login('sara.m', 'Desk-lamp-5531')
+            self.assertEqual([a['name'] for a in s.get('/api/state')['areas']], ['Company Canteen'])
+            # the administrator PC is off: a plain message with "Try again" and a way to correct the address
+            A.stop()
+            code, loc, body = page_of(B.base)
+            self.assertEqual((code, loc), (200, None))
+            self.assertIn('cannot be opened right now', body)
+            self.assertIn('Try again', body)
+            # a restart of the PC: the installed program starts only the small page (python server/office.py here)
+            B.stop()
+            B.app = os.path.join(os.path.dirname(APP), 'office.py')
+            B.proc = None
+            import subprocess
+            import sys
+            import threading
+            env = dict(os.environ, BAMS_CONFIG=B.cfg_path, PYTHONUNBUFFERED='1')
+            B.proc = subprocess.Popen([sys.executable, B.app, '--no-browser'], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            threading.Thread(target=B._drain, args=(B.proc,), daemon=True).start()
+            A.start()
+            wait_until(lambda: page_of(B.base)[1] == A.base + '/', 30, what='office redirect after a restart')
+            # the background start with Windows does nothing in office mode (nothing to share)
+            done = subprocess.run([sys.executable, B.app, '--background'], env=env, timeout=30)
+            self.assertEqual(done.returncode, 0)
+        finally:
+            A.cleanup()
+            B.cleanup()
+
+    def test_pc_set_up_alone_moves_to_the_office_system(self):
+        A, C = Server('office-admin2').start(), Server('alone').start()
+        try:
+            make_authority(A)
+            cc = make_authority(C)
+            cc.post('/api/commit', {'label': 'own', 'ops': [area_op('S1', 'Own Mistake Area')]})
+            with self.assertRaises(ApiError) as e:
+                C.client().post('/api/node/office', {'address': A.base})
+            self.assertIn(e.exception.code, (401, 403), 'not without logging in')
+            with self.assertRaises(ApiError) as e:  # the new-PC route is closed on a PC that is set up
+                local_post(cc, '/api/office/use', {'address': A.base})
+            self.assertEqual(e.exception.code, 403)
+            import socket as so
+            alias = so.gethostbyname(so.gethostname())  # another address of this PC: it must not point to itself
+            for me in (f'{alias}:{C.port}', f'127.0.0.2:{C.port}'):
+                with self.assertRaises(ApiError, msg=me) as e:
+                    local_post(cc, '/api/node/office?check=1', {'address': me})
+                self.assertIn(e.exception.code, (400,), me)
+            found = local_post(cc, '/api/node/office?check=1', {'address': A.base})  # the live check of the address while typing
+            self.assertEqual(found['role'], 'authority')
+            self.assertEqual(page_of(C.base, '/api/auth/status')[0], 200, 'checking does not switch')
+            before = os.path.getsize(os.path.join(C.data_dir, 'bams.db'))
+            r = local_post(cc, '/api/node/office', {'address': A.base})
+            self.assertEqual(r['url'], A.base + '/')
+            wait_until(lambda: page_of(C.base)[1] == A.base + '/', 20, what='office redirect on ' + C.name)
+            self.assertTrue(os.path.getsize(os.path.join(C.data_dir, 'bams.db')) >= before, 'its own data is kept, not deleted')
+            self.assertTrue(any('pre-office' in n for n in os.listdir(os.path.join(C.root, 'backups', 'db'))), 'a backup is made first')
+        finally:
+            A.cleanup()
+            C.cleanup()
+
+    def test_admin_pc_with_other_pcs_stays(self):
+        A, B = Server('office-admin3').start(), Server('member3').start()
+        try:
+            ac = make_authority(A)
+            pair(ac, A, B)
+            with self.assertRaises(ApiError) as e:
+                local_post(ac, '/api/node/office', {'address': B.base})
+            self.assertEqual(e.exception.code, 403, 'a PC that shares with others must keep running the system')
         finally:
             A.cleanup()
             B.cleanup()

@@ -70,6 +70,21 @@ Kept up to date with every change (rule in `CLAUDE.md`). New idea → new card i
 - 🇪🇬 **بالعربي:** كل تغيير معاه رقم "شكل البيانات". الجهاز اللي لسه ما اتحدّثش بيحتفظ بالتغيير ده جنب لحد ما
   يتحدّث، بدل ما يرميه.
 
+### 1.6 When the network blocks sharing: a "thin" PC that opens the main PC like a link
+- **Problem:** in one company network the PCs could not reach each other's sharing port (only the web address worked, so personal links
+  worked but "Join" never connected). The full-copy design was right, but the network did not allow it.
+- **Idea:** give the program a second, very simple mode: the PC keeps no data and only sends the browser to the main PC – the one
+  path that is known to work. Same login, same screens, nothing to keep in step.
+- **How:** the first screen offers it first; the address is found by scanning the local network on the web port (or typed and checked
+  live); one setting (`office_url`) is saved; from then on the program is a tiny page on 127.0.0.1 that checks the main PC and redirects,
+  or says in plain words that it is off ("Try again", new address). Old open browser connections are closed after the switch.
+- **Where:** `server/office.py`, `server/bams_main.py`, `/api/office/*` and `/api/node/office` in `server/app.py`, `showOffice` in `js/devices.js`.
+- **Reuse when / watch out:** any "local server" app in a locked-down network – always keep one path that needs nothing but a browser
+  address. Test a real switch with a real browser: keep-alive connections and cached pages can show the old screen. A page on 127.0.0.1
+  must check the Host header (DNS rebinding), not only the caller's IP.
+- 🇪🇬 **بالعربي:** لو شبكة الشركة قافلة "باب" المشاركة بين الأجهزة، خلّي الجهاز التاني ما يشيلش داتا خالص ويفتح الجهاز الرئيسي زي
+  اللينك بالظبط. نفس الدخول ونفس الشاشات، ومفيش حاجة تتلخبط.
+
 ---
 
 ## Chapter 2 – Trust and security between PCs

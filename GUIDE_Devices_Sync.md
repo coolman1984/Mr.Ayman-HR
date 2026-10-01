@@ -39,9 +39,27 @@ With only one PC the light is not shown to anybody.
 
 ## 3. Installing a second PC
 
+There are two ways. **Use the office system** is the simple one and works in every company network where the personal
+links work. **Join an existing system** keeps a full copy on the PC, but needs the sharing port of the PCs (8443) to be
+open in the network.
+
+### 3a. Use the office system (recommended, since 2.7)
+1. On the new PC run **BAMS-Setup.exe** and open the program.
+2. Choose **Use the office system (recommended)**.
+3. The PC looks for the administrator PC by itself (on the web port 8080). If it is not found, type the address shown on
+   the administrator PC (first card of **Devices & Sync**, e.g. `ADMIN-PC` or `192.168.1.10`; a whole web address or a
+   personal link is understood too). The address is checked while you type.
+4. Press **Use this PC**. The browser opens the administrator PC; log in with your user name and password.
+5. From then on the desktop icon opens the administrator PC directly. The PC keeps **no data of its own**, shares
+   nothing and needs no keys – it works exactly like a personal link.
+
+If the administrator PC is off, the program says *The system cannot be opened right now* with **Try again** and a box to
+type a new address. To make the PC a normal PC again: `"C:\Program Files\BAMS\BAMS.exe" tool use-this-pc`, then restart.
+
+### 3b. Join an existing system (full copy)
 1. On the new PC run **BAMS-Setup.exe** (the same file as on the administrator PC). Keep "Start with Windows"
    ticked, so the PC always shares its changes.
-2. The program opens. Choose **Join an existing system**.
+2. The program opens. Choose **Join an existing system (full copy)**.
 3. The new PC looks for the administrator PC in the network by itself and fills in its address. If it is not found,
    type the address (shown on the administrator PC in **Settings**, e.g. `192.168.1.10`).
 4. Type a name for the PC (e.g. "HR Office") and press **Join**.
@@ -57,10 +75,15 @@ People who only use a **personal link** need nothing installed – a browser in 
 
 ### A person with a user name and password – two ways to start
 1. **In a web browser** (nothing to install): open the address of the administrator PC (*Users & Permissions* shows it) and log in.
-2. **On their own PC**: install, choose **Join an existing system** (**not** "This is the first PC"), type the address, wait until the PC is ready, log in.
+2. **On their own PC**: install, choose **Use the office system** (**not** "This is the first PC"), check the address, press **Use this PC**, log in.
 
-**A PC that did not join is a separate, empty system** – it does not know the users and data of the company. If that happened by mistake: on that PC open **Devices & Sync →
-Join the company system instead** (nothing is deleted, a backup is made, the old data is kept in a folder `copied-…`), restart the PC and choose **Join an existing system**.
+**A PC set up as "the first PC" is a separate, empty system** – it does not know the users and data of the company. If that happened by mistake: on that PC open **Devices & Sync →
+Use the office system instead** and type the address of the administrator PC (nothing is deleted, a backup is made first). The other button, *Join the company system instead
+(full copy)*, puts the old data aside in a folder `copied-…`; then restart the PC and choose **Join an existing system**.
+
+### "Join" never connects, but personal links work
+The company network lets browsers reach the administrator PC (web port 8080) but blocks the sharing port (8443) between
+PCs. Use **Use the office system** on the other PCs – it uses only the web port, like the personal links.
 
 ---
 

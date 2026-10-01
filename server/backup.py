@@ -174,8 +174,10 @@ class Backups:
     # ------------------------------------------------------------ scheduler
     def start(self):
         def loop():
-            while True:
+            while not getattr(self, 'stopped', False):  # stopped: this PC switched to office mode (no data used any more)
                 time.sleep(600)
+                if getattr(self, 'stopped', False):
+                    return
                 try:
                     if self.store.version() != self.last_version and time.time() - self.last_time >= self.interval:
                         self.create('auto')

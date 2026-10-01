@@ -504,7 +504,8 @@ class BrowserFlow(unittest.TestCase):
             b.goto(self.B.base)
             b.wait_for_selector('.choice')
             titles = b.eval_on_selector_all('.choice > b', 'els => els.map(e => e.textContent)')
-            self.assertEqual(titles, ['Join an existing system', 'This is the first (or only) PC'], 'joining is the first choice')
+            self.assertEqual(titles, ['Use the office system (recommended)', 'Join an existing system (full copy)', 'This is the first (or only) PC'],
+                             'the office system is the first choice')
             self.assertIn('already used in your company', b.inner_text('#auth'))
             b.get_by_text('This is the first (or only) PC').click()
             self.assertEqual(len(asked), 1)
@@ -536,17 +537,56 @@ class BrowserFlow(unittest.TestCase):
             a.click('#modal .modal-f .primary')
             a.wait_for_selector('text=can start in one of two ways')
             text = a.inner_text('#modal')
-            self.assertIn('Join an existing system', text)
+            self.assertIn('Use the office system', text)
             self.assertIn('does not know this user', text)
             self.assertIn('sara.m', text)
             a.click('#modal .modal-f button[data-act=closeModal]')
             # --- a PC that is on its own offers the way into the company system
             a.goto(self.A.base + '/#/devices')
             a.wait_for_selector('text=Was this PC set up by mistake?')
+            self.assertEqual(a.locator('button[data-act=devOffice]').count(), 1, 'the simple way first')
             a.click('button[data-act=devLeave]')
             a.wait_for_selector('#modal >> text=Please restart this PC')
             self.assertIn('Join an existing system', a.inner_text('#modal'))
             self.assertEqual([e for e in self.errors if '403' not in e], [])
+            browser.close()
+
+    def test_office_mode_through_the_screens(self):
+        """A new PC chooses "Use the office system": it opens the administrator PC (like a personal link), the person logs in there
+        with user name and password and sees the company data; the program on the new PC then always sends the browser there."""
+        ac = make_authority(self.A)
+        ac.post('/api/users/save', {'username': 'sara.m', 'full_name': 'Sara Mostafa', 'password': 'Desk-lamp-5531', 'must_change': False,
+                                    'perms': ['dashboard.view', 'areas.view', 'equipment.view'], 'areas': None})
+        ac.post('/api/commit', {'label': 'data', 'ops': [{'e': 'areas', 'id': 'C1', 'op': 'put', 'row': {
+            'name': 'Company Canteen', 'status': 'Good', 'location': 'Production'}}]})
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(executable_path=CHROME) if CHROME else pw.chromium.launch()
+            b = self.page(browser, 'B')
+            b.goto(self.B.base)
+            b.get_by_text('Use the office system (recommended)').click()
+            b.wait_for_selector('#officeAddress')
+            b.fill('#officeAddress', '127.0.0.1:1')
+            b.wait_for_selector('#officeCheck.bad-txt', timeout=20000)
+            b.fill('#officeAddress', self.A.base)
+            b.wait_for_selector('#officeCheck.ok-txt', timeout=20000)
+            self.assertIn('administrator PC', b.inner_text('#officeCheck'))
+            self.shot(b, '30-office-choose')
+            b.get_by_role('button', name='Use this PC').click()
+            b.wait_for_selector('text=This PC now opens the system')
+            b.wait_for_url(self.A.base + '/', timeout=20000)
+            b.wait_for_selector('#loginForm', timeout=20000)
+            b.fill('input[name=username]', 'sara.m')
+            b.fill('input[name=password]', 'Desk-lamp-5531')
+            b.get_by_role('button', name='Log In').click()
+            b.wait_for_selector('text=Company Canteen', timeout=30000)
+            self.shot(b, '31-office-logged-in')
+            # the desktop icon opens this PC's small page: it goes straight to the administrator PC, still logged in
+            def opened():
+                b.goto(self.B.base)
+                return b.url if b.url.startswith(self.A.base + '/') else None
+            wait_until(opened, 20, what='office redirect')  # (also through a browser connection kept open from before the switch)
+            b.wait_for_selector('text=Company Canteen', timeout=30000)
+            self.assertEqual([e for e in self.errors if not any(c in e for c in ('400', '401', '403'))], [])  # 400: the wrong address typed above
             browser.close()
 
     def test_personal_link(self):

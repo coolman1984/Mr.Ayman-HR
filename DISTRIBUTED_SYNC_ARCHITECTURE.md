@@ -403,3 +403,20 @@ truncated delivery → identical normalised state hashes), and a multi-process h
 starts real servers on separate ports with temporary data folders, pairs them, kills them,
 cuts connections through a controllable TCP proxy and checks convergence, security and
 recovery. See `TASKS.md` for the scenario checklist and results.
+
+## 16. Office mode – a PC without data (2.7)
+
+Some company networks let browsers reach the administrator PC on the web port (8080) but block the sharing port (8443)
+between PCs: personal links work, joining never connects. For such networks a PC can run in **office mode**
+(`server/office.py`, config.json `office_url`):
+
+- It is **not a node**: no database, no journal, no keys, no sync, no roster entry. It cannot diverge, because it holds nothing.
+- The program on that PC is a small HTTP page bound to 127.0.0.1 only. `GET /` checks `GET <office>/api/auth/status` and answers
+  `302 Location: <office>`; when the administrator PC does not answer it shows a plain page (*Try again*, *new address* form with
+  an Origin check). The person logs in on the administrator PC with the normal password login – the same security as any browser.
+- Chosen on the first screen (`/api/office/discover|probe|use`: on the PC itself, only while not set up) or, for a PC set up
+  alone by mistake, with `/api/node/office` (administrator, on the PC itself, only while it shares with nobody; backup first, data kept).
+- After the switch the full server stops (`OFFICE_SWITCH`, `HTTPD.shutdown`), answers old keep-alive connections with a redirect and
+  `Connection: close`, and the same process serves the small page on the same port.
+- Trade-off: an office-mode PC needs the administrator PC switched on (like personal links). PCs that must work alone keep using
+  *Join an existing system (full copy)*.

@@ -13,8 +13,10 @@ changes with them automatically and encrypted over the company network – see *
    the data is never touched.
 2. The system opens in the browser. **Settings** shows the address for other PCs and phones, e.g.
    `http://192.168.1.10:8080/`. People with a personal link just open their link.
-3. Install it on other PCs only if they should keep working when the administrator PC is off
-   (see GUIDE_Devices_Sync.md).
+3. On other PCs: install it and choose **Use the office system** – the PC then opens the administrator PC like a
+   personal link (people log in with user name and password, nothing is stored there). **Join an existing system
+   (full copy)** is for PCs that should keep working when the administrator PC is off and needs the sharing port 8443
+   open in the network (see GUIDE_Devices_Sync.md).
 
 Program: `C:\Program Files\BAMS` (compiled). Data, settings and backups: `C:\ProgramData\BAMS`.
 Developers: `docs/BUILD_AND_RELEASE.md`, rules in `CLAUDE.md`, history in `DEVELOPMENT_HISTORY.md`.

@@ -19,8 +19,8 @@ The administrator decides with simple tick boxes what each person may open and d
 3. Choose **Start with my real data** (empty) or **Try it with sample data first**. Sample data is deleted later in
    one step: **Settings → Delete Sample Data**.
 
-> This screen only works on the PC itself. On other PCs install the program and choose **Join an existing system** –
-> they join by themselves (see GUIDE_Devices_Sync.md). People who only use a link do **not** need the program on their
+> This screen only works on the PC itself. On other PCs install the program and choose **Use the office system** –
+> they find the administrator PC by themselves and open it like a personal link (see GUIDE_Devices_Sync.md). People who only use a link do **not** need the program on their
 > device.
 
 **Two ways to log in**

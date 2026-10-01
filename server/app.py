@@ -34,6 +34,7 @@ from sync import SyncService  # noqa: E402
 from system import System, lock_data  # noqa: E402
 from upgrade import DataFromNewerVersion, UpgradeVerificationFailed, check_now  # noqa: E402
 import excel_import  # noqa: E402
+import office  # noqa: E402
 import xlsx_read  # noqa: E402
 
 ROOT = os.path.dirname(HERE)  # program files (web pages); in the installed program they are built into BAMS.exe (_assets)
@@ -386,7 +387,7 @@ class Handler(BaseHTTPRequestHandler):
             body = body.encode('utf-8')
         self.send_response(code)
         unread = self.command == 'POST' and not self._read and int(self.headers.get('Content-Length') or 0)
-        if code >= 400 or unread:  # the request body may be unread - don't reuse this connection
+        if code >= 400 or unread or OFFICE_SWITCH.is_set():  # the request body may be unread / office mode: don't reuse this connection
             self.close_connection = True
             self.send_header('Connection', 'close')
         self.send_header('Content-Type', ctype)
@@ -497,10 +498,16 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         self.u = None
+        if OFFICE_SWITCH.is_set():  # a browser connection kept open from before: the small office page answers from now on
+            if self.path.startswith('/api/'):
+                return self.send(409, {'error': 'This PC now opens the system of the administrator PC. Please reload the page.'})
+            return self.send(302, b'', 'text/plain', {'Location': self.path})
         self.handle_safely(self._get)
 
     def do_POST(self):
         self.u, self._read = None, False
+        if OFFICE_SWITCH.is_set():
+            return self.send(409, {'error': 'This PC now opens the system of the administrator PC. Please reload the page.'})
         self.handle_safely(self._post)
 
     def me(self):
@@ -516,6 +523,30 @@ class Handler(BaseHTTPRequestHandler):
     def need_admin(self):
         if not is_admin(self.u):
             raise Forbidden('Only an administrator can open this.')
+
+    def office(self, p, rescue=False):
+        """Office mode (server/office.py): find, check and choose the administrator PC on its web port, like a personal link."""
+        if p == '/api/office/discover':
+            return self.send(200, {'found': office.discover(int(CFG['port']))})
+        d = self.json_body()
+        url = office.parse_address(d.get('address'), int(CFG['port']))
+        if office.is_this_pc(url, CFG['port']):
+            raise ValueError('That is the address of this PC. Type the address of the administrator PC.')
+        found = office.check(url)
+        if found.get('id') == NODE.id:  # the same program, reached by another name of this PC (review finding)
+            raise ValueError('That is the address of this PC. Type the address of the administrator PC.')
+        if p == '/api/office/probe':
+            return self.send(200, found)
+        name = BACKUPS.create('pre-office') if rescue else ''
+        office.set_office_url(CONFIG_PATH, url)
+        if rescue:
+            AUTH.log(self.user, self.ip, 'office-mode', NODE.name, f'This PC now opens the system of {urlparse(url).netloc}; '
+                     f'its own data is kept unchanged in the data folder (backup {name})')
+        BACKUPS.stopped = True
+        say(f'Office mode: this PC now opens the system of {urlparse(url).netloc}')
+        OFFICE_SWITCH.set()
+        threading.Timer(0.5, lambda: HTTPD and HTTPD.shutdown()).start()  # the tiny office page takes over this port
+        return self.send(200, {'ok': True, 'url': url, 'name': found['name']})
 
     def node_status(self):
         j = JOURNAL.meta('join')
@@ -681,6 +712,10 @@ class Handler(BaseHTTPRequestHandler):
             if self.ip not in LOCAL_IPS or AUTH.has_users() or NODE.role != 'unconfigured':
                 raise Forbidden('Only on a new, not yet set up PC, on the PC itself.')
             return self.send(200, {'found': SYNC.discover()})
+        if p in ('/api/office/discover', '/api/office/probe', '/api/office/use'):  # office mode: open the administrator PC like a link
+            if self.ip not in LOCAL_IPS or not office.local_request(self.headers, True) or AUTH.has_users() or NODE.role != 'unconfigured':
+                raise Forbidden('Only on a new, not yet set up PC, on the PC itself.')
+            return self.office(p)
         if p == '/api/join/cancel':
             if self.ip not in LOCAL_IPS or NODE.role != 'unconfigured':
                 raise Forbidden('Not possible.')
@@ -795,6 +830,13 @@ class Handler(BaseHTTPRequestHandler):
             AUTH.log(self.user, self.ip, 'node-leave', NODE.name, f'This PC was set aside to join another system (backup {name}); its data is kept in data/copied-<date>')
             say(f'{self.user} asked this PC to join another system; data is set aside at the next start (backup {name})')
             return self.send(200, {'ok': True, 'restart': True, 'backup': name})
+        if p == '/api/node/office':  # a PC set up alone by mistake: use the system of the administrator PC instead (nothing is deleted)
+            self.need('users.manage')
+            if self.ip not in LOCAL_IPS or not office.local_request(self.headers, True):
+                raise Forbidden('This can only be done on the PC itself (http://localhost).')
+            if NODE.role != 'authority' or SYNC.summary().get('state') != 'single':
+                raise Forbidden('This PC already shares data with other PCs, so it must keep running the system.')
+            return self.office('/api/office/probe' if qs.get('check') else '/api/office/use', rescue=True)
         if p == '/api/backups/folder':  # a second folder (USB drive, other disk) that gets a copy of every backup
             self.need('backups.manage')
             if not is_admin(self.u):
@@ -1022,8 +1064,15 @@ class Server(ThreadingHTTPServer):
     daemon_threads = True
 
 
+HTTPD = None
+OFFICE_SWITCH = threading.Event()  # set when this PC switched to office mode: the tiny office page replaces the server
+
+
 def main(background=False):
+    global HTTPD
     port = int(CFG['port'])
+    if CFG.get('office_url'):  # portable start of a PC in office mode (the installed program goes there directly)
+        return None if background else office.serve(CONFIG_PATH, port, open_browser=CFG.get('open_browser', True))
     if not INSTANCE:
         print('The system is already running on this PC. Opening it in the browser.')
         if not background:
@@ -1036,6 +1085,7 @@ def main(background=False):
         if not background:  # a second start (e.g. the desktop icon while it runs in the background) just opens it
             webbrowser.open(f'http://localhost:{port}/')
         return
+    HTTPD = httpd
 
     try:
         if STORE.counts().get('Break Areas'):
@@ -1070,6 +1120,14 @@ def main(background=False):
         SYNC.shutdown()
         JOURNAL.flush_activity()
         say('Server stopped')
+    if OFFICE_SWITCH.is_set():
+        httpd.server_close()
+        for _ in range(20):  # the port can take a moment to be free again (Windows)
+            if office.serve(CONFIG_PATH, port, open_browser=False) is not False:
+                break
+            time.sleep(0.5)
+        else:
+            say(f'Office mode: port {port} is not free - the page starts with the next click on the desktop icon')
 
 
 if __name__ == '__main__':

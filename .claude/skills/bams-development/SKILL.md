@@ -37,6 +37,7 @@ Two ways to run:
 | `js/app.js`, `js/devices.js` | whole UI (views, `ACT` actions, `modal`, `esc` for every value) |
 | `js/data.js` | sample data (`buildSeed`, fixed short ids), `DEFAULT_ITEM_TYPES`, lists (actions, conditions) |
 | `js/palette.js`, `js/icons.js` | Ctrl K search; generated icon pack |
+| `server/office.py` | office mode: a PC without data that opens the administrator PC like a personal link (small page on 127.0.0.1) |
 | `server/upgrade.py` | data safety at every update (snapshot, verification, newer-data refusal, migrations) |
 | `server/xlsx_read.py`, `server/excel_import.py` | Excel reader and the import rules |
 | `js/help.js` | Help & User Guide (`#/help`): Q&A per topic, admin topics hidden from others – **update it with every screen change** |
@@ -131,5 +132,10 @@ Check a local compile on Linux: `pip install --target <dir> nuitka ordered-set z
 - Excel import (`excel_import.plan`) never changes what exists; a new importable field needs a column name list, a warning for bad values, and a test in `ExcelImportTest`.
 - `repr()` / `str()` of Python data is not JavaScript: write generated JS with explicit brackets.
 - A new permission is not in the stored permission lists of existing accounts: `Auth._user()` adds `maintenance.cost` for `users.manage`.
+- **Office mode** (2.7, `server/office.py`): config.json `office_url` → `BAMS.exe` runs only the small page on 127.0.0.1 (no `app` import, no data).
+  Links and office mode use the web port 8080; join/sharing use 8443 (often blocked in company networks). After a switch the old server must close
+  kept-alive browser connections (`OFFICE_SWITCH` in `do_GET/do_POST/send`). `BAMS.exe tool use-this-pc` ends it. Tests: `T44_OfficeMode`, `OfficeModeTest`.
+- A page on 127.0.0.1 is reachable by any web site through DNS rebinding: local-only routes check Host/Origin with `office.local_request`, not only the IP.
+- Never weaken login security (longer sessions, "remember me", fewer checks) without the owner's explicit yes – the session's safety check refuses it.
 - Script files share one global scope: no short top-level names in new JS files. `<a data-act>` needs `data-href`
   to reach `ACT` – use `<button>` for in-page actions.

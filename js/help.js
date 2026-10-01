@@ -159,16 +159,19 @@ const HELP = [
       shows when and on which PC each link was last used.`]
   ]},
   { id: 'pcs', title: 'Several PCs, delegation and the sync light', icon: 'sync', admin: true, items: [
-    ['How do I add another PC?', `Install ${helpBold('BAMS-Setup.exe')} on it, open it and choose ${helpBold('Join an existing system')}.
-      It finds the administrator PC in the network by itself (or type its address, shown in ${helpBold('Settings')} on the administrator PC)
-      and copies all data. Nothing to do on the administrator PC – no code, no approval. The administrator PC must be switched on.`],
+    ['How do I add another PC?', `Install ${helpBold('BAMS-Setup.exe')} on it, open it and choose ${helpBold('Use the office system')}.
+      It finds the administrator PC by itself (or type its address, shown in ${helpBold('Devices & Sync')} on the administrator PC). That PC then opens the system of the
+      administrator PC – the same way a personal link does – and keeps no data of its own. The administrator PC must be switched on.
+      ${helpBold('Join an existing system (full copy)')} keeps a copy of all data on the PC; it needs the sharing port of the PCs to be open in the network.`],
     ['How do people log in?', `Two ways: ${helpBold('personal link')} – just open the link in any browser, nothing to install; or
-      ${helpBold('user name and password')} – in any browser at the address of the administrator PC, <b>or</b> on a PC that has the program installed
-      <b>and joined</b> the system (${helpBold('Join an existing system')}). A PC that did not join is a separate, empty system and does not know the users.`],
-    ['A person installed the program and sees no data or the user name does not work.', `Their PC was not joined: on the first screen they chose ${helpBold('This is the first (or only) PC')}, which starts a new empty system.
-      Fix: on that PC open ${helpBold('Devices & Sync')} → ${helpBold('Join the company system instead')} (nothing is deleted, a backup is made), restart the PC, open the program, choose ${helpBold('Join an existing system')}
-      and type the address of the administrator PC. The easier way for a person who does not need their own copy: just open the address of the administrator PC in a web browser.`],
-    ['What if the administrator PC is switched off or I am away?', `Everybody keeps working and the PCs keep sharing. Only people,
+      ${helpBold('user name and password')} – in any browser at the address of the administrator PC, <b>or</b> on a PC with the program set up as
+      ${helpBold('Use the office system')}. A PC set up as "the first PC" is a separate, empty system and does not know the users.`],
+    ['A person installed the program and sees no data or the user name does not work.', `On the first screen they chose ${helpBold('This is the first (or only) PC')}, which starts a new empty system.
+      Fix: on that PC open ${helpBold('Devices & Sync')} → ${helpBold('Use the office system instead')} and type the address of the administrator PC (nothing is deleted, a backup is made).
+      From then on the program on that PC opens the company system.`],
+    ['"Join" does not connect, but personal links work.', `The network of the company lets browsers reach the administrator PC, but blocks the separate sharing port of the PCs.
+      Use ${helpBold('Use the office system')} on the other PCs: it uses the same way as the personal links.`],
+    ['What if the administrator PC is switched off or I am away?', `PCs with a full copy keep working and sharing (PCs that ${helpBold('use the office system')} and personal links need the administrator PC switched on). Only people,
       permissions and PCs cannot be changed – unless you set up a ${helpBold('backup administrator PC')}: ${helpBold('Devices & Sync')} →
       ${helpBold('Make backup admin')} next to a trusted PC. From then on people with administrator rights can manage people there too.
       ${helpBold('End backup admin')} takes it back.`],
@@ -196,8 +199,10 @@ const HELP = [
   { id: 'trouble', title: 'Problems and questions', icon: 'alert', items: [
     ['The page says "Cannot connect to the server".', `The PC with the program is off, or you are not in the company network. Open the
       program from its desktop icon on that PC; if it still does not open, restart that PC.`],
-    ['I installed the program, but my user name does not work / I see no data.', `Your PC must first ${helpBold('join')} the system of your company: on the first screen choose ${helpBold('Join an existing system')} (not "first PC"), type the address the administrator gave you and wait until it says the PC is ready.
-      Or simply open the address of the administrator PC in a web browser – nothing to install. If you already chose "first PC" by mistake, ask the administrator of this PC to use ${helpBold('Devices & Sync → Join the company system instead')}.`],
+    ['I installed the program, but my user name does not work / I see no data.', `On the first screen choose ${helpBold('Use the office system')} (not "first PC") and type the address the administrator gave you, then log in.
+      Or simply open the address of the administrator PC in a web browser – nothing to install. If you already chose "first PC" by mistake, use ${helpBold('Devices & Sync → Use the office system instead')} on that PC.`],
+    ['The program says "The system cannot be opened right now".', `This PC opens the system of the administrator PC, and that PC does not answer. Check that it is switched on and the program runs there,
+      then press ${helpBold('Try again')}. If the administrator PC got a new address, type it in the box on that page.`],
     ['My link says "This link does not work any more".', `The administrator made a new link or switched it off. Ask for your new link.`],
     ['I see "Please tell the administrator".', `Sharing with the other PCs has a problem. Your work on this PC is saved. Tell the
       administrator.`],

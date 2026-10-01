@@ -2427,17 +2427,17 @@ function startInstructionsText(name, username, password) {
   const all = lanAddresses(), addr = all.join('\nor ') , host = all.map(hostOf).join(' (or ') + ')'.repeat(Math.max(0, all.length - 1));
   return `Hello ${name},\n\nYour user name: ${username}\nYour temporary password: ${password}\n\n`
     + `EASIEST – no installation: open this address in a web browser on any PC or phone in the company network:\n${addr}\nThen log in with the user name and password.\n\n`
-    + `OR on your own PC (keeps working when the administrator PC is switched off):\n1. Install BAMS-Setup.exe and open the program.\n2. Choose "Join an existing system" (NOT "This is the first PC").\n`
-    + `3. Type the address ${host} and press Join. Wait until it says the PC is ready.\n4. Log in with the user name and password above.\n\n`
-    + `Important: a PC that was not joined is a separate, empty system and does not know your user name.`;
+    + `OR with the program on your own PC:\n1. Install BAMS-Setup.exe and open the program.\n2. Choose "Use the office system" (NOT "This is the first PC").\n`
+    + `3. It finds the administrator PC by itself, or type the address ${host}. Press "Use this PC".\n4. Log in with the user name and password above. From then on the desktop icon opens the system.\n\n`
+    + `Important: a PC set up as "the first PC" is a separate, empty system and does not know your user name.`;
 }
 function startInstructionsModal(title, name, username, password, mustChange) {
   const text = startInstructionsText(name, username, password);
   modal(title, `<p><b>${esc(name)}</b> can start in one of two ways:</p>
     <div class="howto"><div><b>1. Easiest – in a web browser (nothing to install)</b><br>Open <span class="mono">${lanAddresses().map(esc).join('</span> or <span class="mono">')}</span> on any PC or phone in the company network and log in.</div>
-      <div><b>2. On their own PC</b> (keeps working when this PC is off)<br>Install <b>BAMS-Setup.exe</b>, open it, choose <b>"Join an existing system"</b> (not "This is the first PC"), type the address
-        <span class="mono">${lanAddresses().map(u => esc(hostOf(u))).join('</span> or <span class="mono">')}</span>, wait until the PC is ready, then log in.
-        <br><span class="bad-txt">A PC that did not join is a separate, empty system and does not know this user.</span></div></div>
+      <div><b>2. With the program on their own PC</b><br>Install <b>BAMS-Setup.exe</b>, open it, choose <b>"Use the office system"</b> (not "This is the first PC"). It finds this PC by itself, or type
+        <span class="mono">${lanAddresses().map(u => esc(hostOf(u))).join('</span> or <span class="mono">')}</span>, then log in. The desktop icon opens the system from then on.
+        <br><span class="bad-txt">A PC set up as "the first PC" is a separate, empty system and does not know this user.</span></div></div>
     <dl class="kv"><dt>User name</dt><dd class="mono">${esc(username)}</dd><dt>Password</dt><dd class="mono">${esc(password)}</dd></dl>
     <p class="hint">Give the password to the person privately. ${mustChange ? 'They choose their own password at the first login. ' : ''}It is not shown again.</p>
     <textarea class="howto-text" readonly rows="6">${esc(text)}</textarea>`, { extra: `<button type="button" class="btn" data-act="copyLink" data-url="${esc(text)}">${ic('copy')}Copy these instructions</button>`, wide: true });
