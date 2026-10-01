@@ -7,6 +7,39 @@ Version numbers: `server/version.py`. Pull requests: github.com/coolman1984/Mr.A
 
 ---
 
+## 2.7.0 – Use the office system: a PC that opens the administrator PC like a personal link (2026-10-01)
+
+**Why (field report):** the owner installed 2.6.0; in the office only the **personal links** worked – a PC with the program and a user name /
+password never connected ("Join an existing system" failed). The owner asked to use the way that works (the link) together with the installed
+program and the user name and password, so that people "do not feel anything", and to drop logic that does not work in their network.
+
+**Root cause:** a personal link uses the **web port 8080** of the administrator PC; joining and sharing between PCs use the **separate TLS port
+8443**. The office network lets 8080 through and blocks 8443 (the Devices & Sync screenshot also showed an unusual address, `106.x`, which points to
+a managed company network). Nothing in the program can open a port that the network blocks.
+
+**What changed**
+- New **office mode** (`server/office.py`): config.json `office_url`. `BAMS.exe` then starts only a tiny page on 127.0.0.1 that checks the
+  administrator PC (`/api/auth/status`) and redirects the browser there, or shows "The system cannot be opened right now" with *Try again* and a
+  box for a new address. No database, no sharing, no keys on that PC; `--background` (Windows start) does nothing.
+- First screen: **Use the office system (recommended)** first, then *Join an existing system (full copy)*, then *first PC*. The address is found by
+  scanning the local /24 networks on the web port, or typed and checked live (`/api/office/discover|probe|use`, only on the PC itself, only while it is
+  not set up). A whole web address or a personal link is understood.
+- Rescue: **Devices & Sync → Use the office system instead** (`/api/node/office`, administrator of that lone PC, on the PC itself, only while it shares
+  with no other PC; a backup `pre-office` is made; its data stays untouched).
+- `BAMS.exe tool use-this-pc` ends office mode. Instructions after *Add Person*, Help, guides and README describe the new way.
+- Version 2.7.0, no schema change (2.6 and 2.7 PCs work together). `T41` now also starts the real 2.6.0 program.
+
+**Mistakes and lessons**
+- First idea also contained "Keep me logged in on this PC" (long login for non-administrators) to make it feel like a link. The automatic safety check
+  of the session refused it as a weakening of login security; it was taken out completely and left to the owner's explicit decision. Lesson: changes
+  that weaken security need the owner's explicit, informed yes – ask first.
+- The browser test found a real bug: after the switch, Chrome kept its open keep-alive connection to the old server and showed the old setup page.
+  Fix: after the switch the old server answers every request on old connections with a redirect / "reload" and closes the connection.
+- `T44` checks the sharing port is *not* accepted as a web address (`Nothing answers`), the address of this PC is refused, and another web site cannot
+  change the saved address (Origin check on the small page).
+
+---
+
 ## 2.6.0 – Area Log, finished work, costs by permission, repeating work, piece history (2026-09-30)
 
 **Why:** the owner asked whether a break area can carry notes (painting, renovation, repairs, maintenance) and to think through the real cases; all three

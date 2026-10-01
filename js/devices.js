@@ -86,7 +86,7 @@ ASYNC.devices = async el => {
 
 function devSummary() {
   const s = DEV.summary, others = DEV.nodes.filter(n => !n.self && n.status === 'active');
-  const [label, tip] = s.state === 'single' ? ['Only this PC', 'No other PC yet. On the other PC: install the program, open it, choose "Join an existing system" and type the address of this PC (' + lanAddresses().map(hostOf).join(' or ') + '). Only a PC that joined shares the data and the users – a PC that was set up on its own is a separate system.'] : (SYNC_TEXT[s.state] || SYNC_TEXT.pending);
+  const [label, tip] = s.state === 'single' ? ['Only this PC', 'No other PC yet. On the other PC: install the program, open it, choose "Use the office system" and type the address of this PC (' + lanAddresses().map(hostOf).join(' or ') + '), then log in with a user name and password. A PC that was set up on its own is a separate system.'] : (SYNC_TEXT[s.state] || SYNC_TEXT.pending);
   const cls = { ok: 'green', pending: 'blue', offline: 'gray', problem: 'red', single: 'gray' }[s.state] || 'gray';
   const agree = others.filter(n => n.status_now.agree === true).length;
   return `<div class="card mb dev-sum s-${s.state}"><div class="dev-sum-in">
@@ -102,9 +102,10 @@ function devOnlyThisPC() {
   return `<div class="card mb"><div class="card-h">${ic('plug')}<h3>Was this PC set up by mistake?</h3></div>
     <p>If another PC in your company already runs the program with your data, and this PC was set up as a <b>first PC</b> by mistake, it shows a separate, empty system –
       users and data of the other PC do not exist here.</p>
-    <button class="btn" data-act="devLeave">${ic('plug')}Join the company system instead</button>
-    <p class="hint">Nothing is deleted: what is on this PC is put aside (folder <span class="mono">copied-…</span> in the data folder) and a backup is made first.
-      Then restart the PC, open the program and choose <b>Join an existing system</b>.</p></div>`;
+    <button class="btn primary" data-act="devOffice">${ic('link')}Use the office system instead</button>
+    <button class="btn" data-act="devLeave">${ic('plug')}Join the company system instead (full copy)</button>
+    <p class="hint">Nothing is deleted. <b>Office system</b>: this PC opens the administrator PC (like a personal link); its own data stays untouched and a backup is made first.
+      <b>Full copy</b>: what is on this PC is put aside (folder <span class="mono">copied-…</span> in the data folder), then restart the PC, open the program and choose <b>Join an existing system</b>.</p></div>`;
 }
 
 /* the administrator key on a USB stick: without it, a lost administrator PC means nobody can manage people any more */
@@ -357,7 +358,8 @@ function showSetup(local, st) {
   authScreen(`<h2>Welcome – set up this PC</h2>
     <p class="muted">Does your company already use this program on another PC (did somebody give you a user name and password)?</p>
     <div class="setup-choice">
-      <button class="choice" data-act="setupJoin">${ic('plug')}<b>Join an existing system</b><small><b>Choose this if the program is already used in your company.</b> This PC finds the administrator PC, copies all data and users – then you log in with the user name and password you were given.</small></button>
+      <button class="choice" data-act="setupOffice">${ic('link')}<b>Use the office system (recommended)</b><small><b>Choose this if the program is already used in your company.</b> This PC opens the system of the administrator PC – the same way a personal link does. You log in with the user name and password you were given. Nothing is stored on this PC.</small></button>
+      <button class="choice" data-act="setupJoin">${ic('plug')}<b>Join an existing system (full copy)</b><small>This PC keeps its own copy of all data and can work while the administrator PC is off. Needs the sharing port of the PCs to be open in the network – if this does not work, use the office system above.</small></button>
       <button class="choice" data-act="setupCreate">${ic('user')}<b>This is the first (or only) PC</b><small>Only if nobody has set up the program before. You create the administrator account and this PC starts a new, empty system.</small></button>
     </div>`);
 }
@@ -408,6 +410,42 @@ function showJoin(name) {
     $('#joinAddress').value = f[0].address; probe();
   }).catch(() => { const box = $('#joinFind'); if (box) box.textContent = 'Type the address of the administrator PC below (shown on the administrator PC in Settings).'; });
 }
+function showOffice(rescue) {
+  authScreen(`<h2>Use the office system</h2>
+    <p class="muted" id="officeFind">Looking for the administrator PC in the network…</p>
+    <div id="officeFound"></div>
+    <form class="auth-form" data-form="office">
+      <label>Administrator PC address<input name="address" id="officeAddress" class="mono" required autocomplete="off" placeholder="e.g. ADMIN-PC or 192.168.1.10"></label>
+      <p class="hint" id="officeCheck"></p>
+      <details class="hint"><summary>Where do I find the address?</summary>On the administrator PC: <b>Devices &amp; Sync</b> (first card) or <b>Settings → Server &amp; Database</b>.
+        Type the PC name or the numbers, for example <span class="mono">ADMIN-PC</span> or <span class="mono">192.168.1.10</span> – or paste a whole address or a personal link, it is understood.</details>
+      <p class="auth-msg" id="authMsg"></p>
+      <button class="btn primary">${ic('check')}Use this PC</button>
+      <button type="button" class="btn" data-act="${rescue ? 'officeBack' : 'reloadPage'}">${ic('arrowLeft')}Back</button>
+    </form>`);
+  OFFICE_RESCUE = !!rescue;
+  let timer;
+  const probe = () => {
+    const v = ($('#officeAddress') || {}).value || '', box = $('#officeCheck');
+    if (!box) return;
+    if (!v.trim()) { box.textContent = ''; return; }
+    box.className = 'hint'; box.textContent = 'Checking…';
+    api('POST', '/api/office/probe', { address: v.trim() }).then(r => { if ($('#officeAddress').value === v) { box.className = 'hint ok-txt'; box.textContent = `✓ Found "${r.name}"${r.role === 'authority' ? ' (administrator PC)' : ''}.`; } })
+      .catch(e => { if ($('#officeAddress') && $('#officeAddress').value === v) { box.className = 'hint bad-txt'; box.textContent = e.message; } });
+  };
+  $('#officeAddress').addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(probe, 700); });
+  const say = t => { const b = $('#officeFind'); if (b) b.textContent = t; };
+  if (rescue) { say('Type the address of the administrator PC (where the company data is).'); return; }
+  api('POST', '/api/office/discover', {}).then(r => {
+    const f = r.found || [];
+    if (!$('#officeFind')) return;
+    if (!f.length) return say('The administrator PC was not found by itself. Type its address below.');
+    say(f.length === 1 ? 'Found:' : 'Choose the administrator PC:');
+    $('#officeFound').innerHTML = f.map(x => `<button type="button" class="choice" data-act="officePick" data-address="${esc(x.url)}">${ic('check')}<b>${esc(x.name)}${x.role === 'authority' ? ' – administrator PC' : ''}</b><small class="mono">${esc(x.url)}</small></button>`).join('');
+    if (!$('#officeAddress').value.trim()) { $('#officeAddress').value = f[0].url; probe(); }  // never replace what the person typed
+  }).catch(() => say('Type the address of the administrator PC below.'));
+}
+let OFFICE_RESCUE = false;
 let JOIN_POLL;
 function showJoinWait() { showReceiving(); }
 function showReceiving() {
@@ -447,6 +485,13 @@ Object.assign(ACT, {
     if (confirm('Is this really the very first PC?\n\nIf the program is already used on another PC in your company, press Cancel and choose "Join an existing system". Otherwise this PC becomes a separate, empty system that does not know your users and data.')) showCreate();
   },
   setupJoin: () => showJoin(SETUP_NAME),
+  setupOffice: () => showOffice(false),
+  officePick: d => { const a = $('#officeAddress'); if (a) { a.value = d.address; a.dispatchEvent(new Event('input')); } },
+  officeBack: () => location.reload(),
+  devOffice() {
+    if (!confirm('Use the office system on this PC?\n\nThis PC will open the system of the administrator PC (like a personal link). The data on THIS PC is not deleted – it just is not used any more.\nUse this only if the company data lives on another PC.')) return;
+    showOffice(true);
+  },
   async devLeave() {
     if (!confirm('Join the company system instead?\n\nThe data on THIS PC is put aside (nothing is deleted) and this PC starts empty, ready to join the other PC.\nUse this only if the company data lives on another PC.')) return;
     try {
@@ -462,6 +507,23 @@ Object.assign(ACT, {
     if (!confirm('Set this PC up as a new PC? The copied data folder is kept in data/copied-<date> and not used any more.')) return;
     await api('POST', '/api/node/moved', { choice: 'new' });
     authScreen(`<h2>Please restart this PC</h2><p>Restart the computer, then open the program again (desktop icon) and choose “Join an existing system”.</p>`);
+  }
+});
+document.addEventListener('submit', async e => {
+  const f = e.target;
+  if (f.dataset.form !== 'office') return;
+  e.preventDefault();
+  const msg = $('#authMsg'), btn = $('button.primary', f), address = ($('#officeAddress').value || '').trim();
+  msg.textContent = '';
+  btn.disabled = true;
+  try {
+    const r = await api('POST', OFFICE_RESCUE ? '/api/node/office' : '/api/office/use', { address });
+    authScreen(`<h2>Ready</h2><p>This PC now opens the system of <b>${esc(r.name)}</b>. Log in with your user name and password.</p>
+      <p class="muted">From now on the desktop icon opens it directly.</p><p class="muted" id="authMsg">Opening…</p>`);
+    setTimeout(() => { location.href = r.url; }, 1500);
+  } catch (err) {
+    msg.textContent = err.message;
+    btn.disabled = false;
   }
 });
 document.addEventListener('submit', async e => {

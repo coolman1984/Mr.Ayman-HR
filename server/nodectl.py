@@ -6,6 +6,7 @@
   python server/nodectl.py reset-admin         new temporary password for an administrator (administrator PC only)
   python server/nodectl.py export-authority F  save the administrator key to file F, protected by a passphrase
   python server/nodectl.py import-authority F  make THIS PC the administrator PC with a key saved before
+  python server/nodectl.py use-this-pc         end office mode: this PC runs the system itself again
 
 The administrator key signs every change to users, permissions and PCs. If the
 administrator PC is lost and no exported key exists, user management cannot be done
@@ -198,7 +199,21 @@ def cmd_import(path):
     return 0
 
 
+def cmd_use_this_pc():
+    import office
+    root = os.environ.get('BAMS_HOME') or os.path.dirname(HERE)
+    path = os.environ.get('BAMS_CONFIG') or os.path.join(root, 'config.json')
+    if not office.office_url(path):
+        print('This PC is not in office mode - nothing to do.')
+        return 0
+    office.set_office_url(path, '')
+    print('Office mode ended. Restart the computer, then open the program: it shows the first screen again (nothing was deleted).')
+    return 0
+
+
 def main(argv):
+    if argv == ['use-this-pc']:  # office mode keeps no data, so the data lock is not needed
+        return cmd_use_this_pc()
     from system import lock_data
     lock = lock_data(load_cfg()[1])  # noqa: F841 - kept until the command ends
     if lock is None:

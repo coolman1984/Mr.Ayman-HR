@@ -876,3 +876,89 @@ class AppearanceFilesTest(unittest.TestCase):
         self.assertIn('0.85, 0.92, 1, 1.1, 1.2, 1.35', boot)
         self.assertTrue(os.path.exists(os.path.join(root, 'docs', 'FONTS_LICENSE.txt')))
         self.assertIn('fonts', open(os.path.join(root, 'tools', 'make_assets.py')).read())
+
+
+class OfficeModeTest(unittest.TestCase):
+    """server/office.py: the address a person types, config.json, and the small page on the PC itself."""
+
+    def test_addresses(self):
+        import office
+        for typed, url in (('ADMIN-PC', 'http://ADMIN-PC:8080/'), (' 192.168.1.10 ', 'http://192.168.1.10:8080/'),
+                           ('192.168.1.10:9000', 'http://192.168.1.10:9000/'), ('http://m-labib03:8080/', 'http://m-labib03:8080/'),
+                           ('http://10.0.0.5:8080/k/AbCdEf123456789012345', 'http://10.0.0.5:8080/')):  # a personal link works too
+            self.assertEqual(office.parse_address(typed), url, typed)
+        for bad in ('', 'has spaces', 'a@b', 'host:0', 'host:70000'):
+            with self.assertRaises(ValueError, msg=bad):
+                office.parse_address(bad)
+        self.assertTrue(office.is_this_pc('http://localhost:8080/', 8080))
+        self.assertFalse(office.is_this_pc('http://localhost:8081/', 8080))
+
+    def test_config_keeps_other_settings(self):
+        import office
+        d = tempfile.mkdtemp()
+        try:
+            p = os.path.join(d, 'config.json')
+            with open(p, 'w') as f:
+                json.dump({'port': 8080, 'device_name': 'Desk'}, f)
+            self.assertEqual(office.office_url(p), '')
+            office.set_office_url(p, 'http://ADMIN-PC:8080/')
+            self.assertEqual(office.office_url(p), 'http://ADMIN-PC:8080/')
+            office.set_office_url(p, '')
+            with open(p) as f:
+                self.assertEqual(json.load(f), {'port': 8080, 'device_name': 'Desk'})
+        finally:
+            shutil.rmtree(d)
+
+    def test_small_page(self):
+        import http.client
+        import threading
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        import office
+
+        class Fake(BaseHTTPRequestHandler):  # another program at the address: not the system
+            def log_message(self, *a):
+                pass
+
+            def do_GET(self):
+                body = b'{"hello": 1}'
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+        fake = ThreadingHTTPServer(('127.0.0.1', 0), Fake)
+        threading.Thread(target=fake.serve_forever, daemon=True).start()
+        d = tempfile.mkdtemp()
+        p = os.path.join(d, 'config.json')
+        with open(p, 'w') as f:
+            json.dump({}, f)
+        srv = office.Server(('127.0.0.1', 0), office.make_handler(p))
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        port = srv.server_address[1]
+
+        def req(method, path, body=None, headers=None):
+            c = http.client.HTTPConnection('127.0.0.1', port, timeout=20)
+            c.request(method, path, body, headers or {})
+            r = c.getresponse()
+            out = r.status, r.read().decode()
+            c.close()
+            return out
+        try:
+            code, body = req('GET', '/')
+            self.assertEqual(code, 200)
+            self.assertIn('does not know the address', body)
+            form = {'Content-Type': 'application/x-www-form-urlencoded'}
+            code, body = req('POST', '/change', f'address=127.0.0.1:{fake.server_address[1]}', form)
+            self.assertIn('not the Break Area Management System', body)
+            code, body = req('POST', '/change', f'address=127.0.0.1:{port}', form)
+            self.assertIn('address of this PC', body)
+            code, body = req('POST', '/change', 'address=x', {**form, 'Origin': 'http://evil.example'})
+            self.assertEqual(code, 403, 'another web site cannot change the address')
+            self.assertEqual(office.office_url(p), '', 'nothing was saved')
+            self.assertEqual(req('GET', '/other')[0], 404)
+        finally:
+            srv.shutdown()
+            fake.shutdown()
+            srv.server_close()
+            fake.server_close()
+            shutil.rmtree(d)

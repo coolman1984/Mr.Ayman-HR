@@ -34,7 +34,7 @@ def compile_program(v4):
     run([sys.executable, '-m', 'nuitka', '--standalone', '--assume-yes-for-downloads', '--windows-console-mode=attach',
          f'--output-dir={BUILD}', '--output-filename=BAMS.exe', f'--windows-icon-from-ico={os.path.join(BUILD, "bams.ico")}',
          f'--company-name={DEVELOPER}', f'--product-name={PRODUCT}', f'--file-description={PRODUCT}', f'--file-version={v4}',
-         f'--product-version={v4}', f'--copyright={COPYRIGHT}', '--include-module=nodectl', '--include-module=_assets',
+         f'--product-version={v4}', f'--copyright={COPYRIGHT}', '--include-module=nodectl', '--include-module=office', '--include-module=_assets',
          '--nofollow-import-to=tkinter,unittest,pydoc,test', os.path.join('server', 'bams_main.py')])
 
 

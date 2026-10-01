@@ -1,5 +1,19 @@
 # What is new
 
+## 2.7.0
+
+- **Use the office system** (field report: "Join" never connected in the office, only personal links worked). A new PC now offers
+  **Use the office system (recommended)** first: it finds the administrator PC by itself (or you type its address, it is checked while you
+  type), and from then on the program on that PC opens the administrator PC – the same way a personal link does. People log in there with their
+  user name and password. The PC keeps no data of its own, shares nothing and needs no keys, so nothing can get out of step.
+- If the administrator PC is off, the program says so in plain words, with **Try again** and a box for a new address.
+- A PC that was set up alone by mistake: **Devices & Sync → Use the office system instead** (nothing is deleted, a backup is made first).
+- The instructions shown after adding a person with a user name and password, the Help and the guides now describe this way.
+- *Join an existing system (full copy)* is still there for PCs that must work while the administrator PC is off; it needs the sharing port 8443
+  open in the network.
+- Fixed: after switching a PC, a browser that still had a connection open to it kept showing the old setup page.
+- 2.7 and 2.6 PCs work together (no change to the shared data).
+
 ## 2.6.0
 
 - **Area Log** on every break area page: write notes (painting, renovation, repairs, visits…) and see everything that happened – notes, work,
