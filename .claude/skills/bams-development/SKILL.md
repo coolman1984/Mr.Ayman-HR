@@ -135,6 +135,7 @@ Check a local compile on Linux: `pip install --target <dir> nuitka ordered-set z
 - **Office mode** (2.7, `server/office.py`): config.json `office_url` → `BAMS.exe` runs only the small page on 127.0.0.1 (no `app` import, no data).
   Links and office mode use the web port 8080; join/sharing use 8443 (often blocked in company networks). After a switch the old server must close
   kept-alive browser connections (`OFFICE_SWITCH` in `do_GET/do_POST/send`). `BAMS.exe tool use-this-pc` ends it. Tests: `T44_OfficeMode`, `OfficeModeTest`.
+- A page on 127.0.0.1 is reachable by any web site through DNS rebinding: local-only routes check Host/Origin with `office.local_request`, not only the IP.
 - Never weaken login security (longer sessions, "remember me", fewer checks) without the owner's explicit yes – the session's safety check refuses it.
 - Script files share one global scope: no short top-level names in new JS files. `<a data-act>` needs `data-href`
   to reach `ACT` – use `<button>` for in-page actions.

@@ -890,7 +890,11 @@ class OfficeModeTest(unittest.TestCase):
         for bad in ('', 'has spaces', 'a@b', 'host:0', 'host:70000'):
             with self.assertRaises(ValueError, msg=bad):
                 office.parse_address(bad)
+        self.assertEqual(office.parse_address('fe80::1'), 'http://[fe80::1]:8080/')
+        self.assertEqual(office.parse_address('[fe80::1]:9000'), 'http://[fe80::1]:9000/')
         self.assertTrue(office.is_this_pc('http://localhost:8080/', 8080))
+        for mine in ('0.0.0.0', '127.0.0.2', '[::1]'):
+            self.assertTrue(office.is_this_pc(f'http://{mine}:8080/', 8080), mine)
         self.assertFalse(office.is_this_pc('http://localhost:8081/', 8080))
 
     def test_config_keeps_other_settings(self):
@@ -948,12 +952,40 @@ class OfficeModeTest(unittest.TestCase):
             self.assertEqual(code, 200)
             self.assertIn('does not know the address', body)
             form = {'Content-Type': 'application/x-www-form-urlencoded'}
+            plain = dict(form)
+            form = {**form, 'Origin': f'http://127.0.0.1:{port}'}
             code, body = req('POST', '/change', f'address=127.0.0.1:{fake.server_address[1]}', form)
             self.assertIn('not the Break Area Management System', body)
             code, body = req('POST', '/change', f'address=127.0.0.1:{port}', form)
             self.assertIn('address of this PC', body)
-            code, body = req('POST', '/change', 'address=x', {**form, 'Origin': 'http://evil.example'})
+            code, body = req('POST', '/change', 'address=x', {**plain, 'Origin': 'http://evil.example'})
             self.assertEqual(code, 403, 'another web site cannot change the address')
+            code, body = req('POST', '/change', 'address=x', plain)
+            self.assertEqual(code, 403, 'a POST without the Origin of this page')
+            code, body = req('GET', '/', None, {'Host': f'evil.example:{port}'})
+            self.assertEqual(code, 403, 'DNS rebinding: a page whose name points to 127.0.0.1 reads nothing')
+            code, body = req('POST', '/change', 'address=x', {**plain, 'Host': f'evil.example:{port}', 'Origin': f'http://evil.example:{port}'})
+            self.assertEqual(code, 403)
+            # something in the network that does not speak proper HTTP is "not it", never a crash (review finding)
+            import socket as so
+            junk = so.socket()
+            junk.bind(('127.0.0.1', 0))
+            junk.listen(5)
+
+            def answer():
+                for _ in range(2):
+                    try:
+                        k, _a = junk.accept()
+                        k.recv(1024)
+                        k.sendall(b'garbage that is not http\r\n\r\n')
+                        k.close()
+                    except OSError:
+                        return
+            threading.Thread(target=answer, daemon=True).start()
+            with self.assertRaises(ValueError):
+                office.check(f'http://127.0.0.1:{junk.getsockname()[1]}/', timeout=5)
+            self.assertEqual(office.discover(junk.getsockname()[1], hosts=['127.0.0.1']), [])
+            junk.close()
             self.assertEqual(office.office_url(p), '', 'nothing was saved')
             self.assertEqual(req('GET', '/other')[0], 404)
         finally:

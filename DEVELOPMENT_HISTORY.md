@@ -35,6 +35,13 @@ a managed company network). Nothing in the program can open a port that the netw
   that weaken security need the owner's explicit, informed yes – ask first.
 - The browser test found a real bug: after the switch, Chrome kept its open keep-alive connection to the old server and showed the old setup page.
   Fix: after the switch the old server answers every request on old connections with a redirect / "reload" and closes the connection.
+- Independent review (all fixed, with tests): **DNS rebinding** – a web page whose name is switched to 127.0.0.1 sends its own name as Host and
+  Origin, so "Origin equals Host" was not enough; the small page and the office endpoints now accept only Host/Origin `localhost`/`127.0.0.1`
+  (`office.local_request`), otherwise a web site could point every PC at a fake login page. A device in the network that does not speak proper HTTP
+  (`http.client.HTTPException`) broke the search; the live address check of the rescue window used a route closed for a set-up PC (`?check=1` now);
+  the old backup thread kept running after the switch; old `/api/` calls got redirects instead of a clear answer; bare IPv6 addresses; `0.0.0.0` /
+  `127.0.0.2` were not recognised as this PC; the portable start ignored `--background`; the security log could say "switched" before the setting
+  was written. Lesson: a page on 127.0.0.1 is reachable by every web site through DNS rebinding – always check Host, not only Origin.
 - `T44` checks the sharing port is *not* accepted as a web address (`Nothing answers`), the address of this PC is refused, and another web site cannot
   change the saved address (Origin check on the small page).
 

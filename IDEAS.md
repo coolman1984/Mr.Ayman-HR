@@ -80,7 +80,8 @@ Kept up to date with every change (rule in `CLAUDE.md`). New idea → new card i
   or says in plain words that it is off ("Try again", new address). Old open browser connections are closed after the switch.
 - **Where:** `server/office.py`, `server/bams_main.py`, `/api/office/*` and `/api/node/office` in `server/app.py`, `showOffice` in `js/devices.js`.
 - **Reuse when / watch out:** any "local server" app in a locked-down network – always keep one path that needs nothing but a browser
-  address. Test a real switch with a real browser: keep-alive connections and cached pages can show the old screen.
+  address. Test a real switch with a real browser: keep-alive connections and cached pages can show the old screen. A page on 127.0.0.1
+  must check the Host header (DNS rebinding), not only the caller's IP.
 - 🇪🇬 **بالعربي:** لو شبكة الشركة قافلة "باب" المشاركة بين الأجهزة، خلّي الجهاز التاني ما يشيلش داتا خالص ويفتح الجهاز الرئيسي زي
   اللينك بالظبط. نفس الدخول ونفس الشاشات، ومفيش حاجة تتلخبط.
 

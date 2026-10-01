@@ -430,7 +430,7 @@ function showOffice(rescue) {
     if (!box) return;
     if (!v.trim()) { box.textContent = ''; return; }
     box.className = 'hint'; box.textContent = 'Checking…';
-    api('POST', '/api/office/probe', { address: v.trim() }).then(r => { if ($('#officeAddress').value === v) { box.className = 'hint ok-txt'; box.textContent = `✓ Found "${r.name}"${r.role === 'authority' ? ' (administrator PC)' : ''}.`; } })
+    api('POST', rescue ? '/api/node/office?check=1' : '/api/office/probe', { address: v.trim() }).then(r => { if ($('#officeAddress').value === v) { box.className = 'hint ok-txt'; box.textContent = `✓ Found "${r.name}"${r.role === 'authority' ? ' (administrator PC)' : ''}.`; } })
       .catch(e => { if ($('#officeAddress') && $('#officeAddress').value === v) { box.className = 'hint bad-txt'; box.textContent = e.message; } });
   };
   $('#officeAddress').addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(probe, 700); });

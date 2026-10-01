@@ -499,6 +499,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.u = None
         if OFFICE_SWITCH.is_set():  # a browser connection kept open from before: the small office page answers from now on
+            if self.path.startswith('/api/'):
+                return self.send(409, {'error': 'This PC now opens the system of the administrator PC. Please reload the page.'})
             return self.send(302, b'', 'text/plain', {'Location': self.path})
         self.handle_safely(self._get)
 
@@ -533,11 +535,12 @@ class Handler(BaseHTTPRequestHandler):
         found = office.check(url)
         if p == '/api/office/probe':
             return self.send(200, found)
+        name = BACKUPS.create('pre-office') if rescue else ''
+        office.set_office_url(CONFIG_PATH, url)
         if rescue:
-            name = BACKUPS.create('pre-office')
             AUTH.log(self.user, self.ip, 'office-mode', NODE.name, f'This PC now opens the system of {urlparse(url).netloc}; '
                      f'its own data is kept unchanged in the data folder (backup {name})')
-        office.set_office_url(CONFIG_PATH, url)
+        BACKUPS.stopped = True
         say(f'Office mode: this PC now opens the system of {urlparse(url).netloc}')
         OFFICE_SWITCH.set()
         threading.Timer(0.5, lambda: HTTPD and HTTPD.shutdown()).start()  # the tiny office page takes over this port
@@ -708,7 +711,7 @@ class Handler(BaseHTTPRequestHandler):
                 raise Forbidden('Only on a new, not yet set up PC, on the PC itself.')
             return self.send(200, {'found': SYNC.discover()})
         if p in ('/api/office/discover', '/api/office/probe', '/api/office/use'):  # office mode: open the administrator PC like a link
-            if self.ip not in LOCAL_IPS or AUTH.has_users() or NODE.role != 'unconfigured':
+            if self.ip not in LOCAL_IPS or not office.local_request(self.headers, True) or AUTH.has_users() or NODE.role != 'unconfigured':
                 raise Forbidden('Only on a new, not yet set up PC, on the PC itself.')
             return self.office(p)
         if p == '/api/join/cancel':
@@ -827,11 +830,11 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(200, {'ok': True, 'restart': True, 'backup': name})
         if p == '/api/node/office':  # a PC set up alone by mistake: use the system of the administrator PC instead (nothing is deleted)
             self.need('users.manage')
-            if self.ip not in LOCAL_IPS:
-                raise Forbidden('This can only be done on the PC itself.')
+            if self.ip not in LOCAL_IPS or not office.local_request(self.headers, True):
+                raise Forbidden('This can only be done on the PC itself (http://localhost).')
             if NODE.role != 'authority' or SYNC.summary().get('state') != 'single':
                 raise Forbidden('This PC already shares data with other PCs, so it must keep running the system.')
-            return self.office('/api/office/use', rescue=True)
+            return self.office('/api/office/probe' if qs.get('check') else '/api/office/use', rescue=True)
         if p == '/api/backups/folder':  # a second folder (USB drive, other disk) that gets a copy of every backup
             self.need('backups.manage')
             if not is_admin(self.u):
@@ -1067,7 +1070,7 @@ def main(background=False):
     global HTTPD
     port = int(CFG['port'])
     if CFG.get('office_url'):  # portable start of a PC in office mode (the installed program goes there directly)
-        return office.serve(CONFIG_PATH, port, open_browser=CFG.get('open_browser', True) and not background)
+        return None if background else office.serve(CONFIG_PATH, port, open_browser=CFG.get('open_browser', True))
     if not INSTANCE:
         print('The system is already running on this PC. Opening it in the browser.')
         if not background:
@@ -1117,7 +1120,12 @@ def main(background=False):
         say('Server stopped')
     if OFFICE_SWITCH.is_set():
         httpd.server_close()
-        office.serve(CONFIG_PATH, port, open_browser=False)
+        for _ in range(20):  # the port can take a moment to be free again (Windows)
+            if office.serve(CONFIG_PATH, port, open_browser=False) is not False:
+                break
+            time.sleep(0.5)
+        else:
+            say(f'Office mode: port {port} is not free - the page starts with the next click on the desktop icon')
 
 
 if __name__ == '__main__':

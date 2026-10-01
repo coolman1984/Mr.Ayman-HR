@@ -1664,6 +1664,11 @@ def page_of(base, path='/'):
         c.close()
 
 
+def local_post(c, path, body):
+    """A POST like the browser on the PC itself sends it (with Origin)."""
+    return c.call('POST', path, body, headers={'Origin': c.base})
+
+
 class T44_OfficeMode(unittest.TestCase):
     """The field report after 2.6: in the office only the web address of the administrator PC can be reached (personal links work,
     "Join" never connects - the sharing port is blocked). A PC in office mode keeps no data and opens the administrator PC like a
@@ -1678,18 +1683,29 @@ class T44_OfficeMode(unittest.TestCase):
             ac.post('/api/commit', {'label': 'data', 'ops': [area_op('C1', 'Company Canteen')]})
             b = B.client()
             # the address is checked first: the web address of the administrator PC (what a personal link uses)
-            found = b.post('/api/office/probe', {'address': A.base + '/k/some-personal-link'})
+            found = local_post(b, '/api/office/probe', {'address': A.base + '/k/some-personal-link'})
             self.assertEqual((found['role'], found['url']), ('authority', A.base + '/'))
             for bad, why in (('127.0.0.1:1', 'Nothing answers'), (B.base, 'this PC'), ('has spaces', 'address of the administrator PC'),
                              ('127.0.0.1:' + str(A.sync_port), 'Nothing answers')):  # the sharing port is not a web address
                 with self.assertRaises(ApiError, msg=bad) as e:
-                    b.post('/api/office/probe', {'address': bad})
+                    local_post(b, '/api/office/probe', {'address': bad})
                 self.assertEqual(e.exception.code, 400, bad)
                 self.assertIn(why, e.exception.msg, bad)
             with self.assertRaises(ApiError) as e:  # never on a PC that is already set up
-                ac.post('/api/office/use', {'address': B.base})
+                local_post(ac, '/api/office/use', {'address': B.base})
             self.assertEqual(e.exception.code, 403)
-            r = b.post('/api/office/use', {'address': A.base.split('//')[1]})
+            # review finding: a web page whose name was switched to 127.0.0.1 (DNS rebinding) or a request without the page's Origin
+            # must not choose the address (it could send everybody to a fake login page)
+            with self.assertRaises(ApiError) as e:
+                b.post('/api/office/use', {'address': A.base})
+            self.assertEqual(e.exception.code, 403, 'no Origin')
+            import http.client
+            c = http.client.HTTPConnection('127.0.0.1', B.port, timeout=30)
+            c.request('POST', '/api/office/use', json.dumps({'address': A.base}),
+                      {'Host': f'evil.example:{B.port}', 'Origin': f'http://evil.example:{B.port}', 'Content-Type': 'application/json'})
+            self.assertEqual(c.getresponse().status, 403, 'DNS rebinding: Host is not this PC')
+            c.close()
+            r = local_post(b, '/api/office/use', {'address': A.base.split('//')[1]})
             self.assertEqual(r['url'], A.base + '/')
             with open(B.cfg_path) as f:
                 self.assertEqual(json.load(f)['office_url'], A.base + '/', 'remembered in config.json of this PC')
@@ -1735,10 +1751,13 @@ class T44_OfficeMode(unittest.TestCase):
                 C.client().post('/api/node/office', {'address': A.base})
             self.assertIn(e.exception.code, (401, 403), 'not without logging in')
             with self.assertRaises(ApiError) as e:  # the new-PC route is closed on a PC that is set up
-                cc.post('/api/office/use', {'address': A.base})
+                local_post(cc, '/api/office/use', {'address': A.base})
             self.assertEqual(e.exception.code, 403)
+            found = local_post(cc, '/api/node/office?check=1', {'address': A.base})  # the live check of the address while typing
+            self.assertEqual(found['role'], 'authority')
+            self.assertEqual(page_of(C.base, '/api/auth/status')[0], 200, 'checking does not switch')
             before = os.path.getsize(os.path.join(C.data_dir, 'bams.db'))
-            r = cc.post('/api/node/office', {'address': A.base})
+            r = local_post(cc, '/api/node/office', {'address': A.base})
             self.assertEqual(r['url'], A.base + '/')
             wait_until(lambda: page_of(C.base)[1] == A.base + '/', 20, what='office redirect on ' + C.name)
             self.assertTrue(os.path.getsize(os.path.join(C.data_dir, 'bams.db')) >= before, 'its own data is kept, not deleted')
@@ -1753,7 +1772,7 @@ class T44_OfficeMode(unittest.TestCase):
             ac = make_authority(A)
             pair(ac, A, B)
             with self.assertRaises(ApiError) as e:
-                ac.post('/api/node/office', {'address': B.base})
+                local_post(ac, '/api/node/office', {'address': B.base})
             self.assertEqual(e.exception.code, 403, 'a PC that shares with others must keep running the system')
         finally:
             A.cleanup()

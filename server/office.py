@@ -12,6 +12,8 @@ The tiny page listens on this PC only (127.0.0.1). When the administrator PC can
 words, with "Try again" and a box to correct the address.
 """
 import html
+import http.client
+import ipaddress
 import json
 import os
 import socket
@@ -31,13 +33,13 @@ def parse_address(text, port=WEB_PORT):
     """'http://host:port/' from what a person types: ADMIN-PC, 192.168.1.10, 192.168.1.10:8080 or a whole web address
     (a personal link works too: only the PC part is used)."""
     a = str(text or '').strip()
-    a = a.split('://', 1)[-1].split('/', 1)[0].strip().rstrip('.')
+    a = a.split('://', 1)[-1].split('/', 1)[0].split('?', 1)[0].strip().rstrip('.')
     host, _, p = a.rpartition(':')
-    if not (host and p.isdigit()):
+    if not (host and p.isdigit()) or (':' in host and not host.startswith('[')):  # no port, or a bare IPv6 address
         host, p = a, str(port)
     if host.startswith('[') and host.endswith(']'):
         host = host[1:-1]
-    if not host or any(ch in host for ch in ' \\@?#') or not 0 < int(p) < 65536:
+    if not host or any(ch in host for ch in ' \\@?#[]') or not 0 < int(p) < 65536:
         raise ValueError('Type the address of the administrator PC, for example ADMIN-PC or 192.168.1.10.')
     return f'http://{"[" + host + "]" if ":" in host else host}:{int(p)}/'
 
@@ -45,8 +47,37 @@ def parse_address(text, port=WEB_PORT):
 def is_this_pc(url, port):
     """The address of this PC's own page (it would open itself in a circle)."""
     u = urlparse(url)
-    names = {'localhost', '127.0.0.1', '::1', socket.gethostname().lower(), *local_ips()}
-    return (u.port or 80) == int(port) and (u.hostname or '').lower() in names
+    host = (u.hostname or '').lower().rstrip('.')
+    if (u.port or 80) != int(port):
+        return False
+    try:
+        ip = ipaddress.ip_address(host)
+        if ip.is_loopback or ip.is_unspecified:
+            return True
+    except ValueError:
+        pass
+    me = socket.gethostname().lower()
+    try:
+        full = socket.getfqdn().lower()
+    except OSError:
+        full = me
+    return host in {'localhost', me, full, me.split('.')[0], *local_ips()}
+
+
+LOCAL_HOSTS = ('localhost', '127.0.0.1', '::1')
+
+
+def local_request(headers, post):
+    """Only the browser on this PC, opened at localhost / 127.0.0.1 (against DNS rebinding: a web site whose name was switched to
+    127.0.0.1 sends its own name as Host). A POST must also come from such a page (Origin)."""
+    def host_of(v):
+        return (urlparse('//' + v).hostname or '').lower() if v else ''
+    if host_of(headers.get('Host')) not in LOCAL_HOSTS:
+        return False
+    if post:
+        origin = headers.get('Origin')
+        return bool(origin) and origin != 'null' and host_of(urlparse(origin).netloc) in LOCAL_HOSTS
+    return True
 
 
 def check(url, timeout=5):
@@ -60,7 +91,7 @@ def check(url, timeout=5):
         if r.status != 200:
             raise ValueError('Something answers at that address, but it is not the Break Area Management System.')
         d = json.loads(body.decode('utf-8'))
-    except (OSError, socket.timeout):
+    except (OSError, socket.timeout, http.client.HTTPException):
         raise ValueError('Nothing answers at that address. Check the address, that the administrator PC is switched on with the program '
                          'running, and that both PCs are in the company network.')
     except (ValueError, UnicodeDecodeError, AttributeError):
@@ -104,7 +135,7 @@ def discover(port=WEB_PORT, hosts=None):
     def probe(h):
         try:
             found.append(check(f'http://{h}:{port}/', timeout=1.5))
-        except ValueError:
+        except Exception:  # noqa: BLE001 - anything else in the network (printers, cameras) is simply not it
             pass
     with ThreadPoolExecutor(64) as ex:
         list(ex.map(probe, hosts))
@@ -193,6 +224,8 @@ def make_handler(config_path):
             return self.send(200, page('The system cannot be opened right now', body))
 
         def do_GET(self):
+            if not local_request(self.headers, False):
+                return self.send(403, page('Not allowed', '<p>Open this page on this PC at http://localhost.</p>'))
             if urlparse(self.path).path != '/':
                 return self.send(404, page('Not found', '<p><a href="/">Open the system</a></p>'))
             url = office_url(config_path)
@@ -205,8 +238,7 @@ def make_handler(config_path):
             return self.send(302, b'', {'Location': url})
 
         def do_POST(self):
-            origin = self.headers.get('Origin')
-            if (origin and urlparse(origin).netloc != self.headers.get('Host')) or urlparse(self.path).path != '/change':
+            if not local_request(self.headers, True) or urlparse(self.path).path != '/change':
                 return self.send(403, page('Not allowed', '<p>This request was blocked.</p>'))
             n = int(self.headers.get('Content-Length') or 0)
             if n > 4096:
@@ -233,10 +265,10 @@ def serve(config_path, port=WEB_PORT, open_browser=True):
     """Runs the tiny page on this PC (until the program is ended). A second start only opens the browser."""
     try:
         httpd = Server(('127.0.0.1', port), make_handler(config_path))
-    except OSError:  # already running
+    except OSError:  # already running (or the port is still taken)
         if open_browser:
             webbrowser.open(f'http://localhost:{port}/')
-        return
+        return False
     print(f'Office mode: this PC opens {office_url(config_path)} (page on http://localhost:{port}/)', flush=True)
     if open_browser:
         threading.Timer(0.5, lambda: webbrowser.open(f'http://localhost:{port}/')).start()
