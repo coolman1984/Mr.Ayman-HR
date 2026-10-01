@@ -1753,6 +1753,12 @@ class T44_OfficeMode(unittest.TestCase):
             with self.assertRaises(ApiError) as e:  # the new-PC route is closed on a PC that is set up
                 local_post(cc, '/api/office/use', {'address': A.base})
             self.assertEqual(e.exception.code, 403)
+            import socket as so
+            alias = so.gethostbyname(so.gethostname())  # another address of this PC: it must not point to itself
+            for me in (f'{alias}:{C.port}', f'127.0.0.2:{C.port}'):
+                with self.assertRaises(ApiError, msg=me) as e:
+                    local_post(cc, '/api/node/office?check=1', {'address': me})
+                self.assertIn(e.exception.code, (400,), me)
             found = local_post(cc, '/api/node/office?check=1', {'address': A.base})  # the live check of the address while typing
             self.assertEqual(found['role'], 'authority')
             self.assertEqual(page_of(C.base, '/api/auth/status')[0], 200, 'checking does not switch')

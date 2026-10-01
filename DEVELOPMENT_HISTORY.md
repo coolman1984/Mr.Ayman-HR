@@ -42,6 +42,8 @@ a managed company network). Nothing in the program can open a port that the netw
   the old backup thread kept running after the switch; old `/api/` calls got redirects instead of a clear answer; bare IPv6 addresses; `0.0.0.0` /
   `127.0.0.2` were not recognised as this PC; the portable start ignored `--background`; the security log could say "switched" before the setting
   was written. Lesson: a page on 127.0.0.1 is reachable by every web site through DNS rebinding – always check Host, not only Origin.
+- Automatic PR review (Codex): another name of the same PC (DNS alias, second network card) passed the "this PC" check, so a lone PC could point to
+  itself and lock itself out. Now the name is resolved, and the answer's PC id is compared with this PC's id.
 - `T44` checks the sharing port is *not* accepted as a web address (`Nothing answers`), the address of this PC is refused, and another web site cannot
   change the saved address (Origin check on the small page).
 

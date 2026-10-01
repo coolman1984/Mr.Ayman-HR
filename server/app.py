@@ -533,6 +533,8 @@ class Handler(BaseHTTPRequestHandler):
         if office.is_this_pc(url, CFG['port']):
             raise ValueError('That is the address of this PC. Type the address of the administrator PC.')
         found = office.check(url)
+        if found.get('id') == NODE.id:  # the same program, reached by another name of this PC (review finding)
+            raise ValueError('That is the address of this PC. Type the address of the administrator PC.')
         if p == '/api/office/probe':
             return self.send(200, found)
         name = BACKUPS.create('pre-office') if rescue else ''

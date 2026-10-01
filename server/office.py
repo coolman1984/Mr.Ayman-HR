@@ -61,7 +61,17 @@ def is_this_pc(url, port):
         full = socket.getfqdn().lower()
     except OSError:
         full = me
-    return host in {'localhost', me, full, me.split('.')[0], *local_ips()}
+    mine = {'localhost', me, full, me.split('.')[0], *local_ips()}
+    if host in mine:
+        return True
+    try:  # another name or address of this PC (a DNS alias, a second network card)
+        for info in socket.getaddrinfo(host, None):
+            ip = ipaddress.ip_address(info[4][0].split('%')[0])
+            if ip.is_loopback or ip.is_unspecified or str(ip) in mine:
+                return True
+    except (OSError, ValueError, UnicodeError):
+        pass
+    return False
 
 
 LOCAL_HOSTS = ('localhost', '127.0.0.1', '::1')
@@ -103,7 +113,7 @@ def check(url, timeout=5):
     if not d.get('hasUsers'):
         raise ValueError('The program runs on that PC, but it is not set up yet. Type the address of the administrator PC.')
     node, about = d.get('node') or {}, d.get('about') or {}
-    return {'url': url, 'name': str(node.get('name') or u.hostname)[:80], 'role': str(node.get('role') or ''),
+    return {'url': url, 'name': str(node.get('name') or u.hostname)[:80], 'role': str(node.get('role') or ''), 'id': str(node.get('id') or ''),
             'system': str(about.get('systemName') or '')[:80]}
 
 
