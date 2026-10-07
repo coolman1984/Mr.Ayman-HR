@@ -349,6 +349,25 @@ Kept up to date with every change (rule in `CLAUDE.md`). New idea → new card i
 - **Where:** `dashKpis`, `kpiCard`, `pageHref` in `js/app.js`.
 - 🇪🇬 **بالعربي:** كل كارت فيه سطر صغير بيشرح الرقم، ولونه أخضر لو مفيش مشكلة، ولو دوست عليه يفتح الصفحة اللي فيها التفاصيل.
 
+### 6.10 A web program that feels like a desktop app (Edge app mode)
+- **Problem:** people asked for "a separate app", not a browser tab; a real desktop framework would mean another runtime to ship and secure.
+- **Idea:** start the browser that every Windows PC has in *app mode*: `msedge --app=http://localhost:8080/ --user-data-dir=<own folder>`.
+- **How:** own window without tabs or address bar, own taskbar entry with the page icon (a PNG file – an inline SVG is ignored there), own profile
+  so it never mixes with the person's tabs; fall back to the normal browser.
+- **Where:** `server/appwindow.py`. **Watch out:** the session lives in that own profile (log in once there).
+- 🇪🇬 **بالعربي:** البرنامج يفتح في شباك لوحده زي أي برنامج، باستخدام Edge في وضع "App" من غير تابات ولا شريط عنوان.
+
+### 6.11 One drawing for every icon (desktop, taskbar, screens, print)
+- **Idea:** describe the logo once as simple shapes; render it to `.ico`/PNG in pure Python and use the same shapes as inline SVG; a test
+  compares them. **Where:** `tools/make_icon.py`, `APP_MARK`.
+- 🇪🇬 **بالعربي:** اللوجو مرسوم مرة واحدة ويطلع منه أيقونة الويندوز والصورة والـ SVG، والاختبار يتأكد إنهم شبه بعض.
+
+### 6.12 A command bar: "+ New" from anywhere, menu as icons
+- **Idea:** the everyday jobs in one menu on every page, filtered by permission; jobs for one place use the open place or ask which one. A
+  sidebar that collapses to icons (with tool tips) gives room on small screens; the choice is remembered before the page is drawn.
+- **Where:** `quickItems`, `quickNew`, `popMenu`, `toggleNav` in `js/app.js`, `js/boot.js`.
+- 🇪🇬 **بالعربي:** زرار "New" فيه كل الشغل اليومي من أي صفحة، والقائمة الجانبية ممكن تبقى أيقونات بس.
+
 ### 6.9 A big icon set that people can actually search (names never change)
 - **Problem:** 600 icons are useless if you have to scroll through them; and an item type stores the icon *name*, so renaming breaks old data.
 - **Idea:** generate the pack from an open icon set with its search words (tags); suggest icons from the name the person types; keep every

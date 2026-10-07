@@ -4,6 +4,9 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Break Area Management System</title>
+  <meta name="theme-color" content="#1428A0">
+  <link rel="icon" type="image/png" sizes="256x256" href="lib/app-icon.png">
+  <link rel="apple-touch-icon" href="lib/app-icon.png">
   <link rel="stylesheet" href="css/fonts.css">
   <link rel="stylesheet" href="css/styles.css">
   <script src="js/boot.js"></script>
@@ -11,14 +14,18 @@
 <body>
   <div class="app">
     <header class="topbar">
-      <button class="icon-btn menu-btn" data-act="toggleNav" aria-label="Menu"></button>
       <div class="brand" id="brand"></div>
+      <button class="icon-btn menu-btn" type="button" data-act="toggleNav" aria-label="Show or hide the menu names"></button>
+      <span class="app-mark-wrap" id="appMark"></span>
       <div class="title-block">
         <h1 id="sysName"></h1>
-        <small id="factoryName"></small>
+        <small><span id="factoryName"></span><span class="crumb" id="crumb"></span></small>
       </div>
       <div class="top-right">
         <button class="search-btn hidden" id="searchBtn" type="button" title="Search everything (Ctrl K)" aria-label="Search"><span class="sb-ic"></span><span class="sb-txt">Search</span><kbd>Ctrl K</kbd></button>
+        <button class="btn primary new-btn hidden" id="newBtn" type="button" data-act="newMenu" data-pop aria-haspopup="menu" aria-expanded="false" title="Create or record something"></button>
+        <a class="icon-btn top-ic" id="helpBtn" href="#/help" title="Help and user guide" aria-label="Help"></a>
+        <button class="icon-btn top-ic" id="fsBtn" type="button" data-act="fullscreen" aria-label="Full screen"></button>
         <a class="aa-btn hidden" id="fontBtn" href="#/account" title="Font and text size">Aa</a>
         <a class="sync-ind hidden" id="syncInd" href="#/devices"></a>
         <a class="bell" href="#/maintenance" id="bell" title="Open issues"></a>

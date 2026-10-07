@@ -19,11 +19,12 @@ import os
 import socket
 import sys
 import threading
-import webbrowser
 from concurrent.futures import ThreadPoolExecutor
 from http.client import HTTPConnection
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
+
+import appwindow
 
 WEB_PORT = 8080
 TITLE = 'Break Area Management System'
@@ -271,17 +272,17 @@ class Server(ThreadingHTTPServer):
     daemon_threads = True
 
 
-def serve(config_path, port=WEB_PORT, open_browser=True):
+def serve(config_path, port=WEB_PORT, open_browser=True, app_window=True):
     """Runs the tiny page on this PC (until the program is ended). A second start only opens the browser."""
     try:
         httpd = Server(('127.0.0.1', port), make_handler(config_path))
     except OSError:  # already running (or the port is still taken)
         if open_browser:
-            webbrowser.open(f'http://localhost:{port}/')
+            appwindow.open_window(f'http://localhost:{port}/', app_window)
         return False
     print(f'Office mode: this PC opens {office_url(config_path)} (page on http://localhost:{port}/)', flush=True)
     if open_browser:
-        threading.Timer(0.5, lambda: webbrowser.open(f'http://localhost:{port}/')).start()
+        threading.Timer(0.5, lambda: appwindow.open_window(f'http://localhost:{port}/', app_window)).start()
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
@@ -299,7 +300,11 @@ def main(argv=None):
         port = int(_read(path).get('port', WEB_PORT))
     except (OSError, ValueError):
         port = WEB_PORT
-    serve(path, port, open_browser='--no-browser' not in argv)
+    try:
+        app_window = appwindow.enabled(_read(path).get('app_window', True))
+    except (OSError, ValueError):
+        app_window = True
+    serve(path, port, open_browser='--no-browser' not in argv, app_window=app_window)
     return 0
 
 

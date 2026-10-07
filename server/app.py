@@ -18,7 +18,6 @@ import threading
 import time
 import traceback
 import uuid
-import webbrowser
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlparse
@@ -34,6 +33,7 @@ from sync import SyncService  # noqa: E402
 from system import System, lock_data  # noqa: E402
 from upgrade import DataFromNewerVersion, UpgradeVerificationFailed, check_now  # noqa: E402
 import excel_import  # noqa: E402
+import appwindow  # noqa: E402
 import office  # noqa: E402
 import xlsx_read  # noqa: E402
 
@@ -55,6 +55,7 @@ DEFAULT_CONFIG = {
     'keep_auto_backups': 200,
     'max_upload_mb': 50,
     'open_browser': True,
+    'app_window': True,  # open in its own window (Edge / Chrome app mode) instead of a browser tab
     'session_idle_minutes': 30,
     'session_max_hours': 12,
     'max_failed_logins': 5,
@@ -1065,6 +1066,11 @@ class Server(ThreadingHTTPServer):
 
 
 HTTPD = None
+
+
+def open_ui(port):
+    """the program in its own window (or the browser when app_window is off or no Edge / Chrome is found)"""
+    appwindow.open_window(f'http://localhost:{port}/', CFG.get('app_window', True))
 OFFICE_SWITCH = threading.Event()  # set when this PC switched to office mode: the tiny office page replaces the server
 
 
@@ -1072,18 +1078,18 @@ def main(background=False):
     global HTTPD
     port = int(CFG['port'])
     if CFG.get('office_url'):  # portable start of a PC in office mode (the installed program goes there directly)
-        return None if background else office.serve(CONFIG_PATH, port, open_browser=CFG.get('open_browser', True))
+        return None if background else office.serve(CONFIG_PATH, port, open_browser=CFG.get('open_browser', True), app_window=CFG.get('app_window', True))
     if not INSTANCE:
         print('The system is already running on this PC. Opening it in the browser.')
         if not background:
-            webbrowser.open(f'http://localhost:{port}/')
+            open_ui(port)
         return
     try:
         httpd = Server((CFG['host'], port), Handler)
     except OSError:
         print(f'Port {port} is already in use - the system is probably already running. Opening it in the browser.')
         if not background:  # a second start (e.g. the desktop icon while it runs in the background) just opens it
-            webbrowser.open(f'http://localhost:{port}/')
+            open_ui(port)
         return
     HTTPD = httpd
 
@@ -1111,7 +1117,7 @@ def main(background=False):
     print('=' * 64, flush=True)
     say('Server started')
     if CFG.get('open_browser', True) and not background:
-        threading.Timer(0.8, lambda: webbrowser.open(f'http://localhost:{port}/')).start()
+        threading.Timer(0.8, lambda: open_ui(port)).start()
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

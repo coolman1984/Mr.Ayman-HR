@@ -771,6 +771,62 @@ class IconPackTest(unittest.TestCase):
         self.assertGreaterEqual(len(tags), 450, 'most icons have search words')
 
 
+class AppWindowAndMarkTest(unittest.TestCase):
+    """2.8: the program opens in its own window (Edge / Chrome app mode, own profile) and falls back to the browser;
+    the Windows icon and the mark on the screens are the same drawing."""
+
+    def test_app_window_command_and_fallback(self):
+        import appwindow
+        cmd = appwindow.command('msedge.exe', 'http://localhost:8080/')
+        self.assertEqual(cmd[:2], ['msedge.exe', '--app=http://localhost:8080/'])
+        self.assertTrue(any(c.startswith('--user-data-dir=') and c.endswith(os.path.join('BAMS', 'AppWindow')) for c in cmd), 'own window profile')
+        opened, started = [], []
+        orig = (appwindow.webbrowser.open, appwindow.browsers, appwindow.subprocess.Popen)
+        try:
+            appwindow.webbrowser.open = opened.append
+            appwindow.browsers = lambda: iter([])  # no Edge / Chrome on this PC
+            self.assertFalse(appwindow.open_window('http://localhost:8080/'))
+            self.assertEqual(opened, ['http://localhost:8080/'], 'the normal browser opens instead')
+            appwindow.browsers = lambda: iter([os.path.abspath(__file__)])  # any file that exists
+            appwindow.subprocess.Popen = lambda c, **kw: started.append(c)
+            self.assertTrue(appwindow.open_window('http://localhost:8080/'))
+            self.assertEqual(started[0][1], '--app=http://localhost:8080/')
+            self.assertFalse(appwindow.open_window('http://localhost:8080/', app_window=False), 'app_window: false keeps the browser')
+            self.assertFalse(appwindow.open_window('http://localhost:8080/', app_window='false'), 'also written as text in config.json')
+            self.assertEqual(len(started), 1)
+            orig_signin = appwindow.forced_signin
+            appwindow.forced_signin = lambda exe: True  # a company policy forces a sign-in: the browser instead of a sign-in page
+            try:
+                self.assertFalse(appwindow.open_window('http://localhost:8080/'))
+            finally:
+                appwindow.forced_signin = orig_signin
+            self.assertEqual(len(started), 1)
+        finally:
+            appwindow.webbrowser.open, appwindow.browsers, appwindow.subprocess.Popen = orig
+
+    def test_icon_and_mark_are_the_same_drawing(self):
+        import importlib.util
+        import re
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        spec = importlib.util.spec_from_file_location('make_icon', os.path.join(root, 'tools', 'make_icon.py'))
+        mi = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mi)
+        data = mi.ico(sizes=(32, 16))
+        self.assertEqual(data[:4], b'\x00\x00\x01\x00')
+        self.assertEqual(int.from_bytes(data[4:6], 'little'), 2)
+        px = mi.draw(64, 1)
+        self.assertEqual(px[0][0][3], 0, 'rounded corner is transparent')
+        self.assertEqual(px[51][31][:3], (255, 255, 255), 'the saucer is white')
+        self.assertNotEqual(px[8][8][:3], (255, 255, 255), 'the tile is blue')
+        app = open(os.path.join(root, 'js', 'app.js'), encoding='utf-8').read()
+        paths = lambda t: re.findall(r'\sd="([^"]+)"', t)
+        self.assertEqual(paths(app.split('const APP_MARK =', 1)[1].split(';', 1)[0]), paths(mi.SVG), 'APP_MARK in js/app.js = the Windows icon')
+        page = open(os.path.join(root, 'index.html'), encoding='utf-8').read()
+        self.assertIn('<link rel="icon" type="image/png" sizes="256x256" href="lib/app-icon.png">', page)
+        with open(os.path.join(root, 'lib', 'app-icon.png'), 'rb') as f:
+            self.assertEqual(f.read(), mi.png(mi.draw(256, 2)), 'lib/app-icon.png is made by tools/make_icon.py (python tools/make_icon.py lib/app-icon.png)')
+
+
 class ExcelImportTest(unittest.TestCase):
     """server/excel_import.py: the rules that make an import safe."""
 
@@ -892,9 +948,11 @@ class AppearanceFilesTest(unittest.TestCase):
             self.assertIn(f'html[data-font="{fam}"]', styles)
         boot = open(os.path.join(root, 'js', 'boot.js'), encoding='utf-8').read()
         app = open(os.path.join(root, 'js', 'app.js'), encoding='utf-8').read()
-        for fam in ("'inter'", "'source'", "'plex'", "'dm'", "'nunito'", "'serif'"):
+        for fam in ("'segoe'", "'source'", "'plex'", "'dm'", "'nunito'", "'serif'"):  # 2.8: Inter is the standard, Segoe UI a choice
             self.assertIn(fam, boot)
             self.assertIn(fam, app)
+        self.assertIn("'inter'", boot, 'a font chosen before 2.8 (inter) keeps working')
+        self.assertIn('html[data-font="segoe"]', styles)
         self.assertIn('0.85, 0.92, 1, 1.1, 1.2, 1.35', boot)
         self.assertTrue(os.path.exists(os.path.join(root, 'docs', 'FONTS_LICENSE.txt')))
         self.assertIn('fonts', open(os.path.join(root, 'tools', 'make_assets.py')).read())

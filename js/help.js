@@ -16,7 +16,8 @@ const HELP = [
       their name.`],
     ['How do I open it?', `Use the way the administrator gave you:<ul>
       <li>${helpBold('Personal link')} – just open your link (save it as a bookmark). No user name or password.</li>
-      <li>${helpBold('Desktop icon')} – on a PC where the program is installed, double-click ${helpBold('Break Area Management System')}.</li>
+      <li>${helpBold('Desktop icon')} – on a PC where the program is installed, double-click ${helpBold('Break Area Management System')}. It opens in its
+        own window (with the blue cup icon in the taskbar), not as a tab of your browser.</li>
       <li>${helpBold('Address')} – type the address the administrator gave you (for example http://192.168.1.10:8080) into the browser.</li></ul>`],
     ['How do I log in and out?', `With a user name and password: type them and press ${helpBold('Log In')}. With a personal link you are logged in
       straight away. To log out click your name (top right) → ${helpBold('Log Out')}. Always log out on a shared PC.`],
@@ -25,6 +26,10 @@ const HELP = [
     ['What am I allowed to do?', `Click your name (top right) → ${helpBold('What I can do')}. It lists every page and action with a tick or a cross.
       If you need more, ask the administrator.`],
     ['How do I change my password?', `Click your name → ${helpBold('Change Password')}. People who log in with a personal link have no password.`],
+    ['What is in the bar at the top?', `From left: the button that shows the menu ${helpBold('with names or only as icons')} (the choice is kept on
+      this PC), the name of the page you are on, ${helpBold('Search')} (Ctrl K) to find anything, ${helpBold('New')} for the everyday jobs from any page
+      (update items, report an issue, schedule maintenance, record an inspection, add a note or photos… – if no break area is open it asks which one),
+      ${helpBold('Help')}, ${helpBold('Full screen')}, ${helpBold('Aa')} for the text size, the bell with what is open or due, and your name for your account.`],
     ['What does the dashboard show?', `At the top ten cards with the numbers people ask first: break areas, chairs, tables, TV screens, water dispensers,
       all items, items that need attention (need repair, damaged or out of service), open issues, inspections that are due and satisfaction. If your
       account may not see some of them, other cards take their place. Click a card to open the page with the details. Green means nothing to do,

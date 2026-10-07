@@ -464,13 +464,13 @@ function printHTML(html) {
   setTimeout(() => window.print(), 50);
 }
 function printTable(title, head, rows) {
-  printHTML(`<div class="print-report"><div class="logo">${esc(setting('logoText'))}</div>
+  printHTML(`<div class="print-report"><div class="print-brand">${appMark()}<div class="logo">${esc(setting('logoText'))}</div></div>
     <h2>${esc(title)}</h2><div>${esc(setting('factory'))} · Printed ${fmt(today())} by ${esc(me())}</div>
     <table><thead><tr>${head.map(h => `<th>${esc(h)}</th>`).join('')}</tr></thead>
     <tbody>${rows.map(r => `<tr>${r.map(c => `<td>${esc(c)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`);
 }
 function labelHTML(a) {
-  return `<div class="label"><div class="logo">${esc(setting('logoText'))}</div><div class="qr">${qrSVG(areaURL(a.id))}</div>
+  return `<div class="label"><div class="print-brand">${appMark()}<div class="logo">${esc(setting('logoText'))}</div></div><div class="qr">${qrSVG(areaURL(a.id))}</div>
     <h3>${esc(a.name)}</h3><p>${esc(a.location)} · ${esc(a.building)} / ${esc(a.floor)}</p><p>Scan to view break area profile</p></div>`;
 }
 const printLabels = list => printHTML(`<div class="labels">${list.map(labelHTML).join('')}</div>`);
@@ -490,13 +490,19 @@ function renderShell(route) {
   $('#user').innerHTML = `<div class="avatar">${esc(initials(me()))}</div><div class="who"><b>${esc(me())}</b><small>${esc(ME.title || ME.role || ME.username)} ▾</small></div>`;
   $('#user').dataset.act = 'accountMenu';
   $('#user').title = 'My account, change password, log out';
-  $('.menu-btn').innerHTML = ic('menu');
+  menuButton();
+  $('#appMark').innerHTML = appMark();
+  $('#crumb').textContent = PAGE_TITLES[route[0] === 'area' ? 'areas' : route[0]] || '';
+  $('#newBtn').classList.toggle('hidden', !quickItems().length);
+  $('#newBtn').innerHTML = `${ic('plus')}<span>New</span>`;
+  $('#helpBtn').innerHTML = ic('help');
+  fsButton();
 
   const top = route[0];
   const areasOpen = top === 'areas' || top === 'area';
   $('#bell').classList.toggle('hidden', !can('maintenance.view'));
-  const link = (href, icon, label, active, extra = '') => canPage(href.slice(2)) ? `<a href="${href}" class="${active ? 'active' : ''}">${ic(icon)}<span>${label}</span>${extra}</a>` : '';
-  $('#sidebar').innerHTML = `<div class="nav">
+  const link = (href, icon, label, active, extra = '') => canPage(href.slice(2)) ? `<a href="${href}" class="${active ? 'active' : ''}" title="${label.replace('&amp;', '&')}" aria-label="${label.replace('&amp;', '&')}">${ic(icon)}<span>${label}</span>${extra}</a>` : '';
+  $('#sidebar').innerHTML = `<div class="nav"><div class="nav-label">Menu</div>
       ${link('#/dashboard', 'dashboard', 'Dashboard', top === 'dashboard')}
       ${link('#/areas', 'building', 'Break Areas', areasOpen, can('areas.create') && allAreas() ? ic(areasOpen ? 'chevD' : 'chevR', 'chev') : '')}
       ${areasOpen && can('areas.create') && allAreas() ? `<div class="sub">
@@ -512,8 +518,120 @@ function renderShell(route) {
       ${link('#/settings', 'settings', 'Settings', top === 'settings')}
       ${link('#/help', 'help', 'Help', top === 'help')}
     </div>
-    <div class="side-foot"><b>Better Break Areas</b>for a better workplace.</div>`;
+    <div class="side-foot"><span class="side-mark">${appMark()}</span><div><b>Better Break Areas</b>for a better workplace.</div></div>`;
 }
+
+/* ============================== App mark, command bar, sidebar ============================== */
+/* The program's own mark (a cup with steam on the blue tile of the Samsung UI kit). The same drawing is the Windows icon
+   (tools/make_icon.py) and the page icon (index.html), so window, taskbar, desktop and screens look alike. */
+const APP_MARK = '<svg viewBox="0 0 64 64" aria-hidden="true"><defs><linearGradient id="bamsMarkG" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#2189FF"/><stop offset="1" stop-color="#1428A0"/></linearGradient></defs>'
+  + '<rect width="64" height="64" rx="15" fill="url(#bamsMarkG)"/><g fill="#fff"><path d="M19 26h24v10a12 11 0 0 1-24 0z"/><path d="M43 27a7 7 0 0 1 0 14v-3.5a3.5 3.5 0 0 0 0-7z"/>'
+  + '<rect x="15" y="49" width="32" height="4" rx="2"/></g><g fill="none" stroke="#fff" stroke-width="3.2" stroke-linecap="round"><path d="M26 21c-2.5-3 2.5-5 0-9"/><path d="M35 21c-2.5-3 2.5-5 0-9"/></g></svg>';
+let APP_MARK_N = 0; // every copy gets its own gradient id: a gradient inside a hidden copy would leave the others without colour
+const appMark = (cls = '') => { const id = 'bamsMarkG' + (++APP_MARK_N); return `<span class="app-mark ${cls}">${APP_MARK.replace(/bamsMarkG/g, id)}</span>`; };
+const PAGE_TITLES = { dashboard: 'Dashboard', areas: 'Break Areas', equipment: 'Furniture & Equipment', transactions: 'Transactions', maintenance: 'Maintenance',
+  reports: 'Reports', logs: 'Activity Log', users: 'Users & Permissions', devices: 'Devices & Sync', settings: 'Settings', help: 'Help', account: 'My Account' };
+
+/* sidebar with names, or only icons (kept in this browser); on a phone the menu button opens it over the page */
+const navMini = () => document.documentElement.classList.contains('nav-mini');
+function toggleNav() {
+  if (innerWidth <= 820) return document.body.classList.toggle('nav-open');
+  const mini = !navMini();
+  document.documentElement.classList.toggle('nav-mini', mini);
+  try { localStorage.setItem('bams_nav', mini ? 'mini' : 'full'); } catch (e) { /* the choice still applies until the page is closed */ }
+  menuButton();
+}
+
+/* "+ New": the everyday jobs from any page, only those the person may do. Jobs for one break area use the open break area
+   or ask which one. */
+function quickItems() {
+  const any = DB && DB.areas.length > 0;
+  return [
+    ['invModal', 'plus', 'Update furniture & equipment', 'Add, remove, replace or move items', can('inventory.edit') && any, true],
+    ['issueModal', 'circleAlert', 'Report an issue', 'Something is broken or missing', can('issues.create') && any, true],
+    ['maintModal', 'calendarClock', 'Schedule maintenance', 'Plan work for a date', can('maintenance.create') && any, true],
+    ['inspModal', 'clipboardCheck', 'Record an inspection', 'Result and next date', can('inspections.create') && any, true],
+    ['surveyModal', 'smile', 'Add a satisfaction result', 'Monthly survey percentage', can('surveys.create') && any, true],
+    ['noteModal', 'notebookPen', 'Write a note', 'Painting, visit, renovation…', can(...NOTE_PERMS) && any, true],
+    ['uploadModal', 'camera', 'Upload photos or documents', 'Before / after, invoices…', can('files.upload') && any, true],
+    ['-'],
+    ['newArea', 'building', 'New break area', 'Add a break area', can('areas.create') && allAreas(), false],
+    ['itemTypeModal', 'tags', 'New item type', 'A new kind of furniture or equipment', can('itemtypes.manage'), false],
+    ['userEdit', 'userPlus', 'Add a person', 'Account with a link or a password', can('users.manage'), false],
+    ['importExcel', 'sheet', 'Import from Excel', 'Many break areas at once', can('areas.create') && allAreas(), false]
+  ].filter(q => q[0] === '-' || q[4]).filter((q, i, list) => q[0] !== '-' || (i > 0 && i < list.length - 1));
+}
+function closePop(focusBack) {
+  const p = $('#pop');
+  if (!p) return;
+  p.remove();
+  $$('[aria-expanded="true"][data-pop]').forEach(b => { b.setAttribute('aria-expanded', 'false'); if (focusBack) b.focus(); });
+}
+function popMenu(anchor, html) {
+  const was = $('#pop') && anchor.getAttribute('aria-expanded') === 'true';
+  closePop();
+  if (was) return;
+  const el = document.createElement('div');
+  el.id = 'pop'; el.className = 'pop-menu'; el.setAttribute('role', 'menu');
+  el.innerHTML = html;
+  document.body.append(el);
+  const r = anchor.getBoundingClientRect();
+  el.style.top = (r.bottom + 8) + 'px';
+  el.style.left = Math.max(8, Math.min(r.right - el.offsetWidth, innerWidth - el.offsetWidth - 8)) + 'px';
+  anchor.setAttribute('aria-expanded', 'true');
+  const first = el.querySelector('button'); if (first) first.focus();
+  el.addEventListener('keydown', e => { // arrows move, Tab leaves, Escape goes back to the button
+    const items = $$('button', el), i = items.indexOf(document.activeElement);
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); items[(i + (e.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length].focus(); }
+    else if (e.key === 'Home' || e.key === 'End') { e.preventDefault(); items[e.key === 'Home' ? 0 : items.length - 1].focus(); }
+    else if (e.key === 'Tab') closePop();
+    else if (e.key === 'Escape') { e.stopPropagation(); closePop(true); }
+  });
+}
+function newMenu(anchor) {
+  const cur = parseRoute()[0] === 'area' ? area(parseRoute()[1]) : null;
+  popMenu(anchor, `<div class="pop-h">${cur ? `For <b>${esc(cur.name)}</b> or anywhere` : 'Create or record'}</div>` + quickItems().map(q => q[0] === '-' ? '<hr>'
+    : `<button type="button" role="menuitem" class="pop-item" data-act="quickNew" data-job="${q[0]}">${ic(q[1])}<span><b>${esc(q[2])}</b><small>${esc(q[3])}</small></span></button>`).join(''));
+}
+async function quickNew(job) {
+  closePop();
+  const q = quickItems().find(x => x[0] === job);
+  if (!q) return;
+  const run = data => { OPENER = [job, data]; try { ACT[job](data); } finally { OPENER = null; } };
+  if (job === 'newArea') { location.hash = '#/areas/new'; return; }
+  if (job === 'userEdit') { // the window needs the permissions and profiles; people are added on the administrator PC only
+    try { USERS = await api('GET', '/api/users'); } catch (e) { return toast(e.message, true); }
+    if (!USERS.authority) return toast(USERS.authorityHint || 'People can only be added on the administrator PC.', true, 8000);
+  }
+  if (!q[5]) return run({});
+  const route = parseRoute(), here = route[0] === 'area' && area(route[1]);
+  if (here) return run({ id: here.id });
+  if (DB.areas.length === 1) return run({ id: DB.areas[0].id });
+  const list = [...DB.areas].sort((x, y) => x.name.localeCompare(y.name));
+  modal(q[2], `<label class="fld">Which break area?<select name="area" required autofocus>${list.map(a => `<option value="${esc(a.id)}">${esc(a.name)} – ${esc(a.location)}</option>`).join('')}</select></label>
+    <p class="hint">Tip: open a break area first, then <b>New</b> uses it directly.</p>`, {
+    submit: 'Continue',
+    async onSubmit(d) { const a = area(d.area); if (!a) return false; run({ id: a.id }); return false; } // the next window replaces this one
+  });
+}
+function fsButton() { const b = $('#fsBtn'); if (b) { b.innerHTML = ic(document.fullscreenElement ? 'minimize' : 'maximize'); b.title = document.fullscreenElement ? 'Leave full screen (Esc)' : 'Full screen'; } }
+function toggleFullscreen() {
+  if (document.fullscreenElement) return document.exitFullscreen();
+  if (!document.documentElement.requestFullscreen) return toast('Full screen is not possible here', true);
+  document.documentElement.requestFullscreen().catch(() => toast('Full screen is not possible here', true));
+}
+/* the menu button shows the menu (phone) or switches names / icons only (wide screen) */
+function menuButton() {
+  const b = $('.menu-btn'), phone = innerWidth <= 820;
+  if (!b || !ME) return;
+  b.innerHTML = ic(phone ? 'menu' : navMini() ? 'panelLeftOpen' : 'panelLeftClose');
+  b.title = phone ? 'Menu' : navMini() ? 'Show the menu with names' : 'Show only the icons';
+}
+document.addEventListener('fullscreenchange', fsButton);
+window.addEventListener('resize', menuButton);
+document.addEventListener('click', e => { if ($('#pop') && !e.target.closest('#pop') && !e.target.closest('[data-pop]')) closePop(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closePop(); });
+window.addEventListener('resize', closePop);
 
 const parseRoute = () => (location.hash.replace(/^#\/?/, '') || firstPage()).split('/');
 
@@ -1342,7 +1460,7 @@ function invModal(a, presetItem) {
 }
 
 /* ============================== Appearance: font and text size (kept on this PC) ============================== */
-const FONT_CHOICES = [['default', 'Standard', 'Clean and familiar (Segoe UI)'], ['inter', 'Inter', 'Modern and very clear'], ['source', 'Source Sans 3', 'Elegant and easy to read'],
+const FONT_CHOICES = [['default', 'Standard', 'Inter – the font of the Samsung style, very clear'], ['segoe', 'Segoe UI', 'The classic Windows look'], ['source', 'Source Sans 3', 'Elegant and easy to read'],
   ['plex', 'IBM Plex Sans', 'Professional and precise'], ['dm', 'DM Sans', 'Soft and geometric'], ['nunito', 'Nunito Sans', 'Friendly and rounded'], ['serif', 'Merriweather', 'A classic serif for calm reading']];
 const LOOK_SIZES = [[0.85, 'Smallest'], [0.92, 'Small'], [1, 'Normal'], [1.1, 'Large'], [1.2, 'Larger'], [1.35, 'Largest']];
 function lookGet() { try { return JSON.parse(localStorage.getItem('bams_look') || '{}'); } catch (e) { return {}; } }
@@ -1353,7 +1471,7 @@ function lookSet(change) {
   try { localStorage.setItem('bams_look', JSON.stringify({ font: p.font || 'default', size: p.size || 1 })); } catch (e) { /* the change still applies until the page is closed */ }
 }
 function appearanceCard() {
-  const p = lookGet(), font = p.font || 'default', size = LOOK_SIZES.some(s => s[0] === p.size) ? p.size : 1, i = LOOK_SIZES.findIndex(s => s[0] === size);
+  const p = lookGet(), font = p.font && p.font !== 'inter' ? p.font : 'default', size = LOOK_SIZES.some(s => s[0] === p.size) ? p.size : 1, i = LOOK_SIZES.findIndex(s => s[0] === size);
   return `<div class="card mb appearance"><div class="card-h">${ic('sparkles')}<h3>Appearance</h3><span class="hint">Only for you, on this PC and browser</span></div>
     <div class="look-size"><b>Text size</b>
       <button class="btn" data-act="lookSize" data-step="-1" ${i <= 0 ? 'disabled' : ''} title="Smaller text"><span class="aa sm">A</span>−</button>
@@ -2363,8 +2481,9 @@ const ASYNC = {
 function authScreen(html) {
   document.body.classList.add('locked');
   closeModal();
+  closePop();
   const short = (DB && setting('logoText')) || (ABOUT && ABOUT.logoText) || '';
-  $('#auth').innerHTML = `<div class="auth-card">${short ? `<div class="logo">${esc(short)}</div>` : ''}${html}</div>`;
+  $('#auth').innerHTML = `<div class="auth-card">${appMark('lg')}${short ? `<div class="logo">${esc(short)}</div>` : ''}${html}</div>`;
   const first = $('#auth input');
   if (first) first.focus();
 }
@@ -2858,7 +2977,10 @@ async function importOldBackup(file) {
 /* ============================== Events ============================== */
 const ACT = {
   go: d => { location.hash = d.href; },
-  toggleNav: () => document.body.classList.toggle('nav-open'),
+  toggleNav: () => toggleNav(),
+  newMenu: (d, el) => newMenu(el),
+  quickNew: d => quickNew(d.job),
+  fullscreen: () => toggleFullscreen(),
   closeModal,
   accountMenu,
   changePassword: () => passwordModal(false),
@@ -3231,6 +3353,7 @@ document.addEventListener('submit', async e => {
 });
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#modal').dataset.locked) closeModal(); });
 window.addEventListener('hashchange', () => {
+  closePop();
   if (!ME || !DB) return;
   if (!$('#modal').dataset.locked) closeModal();
   F.hist = { item: '', action: '' }; F.photoTab = 'All';

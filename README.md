@@ -11,7 +11,7 @@ changes with them automatically and encrypted over the company network – see *
 
 1. Run **BAMS-Setup.exe** on the administrator PC (Next → Next → Finish). The same file updates an installed PC;
    the data is never touched.
-2. The system opens in the browser. **Settings** shows the address for other PCs and phones, e.g.
+2. The system opens in its own window (like a separate app; Edge app mode, no tabs or address bar). **Settings** shows the address for other PCs and phones, e.g.
    `http://192.168.1.10:8080/`. People with a personal link just open their link.
 3. On other PCs: install it and choose **Use the office system** – the PC then opens the administrator PC like a
    personal link (people log in with user name and password, nothing is stored there). **Join an existing system
