@@ -38,4 +38,4 @@ The ✓ marks a plan done by hand, the × drops it (it stays in the list). Plans
 
 ## Import, search, icons
 **Break Areas → Import from Excel** (template to download; nothing that exists is changed, so importing twice is harmless), **Ctrl K** searches everything, item types get an icon
-from 124 icons in the item type window, **Settings → Data Safety** shows what the last update did to your data and can check it at any time.
+from more than 600 icons in the item type window (typing the name suggests one), **Settings → Data Safety** shows what the last update did to your data and can check it at any time.

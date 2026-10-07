@@ -129,6 +129,22 @@ Check a local compile on Linux: `pip install --target <dir> nuitka ordered-set z
 - A PC only shares data after it JOINED (`Join an existing system`); a PC set up as a first PC is a separate system. Every text that tells someone how to start must say so (`startInstructionsModal`). `/api/node/leave` rescues a lone PC.
 - In `do_POST` the routes before the session is read are public; authenticated routes (with `self.need`) go after it.
 - Icons: `js/icons.js` is generated (`tools/make_icons.py`, Lucide, ISC) - never edit it by hand; `IconPackTest` fails when a screen uses an icon that does not exist.
+  Since 2.8: ~600 icons in 15 `GROUPS` (a new name with an already offered drawing is dropped), new names = camelCase Lucide names, `ICON_TAGS` = search words. Never rename/remove a `PACK` name (item types
+  store it). Regenerate: `npm pack lucide-static` into an EMPTY scratch folder (check the folder first – a failed `cd` unpacked it into the repo once),
+  `tar -xzf`, then `python tools/make_icons.py <that folder>/package`. A name already drawn in `IC` (app.js) keeps that drawing.
+- Dashboard (2.8): `dashKpis()` = one list ordered by importance, the first ten the person may see (`maintenance.view`, `surveys.view` cards are skipped), links use
+  `pageHref` (`PAGE_PERMS`). Per-category overviews use `rankList()` (first 8 + Show all), never one column per category – the real factory has ~60 item types.
+  Always check a screen with many item types (55+) and at 1366 / 1024 / 390 px.
+- Look (2.8): Samsung UI kit (`D:\WORK\Software Development\GitHub\samsung-ui-kit\samsung-ui-kit`, `samsung-ui.css`) – base text 14 px, icons 20 px,
+  cards radius 16, pill buttons. Keep `calc(Npx * var(--fs))` for every size.
+- Windows dev PC: `NodeSafetyTest.test_interrupted_upgrade_is_repeated` and `ToolsTest.test_rebuild_gives_identical_data` fail with `PermissionError`
+  (SQLite files cannot be renamed while open) – also on `main`; CI on Linux is the reference.
+- Look at the screens without touching real data: `BAMS_CONFIG=<scratch>/config.json` with its own `data_dir`, port and sync port, `python server/app.py`.
+  Playwright: if its Chromium is missing use `pw.chromium.launch(channel='msedge')`; accept dialogs (`page.on('dialog', d => d.accept())`) – the
+  "first PC" choice asks for confirmation.
+- Running the PC tests on Windows: the harness stops servers with SIGINT (Linux only) – patch `harness.Server.stop` to `proc.terminate()`.
+  With Edge, `test_font_and_text_size_choice`, `test_area_log_finished_work_and_repeats` and `test_new_pc_screens_and_instructions` fail on
+  console "401 / 404 Failed to load resource" (status check before login, favicon) – also on `main`; CI with Chromium is the reference.
 - Excel import (`excel_import.plan`) never changes what exists; a new importable field needs a column name list, a warning for bad values, and a test in `ExcelImportTest`.
 - `repr()` / `str()` of Python data is not JavaScript: write generated JS with explicit brackets.
 - A new permission is not in the stored permission lists of existing accounts: `Auth._user()` adds `maintenance.cost` for `users.manage`.

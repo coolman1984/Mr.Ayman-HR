@@ -570,14 +570,24 @@ function donut(data, centerLabel) {
       <text x="60" y="75" text-anchor="middle" class="c-lbl">${centerLabel}</text></svg>
     <div class="legend">${data.map(d => `<div><i style="background:${d.color}"></i>${esc(d.label)}<b>${d.value}</b></div>`).join('')}</div></div>`;
 }
-function vbars(data) {
-  const max = Math.max(1, ...data.map(d => d.value));
-  return `<div class="vbars">${data.map(d => `<div class="vbar"><span class="v">${d.value}</span><div class="b" style="height:${Math.max(2, d.value / max * 100)}%"></div></div>`).join('')}</div>
-    <div class="vlabels">${data.map(d => `<div>${ic(d.icon)}${esc(d.label)}</div>`).join('')}</div>`;
+/* Furniture & equipment ranked by quantity: one readable row per item type, however many types there are.
+   rows: [{icon, label, value, sub, warn}] largest first; the first `top` rows show, the rest open with "Show all". */
+const RANK_OPEN = {}; // which ranked lists show all rows (kept when the page is drawn again after a change from another PC)
+function rankList(rows, { key = '', top = 8, href = '', empty = 'Nothing yet' } = {}) {
+  if (!rows.length) return `<p class="empty">${esc(empty)}</p>`;
+  const max = Math.max(1, ...rows.map(r => r.value));
+  const tag = href ? 'a' : 'div';
+  const row = r => `<${tag} class="rank-row"${href ? ` href="${href}"` : ''}><span class="rank-ic">${ic(r.icon)}</span>
+    <span class="rank-n"><b>${esc(r.label)}</b><small>${r.warn ? `<span class="rank-warn">${esc(r.warn)}</span> · ` : ''}${esc(r.sub)}</small></span>
+    <span class="rank-t"><i style="width:${Math.max(r.value ? 2 : 0, r.value / max * 100)}%"></i></span><b class="rank-v">${r.value.toLocaleString()}</b></${tag}>`;
+  const rest = rows.slice(top), open = !!RANK_OPEN[key];
+  return `<div class="rank-list">${rows.slice(0, top).map(row).join('')}</div>
+    ${rest.length ? `<div class="rank-list rank-rest ${open ? '' : 'hidden'}">${rest.map(row).join('')}</div>
+      <button type="button" class="rank-more" data-act="rankMore" data-key="${esc(key)}" aria-expanded="${open}">${ic('chevD')}<span class="${open ? 'hidden' : ''}">Show all ${rows.length}</span><span class="${open ? '' : 'hidden'}">Show fewer</span></button>` : ''}`;
 }
 function hbars(data) {
   const max = Math.max(1, ...data.map(d => d.value));
-  return data.map(d => `<div class="hbar"><span>${esc(d.label)}</span><div class="t"><div class="f" style="width:${d.value / max * 100}%"></div></div><b>${d.value}</b></div>`).join('');
+  return data.map(d => `<div class="hbar"><span title="${esc(d.label)}">${esc(d.label)}</span><div class="t"><div class="f" style="width:${d.value / max * 100}%"></div></div><b>${d.value}</b></div>`).join('');
 }
 /* Monthly satisfaction line (0–100 %) with a dashed target line. points: [{month, value, n}] oldest first. */
 function satLine(points, { h = 230, compact = false } = {}) {
@@ -663,26 +673,91 @@ function attentionCard() {
     ${items.length ? items.map(i => `<a class="att-row ${i.level}" href="${i.href}">${ic(i.icon)}<div><b>${esc(i.text)}</b><small>${esc(i.sub)}</small></div>${ic('chevR')}</a>`).join('')
       : `<p class="muted" style="margin:4px 0">${ic('checkCircle')} Nothing needs attention right now.</p>`}</div>`;
 }
+const pageHref = page => can(...PAGE_PERMS[page]) ? '#/' + page : '';
+const plural = (n, one, many = one + 's') => `${n.toLocaleString()} ${n === 1 ? one : many}`;
+/* an inventory entry that is not in good condition (Need Repair, Damaged, Out of Service) - the same rule as the Furniture & Equipment page */
+const invNotGood = e => !!(e && e.qty && e.condition !== 'Good');
+/* The ten numbers at the top of the dashboard: what a manager asks first. Every card says what it counts and opens the page
+   with the details. Cards about problems turn green when there is nothing to do. Cards are listed by importance; a card that
+   needs a right the person does not have is left out and the next one fills the row, so there are always ten. */
+function dashKpis() {
+  const A = DB.areas, t = today();
+  const tot = id => A.reduce((s, a) => s + qty(a, id), 0);
+  const typeCard = (key, label) => {
+    const id = mainItem(key), n = A.filter(a => qty(a, id)).length;
+    return { icon: (itemType(id) || {}).icon || MAIN_ICON[key], label, value: tot(id), sub: n ? `in ${plural(n, 'break area')}` : 'not in any break area', color: '', href: pageHref('equipment') };
+  };
+  const good = A.filter(a => a.status === 'Good').length;
+  const items = DB.itemTypes.reduce((s, ty) => s + tot(ty.id), 0);
+  const seats = A.reduce((s, a) => s + (+a.capacity || 0), 0);
+  const worn = A.flatMap(a => a.inventory.filter(e => itemType(e.item) && invNotGood(e)).map(e => ({ a, e })));
+  const wornQty = worn.reduce((s, x) => s + x.e.qty, 0), wornAreas = new Set(worn.map(x => x.a.id)).size;
+  const maint = can('maintenance.view'), surveys = can('surveys.view');
+  const cards = [
+    { icon: 'building', label: 'Break Areas', value: A.length, sub: good === A.length ? 'All in good condition' : `${good} good · ${A.length - good} need work`, color: '', href: pageHref('areas') },
+    typeCard('chairs', 'Chairs'), typeCard('tables', 'Tables'), typeCard('tv', 'TV Screens'), typeCard('water', 'Water Dispensers'),
+    { icon: 'boxes', label: 'Total Items', value: items, sub: plural(DB.itemTypes.length, 'item type'), color: 'indigo', href: pageHref('equipment') },
+    { icon: 'wrench', label: 'Items Need Attention', value: wornQty, sub: wornQty ? `in ${plural(wornAreas, 'break area')}` : 'Everything is in good condition', color: wornQty ? 'orange' : 'green', href: pageHref('equipment') }
+  ];
+  if (maint) {
+    const open = A.flatMap(a => a.issues.filter(i => i.status !== 'Closed')), high = open.filter(i => i.priority === 'High').length;
+    cards.push({ icon: 'circleAlert', label: 'Open Issues', value: open.length, sub: open.length ? (high ? `${high} with high priority` : 'none with high priority') : 'No open issues', color: high ? 'red' : open.length ? 'orange' : 'green', href: pageHref('maintenance') });
+    const dated = A.filter(a => a.nextInspection); // a break area without a planned inspection date is not "due"
+    const late = dated.filter(a => inspStatus(a) === 'Overdue').length, soon = dated.filter(a => inspStatus(a) === 'Due Soon').length;
+    cards.push({ icon: 'clipboardCheck', label: 'Inspections Due', value: late + soon, sub: late ? `${late} overdue` : soon ? 'within 7 days' : 'All inspections on time', color: late ? 'red' : soon ? 'orange' : 'green', href: pageHref('maintenance') });
+  }
+  if (surveys) {
+    const byMonth = {};
+    A.forEach(a => areaMonthly(a).forEach(m => (byMonth[m.month] = byMonth[m.month] || []).push(m.value)));
+    const month = Object.keys(byMonth).sort().pop(), v = month ? avg(byMonth[month]) : null;
+    cards.push({ icon: 'smile', label: 'Satisfaction', value: v == null ? '-' : pct(v), sub: v == null ? 'No survey results yet' : `${monthName(month)} · ${SAT_LABEL[satLevel(v)]}`, color: v == null ? '' : satLevel(v) === 'good' ? 'green' : satLevel(v) === 'warn' ? 'orange' : 'red', href: '' });
+  }
+  if (maint) {
+    const work = A.flatMap(a => a.maintenance.filter(isOpenWork)), lateWork = work.filter(m => m.date && m.date < t).length;
+    cards.push({ icon: 'calendarClock', label: 'Planned Work', value: work.length, sub: lateWork ? `${lateWork} late` : work.length ? 'all on schedule' : 'Nothing planned', color: lateWork ? 'red' : 'purple', href: pageHref('maintenance') });
+  }
+  cards.push({ icon: 'users', label: 'Seating Capacity', value: seats, sub: seats ? 'people at the same time' : 'Add the capacity of each break area', color: 'teal', href: pageHref('areas') });
+  cards.push({ icon: 'mapPin', label: 'Locations', value: new Set(A.map(a => a.location).filter(Boolean)).size, sub: 'with break areas', color: 'sky', href: pageHref('areas') });
+  cards.push({ icon: 'tags', label: 'Item Types', value: DB.itemTypes.length, sub: 'kinds of furniture and equipment', color: 'purple', href: pageHref('equipment') });
+  return cards.slice(0, 10);
+}
+function kpiCard(k) {
+  const tag = k.href ? 'a' : 'div';
+  return `<${tag} class="card kpi dash-kpi"${k.href ? ` href="${k.href}"` : ''} title="${esc(k.label)}: ${esc(String(k.value))} – ${esc(k.sub)}">
+    <div class="kic ${k.color}">${ic(k.icon)}</div><div class="kpi-b"><div class="lbl">${esc(k.label)}</div><div class="val">${typeof k.value === 'number' ? k.value.toLocaleString() : esc(k.value)}</div>
+    <div class="sub">${esc(k.sub)}</div></div></${tag}>`;
+}
+function equipmentReview() {
+  const A = DB.areas;
+  const rows = DB.itemTypes.map(t => {
+    const total = A.reduce((s, a) => s + qty(a, t.id), 0), n = A.filter(a => qty(a, t.id)).length;
+    const worn = A.reduce((s, a) => { const e = invEntry(a, t.id); return s + (invNotGood(e) ? e.qty : 0); }, 0);
+    return { icon: t.icon, label: t.name, value: total, sub: n ? `in ${plural(n, 'break area')}` : 'not in any break area', warn: worn ? `${worn} need attention` : '' };
+  }).sort((x, y) => y.value - x.value || x.label.localeCompare(y.label));
+  const total = rows.reduce((s, r) => s + r.value, 0);
+  return `<div class="card dash-equip"><div class="card-h">${ic('sofa')}<h3>Furniture &amp; Equipment</h3><span class="hint">${plural(total, 'item')} · ${plural(rows.length, 'type')}</span><span class="sp"></span>
+      ${pageHref('equipment') ? '<a class="link" href="#/equipment">Details</a>' : ''}</div>
+    ${rankList(rows, { key: 'equip', href: pageHref('equipment'), empty: 'No item types yet.' })}</div>`;
+}
 function viewDashboard() {
   const A = DB.areas;
   if (!A.length) return viewWelcome();
-  const tot = id => A.reduce((s, a) => s + qty(a, id), 0);
-  const kpis = [['building', 'Total Break Areas', A.length], ['chair', 'Total Chairs', tot(mainItem('chairs'))], ['table', 'Total Tables', tot(mainItem('tables'))], ['tv', 'TV Screens', tot(mainItem('tv'))], ['dispenser', 'Water Dispensers', tot(mainItem('water'))]];
   const statusData = STATUSES.map(s => ({ label: s, value: A.filter(a => a.status === s).length, color: STATUS_COLOR[s] }));
-  const equip = DB.itemTypes.map(t => ({ label: t.name, value: tot(t.id), icon: t.icon }));
   const locs = [...new Set([...setting('locations'), ...A.map(a => a.location)])]
     .map(l => ({ label: l, value: A.filter(a => a.location === l).length })).filter(l => l.value).sort((x, y) => y.value - x.value);
   const recent = [...A].sort((x, y) => lastUpdate(y).localeCompare(lastUpdate(x))).slice(0, 9);
   const tx = DB.history.filter(h => h.action !== 'Created').sort(byDateDesc).slice(0, 6);
 
   return `
-  <div class="kpis">${kpis.map(([i, l, v]) => `<div class="card kpi"><div class="kic">${ic(i)}</div><div><div class="lbl">${l}</div><div class="val">${v.toLocaleString()}</div></div></div>`).join('')}</div>
+  <div class="kpis dash-kpis">${dashKpis().map(kpiCard).join('')}</div>
   ${can('maintenance.view') ? attentionCard() : ''}
 
-  <div class="row3">
-    <div class="card"><div class="card-h"><h3>Break Areas by Status</h3></div>${donut(statusData, 'Break Areas')}</div>
-    <div class="card"><div class="card-h"><h3>Furniture &amp; Equipment Overview</h3><span class="sp"></span>${can('equipment.view') ? '<a class="link" href="#/equipment">Details</a>' : ''}</div>${vbars(equip)}</div>
-    <div class="card"><div class="card-h"><h3>Break Areas by Location</h3></div>${hbars(locs)}</div>
+  <div class="dash-mid">
+    ${equipmentReview()}
+    <div class="dash-side">
+      <div class="card"><div class="card-h">${ic('chartPie')}<h3>Break Areas by Status</h3></div>${donut(statusData, 'Break Areas')}</div>
+      <div class="card"><div class="card-h">${ic('mapPin')}<h3>Break Areas by Location</h3></div>${hbars(locs)}</div>
+    </div>
   </div>
 
   <div class="card mb">
@@ -1812,7 +1887,7 @@ function viewEquipment() {
   const A = DB.areas;
   return `<div class="page-head"><h2>Furniture &amp; Equipment</h2>
     <div class="actions">${can('export.excel') ? `<button class="btn" data-act="exportEquip">${ic('download')}Export Excel</button>` : ''}${can('itemtypes.manage') ? `<button class="btn primary" data-act="itemTypeModal">${ic('plus')}Add Item Type</button>` : ''}</div></div>
-  <div class="kpis">${DB.itemTypes.map(t => {
+  <div class="kpis eq-kpis">${DB.itemTypes.map(t => {
     const total = A.reduce((s, a) => s + qty(a, t.id), 0);
     const bad = A.reduce((s, a) => { const e = invEntry(a, t.id); return s + (e && e.qty && e.condition !== 'Good' ? 1 : 0); }, 0);
     return `<div class="card kpi"><div class="kic ${bad ? 'orange' : ''}">${ic(t.icon)}</div><div><div class="lbl">${esc(t.name)}</div><div class="val">${total}</div>
@@ -1838,10 +1913,12 @@ function itemTypeModal(tid) {
   const form = modal(t ? 'Edit Item Type' : 'Add Item Type', `<div class="form-grid">
     <label>Name (plural)<input name="name" required value="${esc(t ? t.name : '')}" placeholder="e.g. Microwaves"></label>
     <label>Singular<input name="short" value="${esc(t ? t.short : '')}" placeholder="e.g. Microwave"></label>
-    <div class="full"><b class="lbl-sm">Icon</b> <span class="hint" data-icon-name></span>
+    <div class="full"><div class="ico-head"><b class="lbl-sm">Icon</b><span class="ico-now">${ic(t ? t.icon : 'box')}<span data-icon-name></span></span></div>
       <input type="hidden" name="icon" value="${esc(t ? t.icon : 'box')}">
-      <input class="ico-search" placeholder="Search icons (for example: tv, water, chair)…" autocomplete="off">
-      <div class="ico-groups">${ICON_GROUPS.map(([g, names]) => `<div class="ico-group"><small>${esc(g)}</small><div class="ico-grid">${names.map(n => `<button type="button" class="ico-pick ${n === (t ? t.icon : 'box') ? 'on' : ''}" data-ico="${n}" title="${n}">${ic(n)}</button>`).join('')}</div></div>`).join('')}</div></div></div>`, {
+      <div class="ico-suggest hidden"><small>Suggested for this name</small><div class="ico-grid" data-suggest></div></div>
+      <label class="search ico-search">${ic('search')}<input placeholder="Search ${ICON_COUNT} icons – for example: chair, water, light, clean" autocomplete="off" aria-label="Search icons"></label>
+      <div class="ico-groups">${ICON_GROUPS.map(([g, names]) => `<div class="ico-group"><small>${esc(g)}</small><div class="ico-grid">${names.map(icoPick).join('')}</div></div>`).join('')}
+        <p class="empty hidden" data-ico-none>No icon matches. Try another word, for example: seat, drink, screen, tool.</p></div></div></div>`, {
     submit: t ? 'Save' : 'Add',
     extra: t ? `<button type="button" class="btn danger" data-act="itemTypeDelete" data-tid="${t.id}">${ic('trash')}Delete Item Type</button>` : '',
     async onSubmit(d) {
@@ -1855,16 +1932,58 @@ function itemTypeModal(tid) {
       toast('Item type saved');
     }
   });
-  const hidden = form.querySelector('[name=icon]'), label = form.querySelector('[data-icon-name]');
-  const mark = () => { label.textContent = hidden.value; form.querySelectorAll('.ico-pick').forEach(b => b.classList.toggle('on', b.dataset.ico === hidden.value)); };
-  form.addEventListener('click', e => { const b = e.target.closest('.ico-pick'); if (b) { hidden.value = b.dataset.ico; mark(); } });
-  form.querySelector('.ico-search').addEventListener('input', e => {
-    const q = e.target.value.trim().toLowerCase();
-    form.querySelectorAll('.ico-pick').forEach(b => b.classList.toggle('hidden', !!q && !b.dataset.ico.includes(q)));
+  const hidden = form.querySelector('[name=icon]'), label = form.querySelector('[data-icon-name]'), now = form.querySelector('.ico-now');
+  const search = form.querySelector('.ico-search input'), suggest = form.querySelector('[data-suggest]');
+  let picked = !!t; // a new item type follows the best suggestion until the person picks an icon
+  const mark = () => {
+    label.textContent = iconLabel(hidden.value);
+    now.querySelector('svg').outerHTML = ic(hidden.value);
+    form.querySelectorAll('.ico-pick').forEach(b => b.classList.toggle('on', b.dataset.ico === hidden.value));
+  };
+  form.addEventListener('click', e => { const b = e.target.closest('.ico-pick'); if (b) { hidden.value = b.dataset.ico; picked = true; mark(); } });
+  search.addEventListener('input', () => {
+    const q = search.value;
+    form.querySelectorAll('.ico-groups .ico-pick').forEach(b => b.classList.toggle('hidden', !iconMatches(b.dataset.ico, q)));
     form.querySelectorAll('.ico-group').forEach(g => g.classList.toggle('hidden', !g.querySelector('.ico-pick:not(.hidden)')));
+    form.querySelector('[data-ico-none]').classList.toggle('hidden', !!form.querySelector('.ico-groups .ico-pick:not(.hidden)'));
   });
-  form.querySelector('.ico-search').addEventListener('keydown', e => { if (e.key === 'Enter') e.preventDefault(); });
-  mark();
+  search.addEventListener('keydown', e => { if (e.key === 'Enter') e.preventDefault(); });
+  const suggestFor = () => {
+    const found = iconSuggestions(`${form.querySelector('[name=name]').value} ${form.querySelector('[name=short]').value}`);
+    suggest.innerHTML = found.map(icoPick).join('');
+    suggest.parentElement.classList.toggle('hidden', !found.length);
+    if (!picked) hidden.value = found.length && found.best >= 4 ? found[0] : (t ? t.icon : 'box'); // only a clear match is picked by itself
+    mark();
+  };
+  form.querySelector('[name=name]').addEventListener('input', suggestFor);
+  form.querySelector('[name=short]').addEventListener('input', suggestFor);
+  suggestFor();
+}
+/* Icon picker helpers: 600+ icons, found by name or by meaning ("water" finds the dispenser, "seat" the chair) */
+const ICON_COUNT = new Set(ICON_GROUPS.flatMap(g => g[1])).size;
+const iconLabel = n => String(n).replace(/([a-z])([A-Z0-9])/g, '$1 $2').toLowerCase();
+const iconWords = n => `${iconLabel(n)} ${typeof ICON_TAGS === 'object' && ICON_TAGS[n] || ''}`;
+const iconMatches = (n, q) => String(q).toLowerCase().split(/\s+/).filter(Boolean).every(w => iconWords(n).includes(w));
+const icoPick = n => `<button type="button" class="ico-pick" data-ico="${esc(n)}" title="${esc(iconLabel(n))}" aria-label="${esc(iconLabel(n))}">${ic(n)}</button>`;
+function iconSuggestions(text) {
+  // plural -> singular: shelves -> shelf, batteries -> battery, glasses -> glass, benches -> bench, chairs -> chair
+  const words = String(text).toLowerCase().split(/[^a-z0-9]+/).filter(w => w.length > 1)
+    .map(w => w.replace(/ies$/, 'y').replace(/([lr])ves$/, '$1f').replace(/(ss|x|ch|sh)es$/, '$1').replace(/([^s])s$/, '$1'));
+  if (!words.length) return [];
+  // the last word names the thing ("Wall Paintings" are paintings): it counts double; "painting" also tries "paint"
+  const tries = words.map((w, i) => ({ forms: w.length > 5 && w.endsWith('ing') ? [w, w.slice(0, -3)] : [w], weight: i === words.length - 1 ? 2 : 1 }));
+  const score = new Map();
+  ICON_GROUPS.forEach(([, names]) => names.forEach(n => {
+    const name = iconLabel(n), parts = name.split(' '), all = iconWords(n).split(' ');
+    let s = 0;
+    tries.forEach(({ forms, weight }) => s += weight * Math.max(...forms.map(w =>
+      name === w ? 10 : parts.includes(w) ? 6 : all.includes(w) ? 2
+        : w.length > 2 && name.includes(w) ? 4 // short words (tv, ac) only count as whole words
+          : w.length > 3 && all.some(x => x.startsWith(w)) ? 1 : 0)));
+    if (s) score.set(n, s);
+  }));
+  const found = [...score].sort((x, y) => y[1] - x[1]).slice(0, 10);
+  return Object.assign(found.map(x => x[0]), { best: found.length ? found[0][1] : 0 });
 }
 
 /* ============================== Transactions ============================== */
@@ -2770,6 +2889,14 @@ const ACT = {
     location.hash = '#/logs';
   },
   securityLog: () => { F.log = { tab: 'security', q: '', user: '', type: '', area: '', from: '', to: '' }; location.hash = '#/logs'; },
+  rankMore: (d, el) => {
+    const open = el.getAttribute('aria-expanded') !== 'true';
+    if (d.key) RANK_OPEN[d.key] = open;
+    el.setAttribute('aria-expanded', open);
+    el.previousElementSibling.classList.toggle('hidden', !open);
+    el.querySelectorAll('span').forEach((x, i) => x.classList.toggle('hidden', open ? i === 0 : i === 1));
+    if (!open) el.closest('.card').scrollIntoView({ block: 'nearest' });
+  },
   scrollTrack: d => { const t = $('#track'); t.scrollBy({ left: d.dir * t.clientWidth * .7 }); },
   toHistory: () => $('#history').scrollIntoView({ behavior: 'smooth' }),
   photoTab: d => { F.photoTab = d.tab; rerender(); },
