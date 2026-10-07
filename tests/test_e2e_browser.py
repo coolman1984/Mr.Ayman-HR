@@ -56,6 +56,19 @@ class BrowserFlow(unittest.TestCase):
             a.get_by_text('Try it with sample data first').click()
             a.wait_for_selector('text=Break Area 01', timeout=30000)
             self.shot(a, '01-admin-dashboard')
+            # ---- 2.8 dashboard: ten KPI cards that open their page; furniture as a ranked list that stays readable with many types
+            self.assertEqual(a.locator('.dash-kpi .lbl').all_inner_texts(), ['Break Areas', 'Chairs', 'Tables', 'TV Screens', 'Water Dispensers',
+                             'Total Items', 'Items Need Attention', 'Open Issues', 'Inspections Due', 'Satisfaction'])
+            self.assertEqual(a.locator('.dash-equip .rank-row').count(), 7, 'one row per item type of the sample data')
+            a.evaluate("""() => { const d = document.createElement('div'); d.id = 'rankProbe';
+              d.innerHTML = rankList(Array.from({ length: 30 }, (x, i) => ({ icon: 'chair', label: 'Type ' + i, value: 30 - i, sub: '' })));
+              document.querySelector('.dash-equip').append(d); }""")
+            self.assertEqual(a.locator('#rankProbe .rank-row:visible').count(), 8, 'many item types: the first 8, the rest behind Show all')
+            a.locator('#rankProbe .rank-more').click()
+            self.assertEqual(a.locator('#rankProbe .rank-row:visible').count(), 30)
+            a.locator('#rankProbe .rank-more').click()
+            self.assertEqual(a.locator('#rankProbe .rank-row:visible').count(), 8)
+            a.evaluate("document.getElementById('rankProbe').remove()")
             # ---- Help & User Guide: from Settings, admin answers included, search works
             a.goto(self.A.base + '/#/settings')
             a.wait_for_selector('text=Delete Sample Data')
@@ -461,7 +474,7 @@ class BrowserFlow(unittest.TestCase):
             a.get_by_text('Start with my real data').click()
             a.wait_for_selector('#modal.open', state='detached', timeout=30000)  # the start sets the page itself when it is finished
             body = lambda prop: a.evaluate("p => getComputedStyle(document.body)[p]", prop)
-            self.assertEqual(body('fontSize'), '13px')
+            self.assertEqual(body('fontSize'), '14px')
             a.goto(self.A.base + '/#/settings')
             a.wait_for_selector('h3:text-is("Appearance")')
             a.click('.font-card.f-inter')
@@ -469,18 +482,18 @@ class BrowserFlow(unittest.TestCase):
             self.assertTrue(a.evaluate("document.fonts.load('16px \"Inter\"').then(f => f.length > 0)"), 'the font file is loaded from the program')
             a.click('button[data-act=lookSize][data-step="1"]')
             a.click('button[data-act=lookSize][data-step="1"]')
-            self.assertEqual(body('fontSize'), '15.6px')
+            self.assertEqual(body('fontSize'), '16.8px')
             self.assertIn('Large', a.inner_text('.look-now'))
             a.reload()
             a.wait_for_selector('h3:text-is("Appearance")')
-            self.assertEqual((body('fontSize'), 'Inter' in body('fontFamily')), ('15.6px', True), 'kept after a reload, before the page is drawn')
+            self.assertEqual((body('fontSize'), 'Inter' in body('fontFamily')), ('16.8px', True), 'kept after a reload, before the page is drawn')
             a.click('.font-card.f-serif')
             self.assertIn('Merriweather', body('fontFamily'))
             a.click('#fontBtn')
             a.wait_for_selector('h2:text-is("My Account")')
             a.wait_for_selector('h3:text-is("Appearance")')
             a.click('button[data-act=lookReset]')
-            self.assertEqual(body('fontSize'), '13px')
+            self.assertEqual(body('fontSize'), '14px')
             self.assertNotIn('Merriweather', body('fontFamily'))
             # served like the rest of the program: known folder, right type, nothing outside it
             ok = a.evaluate("fetch('/fonts/inter-latin-wght-normal.woff2').then(r => [r.status, r.headers.get('content-type')])")

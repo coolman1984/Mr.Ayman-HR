@@ -331,6 +331,33 @@ Kept up to date with every change (rule in `CLAUDE.md`). New idea → new card i
 - 🇪🇬 **بالعربي:** لو الحفظ فشل والبيانات اتحدّثت، الشباك لازم يتفتح تاني على البيانات الجديدة ومعاه اللي كتبته،
   عشان مايقولش "اتحفظ" وهو ماحفظش حاجة.
 
+### 6.7 A chart that stays readable with 5 or 80 categories (ranked list instead of columns)
+- **Problem:** a column chart with one column per item type looked fine with 7 types; the real factory has 60, and the labels became
+  10 px text on top of each other.
+- **Idea:** show a ranked list – one row per category with icon, name, a short "why it matters" line, a bar and the number – largest first,
+  the first 8 visible and the rest behind a **Show all** button.
+- **How:** sort, slice, render rows; the hidden rows sit right before the button so "Show fewer" ends up at the bottom; the button has
+  `aria-expanded`.
+- **Where:** `rankList`, `equipmentReview`, `ACT.rankMore` in `js/app.js`.
+- **Reuse when:** any "per category" overview whose number of categories the users decide. Watch out: test with the real number of categories.
+- 🇪🇬 **بالعربي:** بدل أعمدة كتير مش مقروءة، قائمة مترتبة من الأكبر للأصغر، أول ٨ ظاهرين والباقي بزرار "Show all".
+
+### 6.8 KPI cards that explain themselves
+- **Problem:** five bare numbers; a manager still had to dig for "is something wrong?".
+- **Idea:** every card = icon + title + number + one line of context ("2 with high priority", "in 22 break areas"); problem cards turn green
+  when there is nothing to do; a click opens the page with the details. Cards a person may not see are replaced by others, so the row stays full.
+- **Where:** `dashKpis`, `kpiCard`, `pageHref` in `js/app.js`.
+- 🇪🇬 **بالعربي:** كل كارت فيه سطر صغير بيشرح الرقم، ولونه أخضر لو مفيش مشكلة، ولو دوست عليه يفتح الصفحة اللي فيها التفاصيل.
+
+### 6.9 A big icon set that people can actually search (names never change)
+- **Problem:** 600 icons are useless if you have to scroll through them; and an item type stores the icon *name*, so renaming breaks old data.
+- **Idea:** generate the pack from an open icon set with its search words (tags); suggest icons from the name the person types; keep every
+  name that was ever shipped.
+- **How:** `tools/make_icons.py` reads Lucide's SVGs and `tags.json`, writes `ICON_PACK`, `ICON_GROUPS`, `ICON_TAGS`; a unit test fails if an old
+  name disappears. The picker scores icons by name and tag words (plural → singular) and picks the best one until the person clicks.
+- **Where:** `tools/make_icons.py`, `js/icons.js`, `iconSuggestions` / `iconMatches` in `js/app.js`, `IconPackTest`.
+- 🇪🇬 **بالعربي:** ٦٠٠ أيقونة ومعاها كلمات بحث، والبرنامج بيقترح الأيقونة من اسم الصنف، وأسماء الأيقونات القديمة عمرها ما تتغير.
+
 ---
 
 ## Chapter 7 – How we work (the method)

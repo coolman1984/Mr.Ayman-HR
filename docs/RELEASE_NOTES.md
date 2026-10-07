@@ -1,5 +1,23 @@
 # What is new
 
+## 2.8.0
+
+Asked for by HR (Ayman Essam): more KPI cards, icons for them, a better Furniture review and a more professional dashboard.
+
+- **Ten KPI cards** on the dashboard (were five): break areas, chairs, tables, TV screens, water dispensers, **total items**, **items that
+  need attention** (need repair, damaged or out of service), **open issues**, **inspections due** and **satisfaction**. Each card has its own
+  icon and one line that explains the number (for example "in 22 break areas" or "2 with high priority"). Green means nothing to do, orange or
+  red means something needs you. Click a card to open the page with the details. People without a permission see other cards in their place
+  (planned work, seating capacity, locations, item types).
+- **Furniture & Equipment** on the dashboard is now a clear list from most to fewest, one row per item type with its icon, a bar, the
+  number and how many need repair. With many item types it shows the first 8 and **Show all** opens the rest – no more tiny bars and labels.
+- **More than 600 icons** for item types (were 124), in 15 groups: furniture, screens, kitchen, food, climate and light, cleaning, safety,
+  building, decoration, leisure, office, tools, transport, people and signs. Type the item name and the program **suggests the fitting icon**;
+  the search also understands meanings ("water" finds the water dispenser).
+- **New look** in the style of the Samsung UI kit: larger text and icons everywhere, softer rounded cards, round buttons with a blue gradient.
+- The Furniture & Equipment page keeps every card readable with many item types.
+- Nothing changes in the data: 2.8 and 2.7 PCs work together. A 2.7 PC shows a plain box for an icon that only 2.8 has, until it is updated.
+
 ## 2.7.0
 
 - **Use the office system** (field report: "Join" never connected in the office, only personal links worked). A new PC now offers

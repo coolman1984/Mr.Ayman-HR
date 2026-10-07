@@ -7,6 +7,64 @@ Version numbers: `server/version.py`. Pull requests: github.com/coolman1984/Mr.A
 
 ---
 
+## 2.8.0 – Ten KPI cards, a readable Furniture review, 600+ icons and the Samsung UI kit look (2026-10-07)
+
+**Why (request by e-mail from HR, Ayman Essam, with a screenshot):** "increase the top KPI cards from 5 to 10, add new icons for the new
+KPI titles, improve and redesign the Furniture Review section, make the dashboard more professional and user-friendly". The owner added:
+about 500 icons for every kind of item, use the design of `samsung-ui-kit` with larger text and icons, keep every feature and never touch the
+data on the administrator PC.
+
+**What the screenshot showed:** the real factory has ~60 item types. The old *Furniture & Equipment Overview* was a vertical bar chart with one
+column per type, so 60 columns of 10 px labels overlapped and nobody could read them. The five KPI cards were only inventory counts.
+
+**What changed**
+- Dashboard (`js/app.js`): `dashKpis()` lists cards by importance and shows the first ten the person may see – break areas, chairs, tables,
+  TV screens, water dispensers, total items, items that need attention (`invNotGood`: condition other than Good, the same rule as the Furniture &
+  Equipment page), open issues, inspections due (overdue + within 7 days, only areas with a planned date), satisfaction (latest month), then
+  planned work, seating capacity, locations, item types as fill-ins. Each card has a one-line context and links to its page (`pageHref` checks
+  `PAGE_PERMS`). Problem cards are green when there is nothing to do. A person always sees ten cards and never numbers they may not see.
+- `rankList()` replaces `vbars()`: one row per item type (icon, name, "N need repair · in N break areas", bar, number), largest first, first 8
+  shown, the rest behind **Show all** (`ACT.rankMore`, a real button with `aria-expanded`). Layout `dash-mid`: list on the left, status donut and
+  locations stacked on the right.
+- Icons (`tools/make_icons.py` → `js/icons.js`): 602 icons in 15 groups from Lucide 1.52 plus `ICON_TAGS` (Lucide search words). New names are
+  the camelCase Lucide names; every 2.6 name in `PACK` stays (item types store the name); names the screens already draw in `IC` keep their
+  drawing and are only listed. The picker suggests icons from the typed name (`iconSuggestions`, simple plural → singular) and picks the best
+  one for a new type until the person clicks one; the search matches words and meanings; the current icon is shown with a readable name.
+- Look (`css/styles.css`): Samsung UI kit tokens – base text 13 → 14 px, icons 18 → 20 px, card radius 10 → 16 px, softer shadow, pill
+  buttons with the kit gradient, 38 px inputs, larger table, legend, KPI and modal titles. Furniture & Equipment page cards use
+  `auto-fill, minmax(220px)` so 60 types stay readable.
+- No data or schema change. `T41_UpgradeKeepsData.RELEASES` now also starts the real 2.7.0 program (`a9f676e`) on a data folder before 2.8.
+
+**Independent review (found real bugs, all fixed with tests)**
+- The card list had 13 candidates cut at 10: *Planned Work* could never appear and administrators lost *Satisfaction*. Now one ordered list of
+  candidates; the browser test checks the ten labels of an administrator, not only the count.
+- `mirror` (offered in 2.7) was no longer offered (its drawing was listed as the Lucide name `frame`): editing such an item type showed no
+  selected icon. `IconPackTest` now checks that every name of the earlier pack stays offered.
+- The picker picked unrelated icons for a new type from weak tag substrings ("Glasses" -> eyewear) and ignored 2-letter words ("TV"). Now
+  plural -> singular is better (glasses -> glass), short words count only as whole words, and an icon is picked by itself only on a clear match.
+- 31 drawings were offered twice (Lucide aliases such as palmtree / tree-palm): the generator now drops a new name whose drawing is already offered
+  (602 distinct icons); names the screens draw themselves now get search words too.
+- "Show all" closed by itself when another PC saved (the page is drawn again): the state is kept in `RANK_OPEN`.
+- Areas without a planned inspection date counted as "due"; "need repair" counted differently from the Furniture & Equipment page; tablet
+  width squeezed the donut; phones could overflow big numbers – fixed.
+- Found while checking the fixes: the last word of an item name is the thing itself ("Wall *Paintings*"), so it counts double and "-ing" words
+  also try their stem (painting → paint). At 360 px the top bar was 6 px too wide already on `main` (9 px with the larger sizes): smaller logo
+  and gaps below 420 px.
+
+**Mistakes and lessons**
+- An `npm pack` + `tar` run after a failed `Set-Location` unpacked the Lucide package into the repository folder. It was moved to the scratchpad
+  before anything was committed. Lesson: check the directory (or pass absolute paths) before unpacking; `git status` right after.
+- A first version used `<details>` for "Show all": the summary always comes first, so "Show fewer" ended up in the middle of the list. A button
+  after the hidden rows reads better.
+- Five-column cards at 1366 px cut labels like "All Furniture & Equipment": labels and context lines may wrap below 1400 px, and short titles
+  ("Total Items") are better than long ones.
+- On Windows `NodeSafetyTest.test_interrupted_upgrade_is_repeated` and `ToolsTest.test_rebuild_gives_identical_data` fail with
+  `PermissionError` (open SQLite files cannot be renamed on Windows). They fail the same way on `main`; CI (Linux) is the reference.
+- Screens were checked in a real browser (Edge through Playwright, `channel='msedge'`, because the bundled Chromium was not installed) on a
+  separate data folder (`BAMS_CONFIG`), with sample data and with 55 extra item types, at 1920, 1366, 1024 and 390 px.
+
+---
+
 ## 2.7.0 – Use the office system: a PC that opens the administrator PC like a personal link (2026-10-01)
 
 **Why (field report):** the owner installed 2.6.0; in the office only the **personal links** worked – a PC with the program and a user name /

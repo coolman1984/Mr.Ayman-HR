@@ -744,9 +744,31 @@ class IconPackTest(unittest.TestCase):
         self.assertEqual(sorted(used - defined), [], 'icons used but not defined')
         groups = re.findall(r"\['([^']+)', \[([^\]]*)\]\]", text['icons.js'].split('const ICON_GROUPS', 1)[1])
         names = [n for _, g in groups for n in re.findall(r"'(\w+)'", g)]
-        self.assertGreaterEqual(len(names), 100)
+        self.assertGreaterEqual(len(set(names)), 500, '2.8: the picker offers at least 500 icons')
+        self.assertEqual(len(names), len(set(names)), 'an icon is offered once')
         self.assertEqual(sorted(set(names) - defined), [], 'the picker offers icons that do not exist')
         self.assertTrue(os.path.exists(os.path.join(os.path.dirname(root), 'docs', 'ICONS_LICENSE.txt')))
+
+    def test_saved_icon_names_keep_working_and_can_be_found(self):
+        """Item types store the icon name: every name of an earlier pack must stay, and the picker finds icons by meaning."""
+        import re
+        import importlib.util
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        spec = importlib.util.spec_from_file_location('make_icons', os.path.join(root, 'tools', 'make_icons.py'))
+        make_icons = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(make_icons)
+        text = open(os.path.join(root, 'js', 'icons.js'), encoding='utf-8').read()
+        pack = text.split('const ICON_PACK = {', 1)[1].split('\n};', 1)[0]
+        defined = set(re.findall(r"^\s{2}(\w+): '<", pack, re.M))
+        self.assertEqual(sorted(set(make_icons.PACK) - defined), [], 'icon names of the 2.6 pack (saved in item types) are gone')
+        groups = text.split('const ICON_GROUPS = [', 1)[1].split('\n];', 1)[0]
+        offered = set(re.findall(r"'(\w+)'", re.sub(r"\['[^']+', \[", '[', groups)))
+        self.assertEqual(sorted(set(make_icons.PACK) - offered), [], 'an icon name used before (e.g. mirror) must stay offered in the picker')
+        for name in ('chair', 'table', 'tv', 'dispenser', 'fridge', 'box', 'microwave', 'coffee', 'plant', 'sofa'):
+            self.assertIn(name, defined)
+        tags = dict(re.findall(r"^\s{2}(\w+): '([^'<]*)',$", text.split('const ICON_TAGS = {', 1)[1], re.M))
+        self.assertIn('water', tags['dispenser'], 'searching "water" finds the water dispenser')
+        self.assertGreaterEqual(len(tags), 450, 'most icons have search words')
 
 
 class ExcelImportTest(unittest.TestCase):
