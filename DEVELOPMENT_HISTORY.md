@@ -7,12 +7,13 @@ Version numbers: `server/version.py`. Pull requests: github.com/coolman1984/Mr.A
 
 ---
 
-## 2.9.0 – PR #15 review: keep commands inside laptop screens (2026-10-07)
+## 2.9.1 – PR #15 review: keep commands inside laptop screens (2026-10-07)
 
 - The automatic review found that the account name and sharing badge crowded the top bar at 821–1050 px. Chrome reproduced the overflow with all administrator commands visible.
 - The command bar now uses icons up to 1320 px to also accommodate the largest text size, keeping its buttons, account avatar and sharing indicator reachable. The desktop sidebar keeps its normal layout.
 - `ShellLayoutTest.test_topbar_fits_with_sync_and_account` measures the actual header and stylesheet at 821, 900, 1024, 1050, 1320, 1321 and 1366 px, normal and largest text, and three sharing messages.
 - Lesson: test the populated command bar, including account details and multi-PC status; a single-PC screenshot misses this case. Allow one pixel for browser rounding when comparing geometry.
+- PR #15 reached main before this fix. Publish the fix as 2.9.1 so the automatic release workflow can deliver a corrected installer; the real 2.9.0 commit is now covered by the upgrade tests.
 
 ## 2.9.0 – Samsung UI kit shell, own app window, program icon, icon-only menu, command bar (2026-10-07)
 

@@ -1,5 +1,5 @@
 """Program version and owner. The installer build reads VERSION from here (tools/build_windows.py)."""
-VERSION = '2.9.0'
+VERSION = '2.9.1'
 PRODUCT = 'Break Area Management System'
 DEVELOPER = 'Mohamed Fawzy'
 COPYRIGHT = f'© 2026 {DEVELOPER}. All rights reserved.'
