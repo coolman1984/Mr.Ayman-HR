@@ -656,6 +656,15 @@ svg.sat-line { width: 100%; height: auto; display: block; overflow: visible; }
   .sat-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .sat-charts { grid-template-columns: 1fr; }
 }
+/* Keep every command reachable when the account and sharing badge would crowd a laptop screen. */
+@media (max-width: 1320px) {
+  .topbar { gap: 6px; padding-right: 12px; }
+  .topbar .app-mark-wrap, .topbar .user .who, .topbar .new-btn span,
+  .topbar .search-btn .sb-txt, .topbar .search-btn kbd, .topbar .sync-ind span { display: none; }
+  .topbar .new-btn { width: 40px; padding: 0; }
+  .top-right { gap: 4px; }
+  .user { margin-left: 0; padding-right: 4px; }
+}
 @media (max-width: 980px) {
   .row-2, .grid2, .hist-row { grid-template-columns: 1fr; }
   .hist-row .survey-box { order: 0; }
