@@ -19,6 +19,7 @@ should feel like a separate app with a professional icon, a menu that can shrink
   record an inspection, add a satisfaction result, a note or photos, new break area, item type or person, import from Excel – only what you
   may do; it asks which break area when none is open), Help, Full screen, text size, the bell and your account.
 - Nothing changes in the data: 2.9, 2.8 and 2.7 PCs work together.
+- On smaller laptop screens, the top bar shows compact icons so its actions stay within the screen, including when several PCs are sharing data.
 
 ## 2.8.0
 

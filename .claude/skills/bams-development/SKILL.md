@@ -162,3 +162,5 @@ Check a local compile on Linux: `pip install --target <dir> nuitka ordered-set z
 - Never weaken login security (longer sessions, "remember me", fewer checks) without the owner's explicit yes – the session's safety check refuses it.
 - Script files share one global scope: no short top-level names in new JS files. `<a data-act>` needs `data-href`
   to reach `ACT` – use `<button>` for in-page actions.
+- Command bar: use compact labels at widths up to 1320 px; test with the account name and sharing badge populated, at normal and largest text sizes.
+  `test_e2e_browser.ShellLayoutTest` measures its real geometry without server data. `BAMS_CHROME_CDP` attaches this test to a dedicated Chrome profile launched through the mandatory launcher on Windows.

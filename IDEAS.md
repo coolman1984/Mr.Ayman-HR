@@ -368,6 +368,13 @@ Kept up to date with every change (rule in `CLAUDE.md`). New idea → new card i
 - **Where:** `quickItems`, `quickNew`, `popMenu`, `toggleNav` in `js/app.js`, `js/boot.js`.
 - 🇪🇬 **بالعربي:** زرار "New" فيه كل الشغل اليومي من أي صفحة، والقائمة الجانبية ممكن تبقى أيقونات بس.
 
+### 6.13 Fit commands using the busiest header
+- **Problem:** a header that fits on one PC can overflow when sharing status and an account name appear.
+- **Idea:** use compact icons at laptop widths, and measure the populated header in a real browser.
+- **How:** render the actual header and stylesheet with every command visible, several sharing labels and the largest text size; check that the last control stays inside the viewport.
+- **Where:** `css/styles.css`, `test_e2e_browser.ShellLayoutTest`.
+- **Reuse when:** dashboards with variable account and status labels. Allow one pixel for browser geometry rounding.
+
 ### 6.9 A big icon set that people can actually search (names never change)
 - **Problem:** 600 icons are useless if you have to scroll through them; and an item type stores the icon *name*, so renaming breaks old data.
 - **Idea:** generate the pack from an open icon set with its search words (tags); suggest icons from the name the person types; keep every
