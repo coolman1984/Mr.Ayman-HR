@@ -1421,7 +1421,7 @@ class T41_UpgradeKeepsData(unittest.TestCase):
     """Version 2.6 (owner's request): after an update everything the people saved with the OLD program is there, unchanged.
     The real previous releases are started from git on a data folder, filled through their own API, stopped, and the
     current program is started on the same folder. Needs the git history (CI checks out everything)."""
-    RELEASES = {'2.7.0': 'a9f676e', '2.6.0': '2c5dc66', '2.5.0': 'a8c8c63', '2.4.0': '5f5b3ce'}
+    RELEASES = {'2.8.0': 'a2c5ed7', '2.7.0': 'a9f676e', '2.6.0': '2c5dc66', '2.5.0': 'a8c8c63', '2.4.0': '5f5b3ce'}
 
     def old_program(self, commit):
         import subprocess

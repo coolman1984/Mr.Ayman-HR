@@ -1,5 +1,25 @@
 # What is new
 
+## 2.9.0
+
+After 2.8 the owner compared the program with the Samsung UI kit: the look should be the kit's own, the text bigger, and the program
+should feel like a separate app with a professional icon, a menu that can shrink to icons and a top bar full of useful actions.
+
+- **New look**, true to the Samsung UI kit: white menu with a soft blue mark on the open page, the Inter font, calm colours, larger text
+  (15 px instead of 13 px) and icons, rounded cards and round buttons with the kit's blue gradient.
+- **Its own window**: the installed program opens like a separate app – no tabs, no address bar, its own entry in the taskbar with the
+  program icon (Microsoft Edge app mode; without Edge or Chrome the browser opens as before). The first time, log in once in the new
+  window and choose your text size again (Aa) – the window keeps its own settings. Not wanted on a PC? `"app_window": false` in
+  `config.json` (in `C:\ProgramData\BAMS`) opens the browser again; a company policy that forces a browser sign-in does the same by itself.
+- **A new program icon and logo**: a white cup on the blue tile – on the desktop, the installer, the window, the taskbar, the login page,
+  the top bar, the menu, printouts and QR labels. The company logo (for example SAMSUNG) stays where it was.
+- **Menu with names or only icons**: the button left of the page name makes the menu a slim icon bar (names show when you point at an icon);
+  the choice is kept on the PC. On a phone the menu slides in.
+- **Top bar with everything at hand**: the page you are on, Search (Ctrl K), **New** (update items, report an issue, schedule maintenance,
+  record an inspection, add a satisfaction result, a note or photos, new break area, item type or person, import from Excel – only what you
+  may do; it asks which break area when none is open), Help, Full screen, text size, the bell and your account.
+- Nothing changes in the data: 2.9, 2.8 and 2.7 PCs work together.
+
 ## 2.8.0
 
 Asked for by HR (Ayman Essam): more KPI cards, icons for them, a better Furniture review and a more professional dashboard.
@@ -14,19 +34,7 @@ Asked for by HR (Ayman Essam): more KPI cards, icons for them, a better Furnitur
 - **More than 600 icons** for item types (were 124), in 15 groups: furniture, screens, kitchen, food, climate and light, cleaning, safety,
   building, decoration, leisure, office, tools, transport, people and signs. Type the item name and the program **suggests the fitting icon**;
   the search also understands meanings ("water" finds the water dispenser).
-- **New look**, true to the Samsung UI kit: white menu with a soft blue mark on the open page, the Inter font, calm colours, larger text
-  (15 px instead of 13 px) and icons, rounded cards and round buttons with the kit's blue gradient.
-- **Its own window**: the installed program opens like a separate app – no tabs, no address bar, its own entry in the taskbar with the
-  program icon (Microsoft Edge app mode; without Edge or Chrome the browser opens as before). The first time, log in once in the new
-  window and choose your text size again (Aa) – the window keeps its own settings. Not wanted on a PC? `"app_window": false` in
-  `config.json` (in `C:\ProgramData\BAMS`) opens the browser again; a company policy that forces a browser sign-in does the same by itself.
-- **A new program icon and logo**: a white cup on the blue tile – on the desktop, the installer, the window, the taskbar, the login page,
-  the top bar, the menu, printouts and QR labels. The company logo (for example SAMSUNG) stays where it was.
-- **Menu with names or only icons**: the button left of the page name makes the menu a slim icon bar (names show when you point at an icon);
-  the choice is kept on the PC. On a phone the menu slides in.
-- **Top bar with everything at hand**: the page you are on, Search (Ctrl K), **New** (update items, report an issue, schedule maintenance,
-  record an inspection, add a satisfaction result, a note or photos, new break area, item type or person, import from Excel – only what you
-  may do; it asks which break area when none is open), Help, Full screen, text size, the bell and your account.
+- **New look** in the style of the Samsung UI kit: larger text and icons everywhere, softer rounded cards, round buttons with a blue gradient.
 - The Furniture & Equipment page keeps every card readable with many item types.
 - Nothing changes in the data: 2.8 and 2.7 PCs work together. A 2.7 PC shows a plain box for an icon that only 2.8 has, until it is updated.
 
