@@ -49,7 +49,7 @@ open in the network.
 3. The PC looks for the administrator PC by itself (on the web port 8080). If it is not found, type the address shown on
    the administrator PC (first card of **Devices & Sync**, e.g. `ADMIN-PC` or `192.168.1.10`; a whole web address or a
    personal link is understood too). The address is checked while you type.
-4. Press **Use this PC**. The browser opens the administrator PC; log in with your user name and password.
+4. Press **Use this PC**. The program window opens the administrator PC; log in with your user name and password.
 5. From then on the desktop icon opens the administrator PC directly. The PC keeps **no data of its own**, shares
    nothing and needs no keys – it works exactly like a personal link.
 

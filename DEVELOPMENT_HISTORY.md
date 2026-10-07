@@ -7,6 +7,42 @@ Version numbers: `server/version.py`. Pull requests: github.com/coolman1984/Mr.A
 
 ---
 
+## 2.9.0 – Samsung UI kit shell, own app window, program icon, icon-only menu, command bar (2026-10-07)
+
+**Why (owner, with screenshots of the kit):** "the design is not correct" – the kit has a *white* sidebar with a soft
+blue pill, a black/blue wordmark, Inter, small uppercase labels and large rounded cards; we had kept the dark-blue sidebar. Also: bigger font,
+"not inside the browser – a complete separate app", a very nice icon and logo everywhere, a sidebar that collapses to icons, and a top bar
+"full of features".
+- Shell restyled to the kit tokens (`--navy` = near-black text, Galaxy blue `#2189FF` accents, `--radius` 22, white sidebar and top bar with
+  blur, active page = soft blue pill + dot). All 111 text sizes ×1.08 (base 15 px). Inter is the standard font; Segoe UI stays a choice (`segoe`).
+- `server/appwindow.py`: `open_window(url)` starts Edge (or Chrome) with `--app=URL --user-data-dir=%LOCALAPPDATA%\BAMS\AppWindow`, detached;
+  falls back to `webbrowser` (also with `"app_window": false`). Used by `app.py` (`open_ui`) and office mode.
+- App mark: `tools/make_icon.py` draws a cup with steam on the kit gradient tile – one geometry for the `.ico` (anti-aliased), `lib/app-icon.png`
+  (page/window/taskbar icon) and `APP_MARK` in `js/app.js` (top bar, menu foot, login card, printouts, QR labels). `AppWindowAndMarkTest` keeps
+  them in step.
+- Sidebar rail: `html.nav-mini` (set by `boot.js` from `localStorage.bams_nav` before drawing), only on screens wider than 820 px; links carry
+  `title`/`aria-label`. Top bar: page name (`PAGE_TITLES`), `+ New` (`quickItems`, `popMenu`, `quickNew` – asks the break area, then opens the
+  usual window through `OPENER` so a failed save reopens it), Help, Full screen.
+- Lessons: an inline SVG page icon is ignored for the window/taskbar icon of an Edge app window – a PNG file works. Several copies of one inline
+  SVG with the same gradient id lose their colour when the first copy is hidden (phone) – every copy gets its own id. An inline SVG put into an
+  HTML attribute must not contain `"` (the first page-icon attempt broke the attribute).
+
+**Independent review, fixed:** "+ New → Add a person" opened the window without permissions and profiles (they
+are loaded only on the Users page) – now loaded first, and refused with the reason on a PC that is not the administrator PC. "Import from Excel"
+used `data.import`; page and server need `areas.create` on all areas. A company policy that forces a browser sign-in would show a sign-in page
+in the new window profile – that browser is skipped. The window size is only set for the first window (the person's size is kept). One rule for
+`app_window` (`appwindow.enabled`). The "+ New" menu: arrow keys, Tab, Escape back to the button, closed on page change and on the login screen.
+Older CSS rules lower in the file overrode the new look (`.user`, `.auth-card .logo`) – removed. Lesson: `inner_text` in tests returns the
+CSS `text-transform` (uppercase labels) – compare `textContent`. Also: with the page icon in place the browser no longer asks for
+`/favicon.ico`, so the three browser tests that failed under Edge on this PC because of that 404 now pass.
+
+**Mistake:** this work was first committed as "2.8.0" on top of a local `main` – meanwhile 2.8.0 had been merged on GitHub (PR #14) and
+released (`v2.8.0`, the workflow publishes a version once). The commit was moved to its own branch, local `main` reset to `origin/main`,
+and the version raised to 2.9.0. Lesson: `git fetch` and check the branch and the released tags before committing a release; never commit
+on `main`. `T41_UpgradeKeepsData.RELEASES` now also starts the real 2.8.0 program (`a2c5ed7`).
+
+---
+
 ## 2.8.0 – Ten KPI cards, a readable Furniture review, 600+ icons and the Samsung UI kit look (2026-10-07)
 
 **Why (request by e-mail from HR, Ayman Essam, with a screenshot):** "increase the top KPI cards from 5 to 10, add new icons for the new

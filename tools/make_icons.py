@@ -135,7 +135,7 @@ GROUPS = [
         'arrow-up-down', 'refresh-cw', 'rotate-ccw', 'repeat', 'history', 'hourglass', 'loader', 'zap', 'flame', 'snowflake',
         'eye-off', 'bell-off', 'volume-2', 'volume-x', 'wifi-off', 'battery', 'signal', 'activity', 'radar', 'thumbs-up',
         'hash', 'percent', 'infinity', 'link', 'qr-code', 'scan', 'search', 'zoom-in', 'filter', 'sync', 'merge', 'plan', 'lightbulb',
-        'listcheck', 'import', 'word', 'sheet', 'command']),
+        'listcheck', 'import', 'word', 'sheet', 'command', 'panel-left-open', 'panel-left-close', 'maximize', 'minimize']),
 ]
 
 

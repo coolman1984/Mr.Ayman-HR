@@ -135,7 +135,14 @@ Check a local compile on Linux: `pip install --target <dir> nuitka ordered-set z
 - Dashboard (2.8): `dashKpis()` = one list ordered by importance, the first ten the person may see (`maintenance.view`, `surveys.view` cards are skipped), links use
   `pageHref` (`PAGE_PERMS`). Per-category overviews use `rankList()` (first 8 + Show all), never one column per category – the real factory has ~60 item types.
   Always check a screen with many item types (55+) and at 1366 / 1024 / 390 px.
-- Look (2.8): Samsung UI kit (`D:\WORK\Software Development\GitHub\samsung-ui-kit\samsung-ui-kit`, `samsung-ui.css`) – base text 14 px, icons 20 px,
+- App window (2.9): `server/appwindow.py` opens Edge/Chrome `--app` with its own profile; `"app_window": false` in config.json = browser. Never use
+  `webbrowser` directly for opening the program. Program icon: `tools/make_icon.py` (one drawing) -> build `.ico`, `lib/app-icon.png`
+  (`python tools/make_icon.py lib/app-icon.png`), `APP_MARK` in app.js; `AppWindowAndMarkTest` checks they match.
+- Shell (2.9): white sidebar with icon rail (`html.nav-mini`, wide screens only), top command bar (`#newBtn` + `quickItems`, `#helpBtn`, `#fsBtn`, `#crumb`).
+  New jobs for "+ New" go into `quickItems()` with their permission; area jobs get `{ id }`.
+- Before committing a version: `git fetch`, check you are not on `main` and that the tag `v<version>` does not exist yet (the release is
+  published once per version; 2.8.0 was merged and released while more work for it was still being made).
+- Look (2.8/2.9): Samsung UI kit (`D:\WORK\Software Development\GitHub\samsung-ui-kit\samsung-ui-kit`, `samsung-ui.css`) – base text 14 px, icons 20 px,
   cards radius 16, pill buttons. Keep `calc(Npx * var(--fs))` for every size.
 - Windows dev PC: `NodeSafetyTest.test_interrupted_upgrade_is_repeated` and `ToolsTest.test_rebuild_gives_identical_data` fail with `PermissionError`
   (SQLite files cannot be renamed while open) – also on `main`; CI on Linux is the reference.

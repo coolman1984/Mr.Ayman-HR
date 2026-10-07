@@ -587,6 +587,10 @@ const ICON_PACK = {
   infinity: '<path d="M6 16c5 0 7-8 12-8a4 4 0 0 1 0 8c-5 0-7-8-12-8a4 4 0 1 0 0 8" />',
   scan: '<path d="M3 7V5a2 2 0 0 1 2-2h2" /><path d="M17 3h2a2 2 0 0 1 2 2v2" /><path d="M21 17v2a2 2 0 0 1-2 2h-2" /><path d="M7 21H5a2 2 0 0 1-2-2v-2" />',
   zoomIn: '<circle cx="11" cy="11" r="8" /><line x1="21" x2="16.65" y1="21" y2="16.65" /><line x1="11" x2="11" y1="8" y2="14" /><line x1="8" x2="14" y1="11" y2="11" />',
+  panelLeftOpen: '<rect width="18" height="18" x="3" y="3" rx="2" /><path d="M9 3v18" /><path d="m14 9 3 3-3 3" />',
+  panelLeftClose: '<rect width="18" height="18" x="3" y="3" rx="2" /><path d="M9 3v18" /><path d="m16 15-3-3 3-3" />',
+  maximize: '<path d="M8 3H5a2 2 0 0 0-2 2v3" /><path d="M21 8V5a2 2 0 0 0-2-2h-3" /><path d="M3 16v3a2 2 0 0 0 2 2h3" /><path d="M16 21h3a2 2 0 0 0 2-2v-3" />',
+  minimize: '<path d="M8 3v3a2 2 0 0 1-2 2H3" /><path d="M21 8h-3a2 2 0 0 1-2-2V3" /><path d="M3 16h3a2 2 0 0 1 2 2v3" /><path d="M16 21v-3a2 2 0 0 1 2-2h3" />',
 };
 const ICON_GROUPS = [
   ['Seating and furniture', ['chair', 'sofa', 'stool', 'bench', 'rockingChair', 'table', 'tableProperties', 'desk', 'bed', 'bedDouble', 'locker', 'shelf', 'shelvingUnit', 'libraryBig', 'cabinet', 'archiveRestore', 'drawer', 'basket', 'shoppingCart', 'container', 'vault', 'mirrorRound', 'mirrorRectangular', 'towelRack', 'umbrella', 'parasol', 'tent', 'lectern', 'podium', 'columns3', 'rows3', 'layoutGrid', 'grid2x2', 'square']],
@@ -603,7 +607,7 @@ const ICON_GROUPS = [
   ['Tools and maintenance', ['toolbox', 'toolCase', 'wrench', 'hammer', 'drill', 'axe', 'pickaxe', 'shovel', 'pocketKnife', 'anvil', 'cog', 'settings2', 'paint', 'paintRoller', 'bucket', 'pipette', 'ruler', 'rulerDimensionLine', 'pencilRuler', 'draftingCompass', 'ladder', 'rope', 'magnet', 'spool', 'scale3d', 'cylinder', 'barrel', 'boxes', 'box', 'package', 'packageCheck', 'packagePlus', 'packageX', 'packageSearch', 'wrenchOff', 'slidersHorizontal']],
   ['Transport and logistics', ['truck', 'truckElectric', 'forklift', 'van', 'car', 'carFront', 'bus', 'busFront', 'motorbike', 'scooter', 'trainFront', 'tramFront', 'plane', 'ship', 'shipCargo', 'tractor', 'trailer', 'caravan', 'luggage', 'backpack', 'handbag', 'baggageClaim', 'briefcaseConveyorBelt', 'handCoins', 'road', 'parkingCircle']],
   ['People and work', ['user', 'users', 'userPlus', 'userCheck', 'userCog', 'userRound', 'usersRound', 'contact', 'baby', 'handHelping', 'brain', 'eye', 'clockCheck', 'timerReset', 'calendarCheck2', 'briefcaseBusiness', 'badgeCheck', 'starCheck']],
-  ['Status and signs', ['check', 'checkCheck', 'circleCheck', 'circleCheckBig', 'circleX', 'circlePlus', 'circleMinus', 'circlePause', 'circlePlay', 'circleStop', 'badgeAlert', 'badgeInfo', 'badgePlus', 'octagonX', 'triangle', 'circle', 'hexagon', 'diamond', 'pentagon', 'octagon', 'shapes', 'arrowUp', 'arrowDown', 'arrowLeftRight', 'arrowUpDown', 'refreshCw', 'rotateCcw', 'repeat', 'history', 'loader', 'eyeOff', 'bellOff', 'volume2', 'volumeX', 'wifiOff', 'battery', 'signal', 'activity', 'radar', 'hash', 'percent', 'infinity', 'link', 'scan', 'search', 'zoomIn', 'filter', 'sync', 'merge', 'plan', 'lightbulb', 'listcheck', 'import', 'word', 'sheet', 'command']],
+  ['Status and signs', ['check', 'checkCheck', 'circleCheck', 'circleCheckBig', 'circleX', 'circlePlus', 'circleMinus', 'circlePause', 'circlePlay', 'circleStop', 'badgeAlert', 'badgeInfo', 'badgePlus', 'octagonX', 'triangle', 'circle', 'hexagon', 'diamond', 'pentagon', 'octagon', 'shapes', 'arrowUp', 'arrowDown', 'arrowLeftRight', 'arrowUpDown', 'refreshCw', 'rotateCcw', 'repeat', 'history', 'loader', 'eyeOff', 'bellOff', 'volume2', 'volumeX', 'wifiOff', 'battery', 'signal', 'activity', 'radar', 'hash', 'percent', 'infinity', 'link', 'scan', 'search', 'zoomIn', 'filter', 'sync', 'merge', 'plan', 'lightbulb', 'listcheck', 'import', 'word', 'sheet', 'command', 'panelLeftOpen', 'panelLeftClose', 'maximize', 'minimize']],
 ];
 /* search words per icon (Lucide tags), used by the icon picker */
 const ICON_TAGS = {
@@ -923,6 +927,7 @@ const ICON_TAGS = {
   mapPin: 'map pin location waypoint marker drop',
   mapPinned: 'map pinned location waypoint marker drop',
   martini: 'cocktail alcohol beverage bar drink glass spirit party celebration mixer',
+  maximize: 'fullscreen expand dashed',
   medal: 'prize sports winner trophy award achievement',
   megaphone: 'advertisement announcement attention alert loudspeaker notification',
   memoryStick: 'memory stick ram random access technology computer chip circuit specs capacity gigabytes gb',
@@ -933,6 +938,7 @@ const ICON_TAGS = {
   micVocal: 'mic vocal lyrics voice listen sound music radio podcast karaoke singing microphone',
   microwave: 'oven cooker toaster oven bake',
   milestone: 'signpost direction right east forward version control waypoint',
+  minimize: 'exit fullscreen close shrink',
   mirror: 'frame logo design tool',
   mirrorRectangular: 'mirror rectangular reflection optics glass surface image physics science bathroom decor cosmetic',
   mirrorRound: 'mirror round reflection optics glass surface image physics science bathroom vanity makeup',
@@ -970,6 +976,8 @@ const ICON_TAGS = {
   paintRoller: 'paint roller brush color colour decoration diy',
   paintbrush2: 'paintbrush 2',
   palette: 'colors colours theme scheme paint watercolor watercolour artist',
+  panelLeftClose: 'panel left close primary drawer hide chevron ',
+  panelLeftOpen: 'panel left open primary drawer show reveal chevron right ',
   paperBag: 'paper bag storage package lunch takeout ecofriendly kraft retail doggybag',
   paperclip: 'attachment file',
   parasol: 'umbrella sunshade beach shade sun protection cover canopy garden outdoors',
