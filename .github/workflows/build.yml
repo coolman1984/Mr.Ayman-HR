@@ -11,17 +11,22 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read  # least privilege; only the installer job that publishes a release gets write
+
+concurrency:
+  # a newer push to the same PR cancels the older run; pushes to main and tags always finish
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0  # the upgrade tests rebuild the first version of the program from the history
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.11'
       - name: Tests (unit, convergence, several PCs)
@@ -30,11 +35,13 @@ jobs:
 
   windows-installer:
     needs: test
+    permissions:
+      contents: write  # gh release create / upload
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.11'
       - name: Build tools
@@ -66,7 +73,7 @@ jobs:
           if (-not $ok) { Get-Content (Join-Path $home_dir 'data\logs\server.log') -ErrorAction SilentlyContinue; throw 'BAMS.exe did not start correctly' }
           if (-not (Test-Path (Join-Path $home_dir 'data\auth.db'))) { throw 'data was not written to BAMS_HOME' }
           Write-Host 'BAMS.exe started and served its pages'
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: BAMS-Setup
           path: dist/BAMS-Setup-*.exe
