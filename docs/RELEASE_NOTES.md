@@ -1,5 +1,10 @@
 # What is new
 
+## 2.9.1
+
+- On smaller laptop screens, the top bar shows compact icons so its actions stay within the screen, including when several PCs are sharing data or larger text is chosen.
+- Updating keeps all data. Version 2.9.1 works with 2.9, 2.8 and 2.7 PCs.
+
 ## 2.9.0
 
 After 2.8 the owner compared the program with the Samsung UI kit: the look should be the kit's own, the text bigger, and the program

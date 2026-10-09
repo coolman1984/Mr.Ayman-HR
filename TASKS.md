@@ -89,6 +89,7 @@ python3 -m unittest test_e2e_browser                  # needs Playwright + Chrom
 | – | 2.8 at least 500 icons, each offered once; every 2.6 icon name still exists and stays offered; search words ("water" finds the dispenser) | `test_unit.IconPackTest.test_saved_icon_names_keep_working_and_can_be_found` | pass |
 | – | 2.9 own app window (Edge/Chrome app mode, own profile, browser fallback); Windows icon, PNG and screen mark are one drawing | `test_unit.AppWindowAndMarkTest` | pass |
 | – | 2.9 icon-only menu kept after a reload; "+ New" asks the break area and opens its window; app mark shown | `test_e2e_browser.test_two_pcs_through_the_screens` | pass |
+| – | 2.9.1 populated command bar fits laptop widths with sharing messages, account details and largest text | `test_e2e_browser.ShellLayoutTest.test_topbar_fits_with_sync_and_account` | pass |
 | – | 2.8 dashboard: the ten KPI cards of an administrator in order; one Furniture row per item type; with many types 8 rows + Show all / Show fewer | `test_e2e_browser.test_two_pcs_through_the_screens` | pass |
 | – | 2.6 area log: notes on two PCs both kept, empty note refused, costs hidden from people without the permission (screen, change log, saving cannot change them), cancel vs done ends as done | `T40_AreaLogAndWork` | pass |
 | – | 2.6 in the screens: note add / edit / delete, finished work with cost and issue, repeat, cancel, piece history, Area History report | `test_e2e_browser.test_area_log_finished_work_and_repeats` | pass |

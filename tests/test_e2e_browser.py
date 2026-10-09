@@ -2,7 +2,9 @@
 login on the second PC, permissions, live changes, sync light, Devices & Sync, conflicts and logs.
 Skipped when Playwright is not installed (it is only needed for testing, never at runtime)."""
 import os
+import re
 import unittest
+from pathlib import Path
 
 from harness import ADMIN, Server, make_authority, wait_until
 
@@ -13,6 +15,56 @@ except ImportError:  # pragma: no cover
 
 CHROME = next((p for p in ('/opt/pw-browsers/chromium_headless_shell-1194/chrome-linux/headless_shell',) if os.path.exists(p)), None)
 SHOTS = os.environ.get('BAMS_SCREENSHOTS')
+
+
+@unittest.skipIf(sync_playwright is None, 'playwright not installed')
+class ShellLayoutTest(unittest.TestCase):
+    def test_topbar_fits_with_sync_and_account(self):
+        """Use the real header and stylesheet with all administrator controls populated."""
+        root = Path(__file__).resolve().parent.parent
+        header = re.search(r'<header class="topbar">.*?</header>',
+                           (root / 'index.html').read_text(encoding='utf-8'), re.S).group()
+        css = (root / 'css/styles.css').read_text(encoding='utf-8')
+        with sync_playwright() as pw:
+            cdp = os.environ.get('BAMS_CHROME_CDP')
+            browser = pw.chromium.connect_over_cdp(cdp) if cdp else pw.chromium.launch()
+            context = browser.new_context()
+            page = context.new_page()
+            try:
+                page.set_content('<html><head><style>' + css + '</style></head><body><div class="app">' + header + '</div></body></html>')
+                page.evaluate("""() => {
+                  const icon = '<svg class="ic" viewBox="0 0 24 24"><path d="M4 4h16v16H4z"/></svg>';
+                  document.querySelector('#brand').innerHTML = '<span class="logo">SAMSUNG</span>';
+                  document.querySelector('#appMark').innerHTML = '<span class="app-mark">' + icon + '</span>';
+                  document.querySelector('#sysName').textContent = 'Break Area Management System';
+                  document.querySelector('#factoryName').textContent = 'SEEG Factory';
+                  document.querySelector('.menu-btn').innerHTML = icon;
+                  document.querySelector('.sb-ic').innerHTML = icon;
+                  document.querySelector('#newBtn').innerHTML = icon + '<span>New</span>';
+                  for (const id of ['helpBtn', 'fsBtn', 'bell']) document.getElementById(id).innerHTML = icon;
+                  document.querySelector('#user').innerHTML = '<div class="avatar">MF</div><div class="who"><b>Mohamed Fawzy Labib</b><small>Administrator ▾</small></div>';
+                  for (const id of ['searchBtn', 'newBtn', 'fontBtn', 'syncInd']) document.getElementById(id).classList.remove('hidden');
+                }""")
+                for scale in (1, 1.35):
+                    page.evaluate('(scale) => document.documentElement.style.setProperty("--fs", scale)', scale)
+                    for label in ('All PCs up to date', 'Working on this PC', 'Please tell the administrator'):
+                        page.locator('#syncInd').evaluate('(el, label) => { el.innerHTML = "<i class=dot></i><span></span>"; el.querySelector("span").textContent = label; }', label)
+                        for width in (821, 900, 1024, 1050, 1320, 1321, 1366):
+                            with self.subTest(width=width, scale=scale, label=label):
+                                page.set_viewport_size({'width': width, 'height': 900})
+                                bounds = page.locator('.topbar').evaluate("""el => ({
+                                  width: el.clientWidth, viewport: document.documentElement.clientWidth, scroll: el.scrollWidth,
+                                  right: Math.max(...Array.from(el.querySelectorAll('.top-right > *')).filter(c => c.getBoundingClientRect().width).map(c => c.getBoundingClientRect().right))
+                                })""")
+                                self.assertLessEqual(bounds['scroll'], bounds['viewport'] + 1, bounds)
+                                self.assertLessEqual(bounds['right'], bounds['viewport'] + 1, bounds)
+                                self.assertTrue(page.locator('#newBtn').is_visible())
+                                self.assertTrue(page.locator('#helpBtn').is_visible())
+                                self.assertTrue(page.locator('#user .avatar').is_visible())
+            finally:
+                context.close()
+                if not cdp:
+                    browser.close()
 
 
 @unittest.skipIf(sync_playwright is None, 'playwright not installed')
