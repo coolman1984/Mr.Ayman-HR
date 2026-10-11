@@ -9,7 +9,7 @@ on:
         required: true
         type: string
   schedule:
-    - cron: '*/15 * * * *'
+    - cron: '23 * * * *'
 permissions:
   contents: write
   pull-requests: write
