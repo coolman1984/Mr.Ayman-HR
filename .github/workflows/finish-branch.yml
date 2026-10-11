@@ -20,7 +20,7 @@ concurrency:
   cancel-in-progress: false
 env:
   CHECK_WORKFLOWS: build.yml
-  STALE_MINUTES: 15
+  STALE_MINUTES: 60
   # Scheduled mode skips branches last committed before this, so old branches stay untouched.
   ACTIVE_SINCE: "2026-10-11T08:30:00Z"
   GH_TOKEN: ${{ github.token }}
