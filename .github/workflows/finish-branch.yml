@@ -1,5 +1,5 @@
 # Finish open branches into main. Never --admin, --delete-branch, or force-push.
-# Each repo edits only CHECK_WORKFLOWS, STALE_HOURS, and ACTIVE_SINCE below.
+# Each repo edits only CHECK_WORKFLOWS, STALE_MINUTES, and ACTIVE_SINCE below.
 name: Finish branch
 on:
   workflow_dispatch:
@@ -20,7 +20,7 @@ concurrency:
   cancel-in-progress: false
 env:
   CHECK_WORKFLOWS: build.yml
-  STALE_HOURS: 2
+  STALE_MINUTES: 60
   # Scheduled mode skips branches last committed before this, so old branches stay untouched.
   ACTIVE_SINCE: "2026-10-11T08:30:00Z"
   GH_TOKEN: ${{ github.token }}
@@ -171,9 +171,9 @@ jobs:
               if [ -z "$sha" ]; then err "branch not found: ${b}"; else printf '%s\t%s\n' "$b" "$sha" >>"$cand"; fi
             fi
           else
-            cutoff=$(date -u -d "-${STALE_HOURS} hours" +%Y-%m-%dT%H:%M:%SZ) || cutoff=""
+            cutoff=$(date -u -d "-${STALE_MINUTES} minutes" +%Y-%m-%dT%H:%M:%SZ) || cutoff=""
             list=$(mktemp) || exit 1
-            if [ -z "$cutoff" ]; then err "could not compute the stale cutoff from STALE_HOURS=${STALE_HOURS}"
+            if [ -z "$cutoff" ]; then err "could not compute the stale cutoff from STALE_MINUTES=${STALE_MINUTES}"
             elif ! gh api --paginate "repos/${GH_REPO}/branches?per_page=100" --jq '.[] | [.name, .commit.sha] | @tsv' >"$list"; then
               err "listing branches failed"
             else
