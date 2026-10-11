@@ -1,0 +1,203 @@
+# Finish open branches into main. Never --admin, --delete-branch, or force-push.
+# Each repo edits only CHECK_WORKFLOWS, STALE_HOURS, and ACTIVE_SINCE below.
+name: Finish branch
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: Branch to finish
+        required: true
+        type: string
+  schedule:
+    - cron: '23 * * * *'
+permissions:
+  contents: write
+  pull-requests: write
+  checks: read
+  actions: write
+concurrency:
+  group: finish-branch
+  cancel-in-progress: false
+env:
+  CHECK_WORKFLOWS: build.yml
+  STALE_HOURS: 2
+  # Scheduled mode skips branches last committed before this, so old branches stay untouched.
+  ACTIVE_SINCE: "2026-10-11T08:30:00Z"
+  GH_TOKEN: ${{ github.token }}
+  GH_REPO: ${{ github.repository }}
+
+jobs:
+  finish:
+    name: Finish branch
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Finish candidate branches
+        run: |
+          # The runner starts bash with -e. Turn that off so one branch cannot stop the rest.
+          set +e
+          set -uo pipefail
+          export GH_PROMPT_DISABLED=1 GH_NO_UPDATE_NOTIFIER=1 GH_PAGER=cat
+          log() { printf '%s\n' "$*" >&2; }
+          SUM=""; ERR=""
+          note() { SUM="${SUM}- $1"$'\n'; log "$1"; }
+          err() { ERR="${ERR}- $1"$'\n'; log "ERROR: $1"; }
+          # Percent-encode a branch so a slash stays one API path segment.
+          enc() { jq -nr --arg s "$1" '$s|@uri'; }
+          branch_sha() {
+            local e out
+            e=$(enc "$1") || return 1
+            out=$(gh api "repos/${GH_REPO}/branches/${e}" --jq .commit.sha) || return 1
+            printf '%s\n' "$out"
+          }
+          commit_date() { gh api "repos/${GH_REPO}/commits/$1" --jq .commit.committer.date; }
+          ahead_by() { gh api "repos/${GH_REPO}/compare/main...$1" --jq .ahead_by; }
+          same_merged() {
+            local n
+            n=$(gh pr list -R "$GH_REPO" --state merged --head "$1" --base main --json headRefOid,headRefName \
+              | jq --arg sha "$2" --arg b "$1" '[.[]|select(.headRefOid==$sha and .headRefName==$b)]|length') || return 2
+            [ "$n" != "0" ]
+          }
+          open_pr() {
+            gh pr list -R "$GH_REPO" --state open --head "$1" --base main --json number,isDraft,headRefName,labels \
+              | jq -c --arg b "$1" '[.[]|select(.headRefName==$b)]|if length==0 then empty else .[0] end'
+          }
+
+          # GITHUB_TOKEN does not trigger workflows. Dispatch only when this sha has no run yet.
+          dispatch_checks() {
+            local wf ids
+            local -a wfs=()
+            read -r -a wfs <<<"$CHECK_WORKFLOWS"
+            for wf in "${wfs[@]}"; do
+              ids=$(gh run list -R "$GH_REPO" --workflow "$wf" --commit "$2" --json databaseId) || return 1
+              [ "$(jq 'length' <<<"$ids")" = "0" ] || continue
+              log "dispatch ${wf} on ${1}"
+              gh workflow run "$wf" -R "$GH_REPO" --ref "$1" || return 1
+            done
+          }
+
+          merge_pr() {
+            local num="$1" meta st efile
+            : >"$msgf"
+            meta=$(gh pr view "$num" -R "$GH_REPO" --json state,autoMergeRequest) \
+              || { printf 'could not read PR #%s\n' "$num" >"$msgf"; return 1; }
+            st=$(jq -r .state <<<"$meta")
+            if [ "$st" = "MERGED" ]; then printf 'queued\n'; return 0; fi
+            if [ "$st" != "OPEN" ]; then printf 'PR #%s is %s\n' "$num" "$st" >"$msgf"; return 1; fi
+            if [ "$(jq -r '.autoMergeRequest != null' <<<"$meta")" = "true" ]; then printf 'queued\n'; return 0; fi
+            efile=$(mktemp)
+            if gh pr merge "$num" -R "$GH_REPO" --auto --squash >"$efile" 2>&1; then rm -f "$efile"; printf 'auto\n'; return 0; fi
+            # Already mergeable/clean: auto-merge cannot arm, so squash directly.
+            if grep -Eqi 'clean status|already mergeable' "$efile" \
+                && gh pr merge "$num" -R "$GH_REPO" --squash >"$efile" 2>&1; then
+              rm -f "$efile"; printf 'squash\n'; return 0
+            fi
+            tr '\n' ' ' <"$efile" >"$msgf"; rm -f "$efile"; return 1
+          }
+
+          needs_fix() {
+            local num="$1" sha="$2" has rows body list cfile
+            has=$(gh pr view "$num" -R "$GH_REPO" --json labels --jq '[.labels[].name] | index("needs-fix")') || return 1
+            if [ "$has" != "null" ]; then log "PR #${num} already has needs-fix"; return 0; fi
+            rows=$(gh api --paginate "repos/${GH_REPO}/commits/${sha}/check-runs?per_page=100" \
+              --jq '.check_runs[] | [.name, .status, .conclusion, (.html_url // "")] | @tsv') || return 1
+            body=$(printf '%s\n' "$rows" | jq -Rs --arg run "${GITHUB_RUN_ID:-0}" '
+              [split("\n")[] | select(length>0) | split("\t") | {name:.[0], status:.[1], conclusion:.[2], url:.[3]}]
+              | map(select(.status=="completed" and (.conclusion=="failure" or .conclusion=="cancelled" or .conclusion=="timed_out")))
+              | map(select(((.url // "") | contains("/actions/runs/\($run)/") | not) and .name != "Finish branch"))
+              | unique_by(.name)') || return 1
+            [ "$(jq 'length' <<<"$body")" = "0" ] && return 0
+            list=$(jq -r '.[] | "- [" + .name + "](" + .url + ")"' <<<"$body") || return 1
+            gh pr edit "$num" -R "$GH_REPO" --add-label needs-fix || return 1
+            cfile=$(mktemp)
+            printf '%s\n\n%s\n\n%s\n\n%s\n' \
+              "تعذّر الدمج التلقائي لأن الفحوصات التالية لم تنجح:" "$list" \
+              "Automatic merge is blocked because these checks failed:" "$list" >"$cfile"
+            if ! gh pr comment "$num" -R "$GH_REPO" --body-file "$cfile"; then
+              rm -f "$cfile"
+              gh pr edit "$num" -R "$GH_REPO" --remove-label needs-fix
+              return 1
+            fi
+            rm -f "$cfile"
+            return 2
+          }
+
+          finish_one() {
+            local b="$1" sha="$2" sm pr num url how mc nf
+            same_merged "$b" "$sha"; sm=$?
+            if [ "$sm" -eq 2 ]; then err "merged-PR lookup failed for ${b}"; return 1; fi
+            if [ "$sm" -eq 0 ]; then note "${b}: skipped (merged PR has this commit)"; return 0; fi
+            pr=$(open_pr "$b") || { err "open-PR lookup failed for ${b}"; return 1; }
+            if [ -n "$pr" ]; then
+              num=$(jq -r .number <<<"$pr")
+              if [ "$(jq -r .isDraft <<<"$pr")" = "true" ]; then note "${b}: skipped (draft #${num})"; return 0; fi
+              if [ "$(jq -r 'any(.labels[]?; .name=="do-not-merge")' <<<"$pr")" = "true" ]; then
+                note "${b}: skipped (do-not-merge #${num})"; return 0
+              fi
+            else
+              url=$(gh pr create -R "$GH_REPO" --base main --head "$b" --title "Auto-finish: ${b}" --body "$(printf '%s\n\n%s\n' \
+                'فُتح هذا الطلب تلقائيًا لإتمام الفرع. يُدمج فقط إذا نجحت الفحوصات المطلوبة.' \
+                'This pull request was opened automatically to finish the branch. It merges only if the required checks pass.')") \
+                || { err "creating the PR failed for ${b}"; return 1; }
+              num=${url##*/}
+              [[ "$num" =~ ^[0-9]+$ ]] || { err "could not read the PR number for ${b} from ${url}"; return 1; }
+            fi
+            dispatch_checks "$b" "$sha" || { err "dispatching checks failed for ${b}"; return 1; }
+            how=$(merge_pr "$num"); mc=$?
+            MERGE_MSG=$(cat "$msgf")
+            # Auto-merge stays armed even when a check fails, so always look for failed checks.
+            if [ "$(gh pr view "$num" -R "$GH_REPO" --json state --jq .state)" != "MERGED" ]; then
+              needs_fix "$num" "$sha"; nf=$?
+              if [ "$nf" -eq 2 ]; then note "${b}: needs-fix (#${num})"; return 0; fi
+              if [ "$nf" -ne 0 ]; then err "${b} (#${num}): could not record needs-fix"; fi
+            fi
+            if [ "$mc" -ne 0 ]; then
+              err "${b} (#${num}): merge failed: ${MERGE_MSG:-unknown}"; note "${b}: merge failed (#${num})"
+              return 1
+            fi
+            note "${b}: ${how} (#${num})"
+          }
+
+          mode="${GITHUB_EVENT_NAME:?}"
+          cand=$(mktemp) || exit 1
+          msgf=$(mktemp) || exit 1
+          trap 'rm -f "$cand" "$msgf"' EXIT
+          if [ "$mode" = "workflow_dispatch" ]; then
+            b=$(jq -r '.inputs.branch // empty' "${GITHUB_EVENT_PATH:?}")
+            if [ -z "$b" ]; then err "input branch is required"
+            elif [ "$b" = "main" ]; then err "refusing to finish main"
+            else
+              sha=$(branch_sha "$b") || sha=""
+              if [ -z "$sha" ]; then err "branch not found: ${b}"; else printf '%s\t%s\n' "$b" "$sha" >>"$cand"; fi
+            fi
+          else
+            cutoff=$(date -u -d "-${STALE_HOURS} hours" +%Y-%m-%dT%H:%M:%SZ) || cutoff=""
+            list=$(mktemp) || exit 1
+            if [ -z "$cutoff" ]; then err "could not compute the stale cutoff from STALE_HOURS=${STALE_HOURS}"
+            elif ! gh api --paginate "repos/${GH_REPO}/branches?per_page=100" --jq '.[] | [.name, .commit.sha] | @tsv' >"$list"; then
+              err "listing branches failed"
+            else
+              while IFS=$'\t' read -r name sha; do
+                [ -n "$name" ] || continue
+                case "$name" in main|dependabot/*) continue ;; esac
+                d=$(commit_date "$sha") || { err "commit date failed for ${name}"; continue; }
+                [[ "$d" < "$cutoff" && "$d" > "$ACTIVE_SINCE" ]] || continue
+                a=$(ahead_by "$sha") || { err "compare failed for ${name}"; continue; }
+                [[ "$a" =~ ^[0-9]+$ ]] || { err "bad ahead_by for ${name}: ${a}"; continue; }
+                [ "$a" -gt 0 ] || continue
+                printf '%s\t%s\n' "$name" "$sha" >>"$cand"
+              done <"$list"
+            fi
+            rm -f "$list"
+          fi
+          while IFS=$'\t' read -r name sha; do
+            [ -n "$name" ] || continue
+            finish_one "$name" "$sha" || true
+          done <"$cand"
+          {
+            printf '## Finish branch\n\nMode: %s\n\n' "$mode"
+            if [ -n "$SUM" ]; then printf '%s' "$SUM"; else printf 'No candidate branches.\n'; fi
+            if [ -n "$ERR" ]; then printf '\n### Errors\n%s' "$ERR"; fi
+          } >>"${GITHUB_STEP_SUMMARY:-/dev/null}"
+          if [ "$mode" = "workflow_dispatch" ] && [ -n "$ERR" ]; then exit 1; fi
+          exit 0
