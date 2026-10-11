@@ -1,5 +1,5 @@
 # Finish open branches into main. Never --admin, --delete-branch, or force-push.
-# Each repo edits only CHECK_WORKFLOWS, STALE_MINUTES, and ACTIVE_SINCE below.
+# Each repo edits only STALE_MINUTES and ACTIVE_SINCE below.
 name: Finish branch
 on:
   workflow_dispatch:
@@ -14,12 +14,11 @@ permissions:
   contents: write
   pull-requests: write
   checks: read
-  actions: write
+  actions: write  # approve the PR check runs
 concurrency:
   group: finish-branch
   cancel-in-progress: false
 env:
-  CHECK_WORKFLOWS: build.yml
   STALE_MINUTES: 60
   # Scheduled mode skips branches last committed before this, so old branches stay untouched.
   ACTIVE_SINCE: "2026-10-11T08:30:00Z"
@@ -63,16 +62,20 @@ jobs:
               | jq -c --arg b "$1" '[.[]|select(.headRefName==$b)]|if length==0 then empty else .[0] end'
           }
 
-          # GITHUB_TOKEN does not trigger workflows. Dispatch only when this sha has no run yet.
-          dispatch_checks() {
-            local wf ids
-            local -a wfs=()
-            read -r -a wfs <<<"$CHECK_WORKFLOWS"
-            for wf in "${wfs[@]}"; do
-              ids=$(gh run list -R "$GH_REPO" --workflow "$wf" --commit "$2" --json databaseId) || return 1
-              [ "$(jq 'length' <<<"$ids")" = "0" ] || continue
-              log "dispatch ${wf} on ${1}"
-              gh workflow run "$wf" -R "$GH_REPO" --ref "$1" || return 1
+          # A PR opened by GITHUB_TOKEN starts its pull_request checks in "action_required"
+          # (waiting for approval). Approve those runs so the required checks run on the PR.
+          approve_checks() {
+            local ids id i
+            [ "$3" = "new" ] && sleep 30  # let GitHub create all PR runs first
+            for i in 1 2 3 4 5 6; do
+              ids=$(gh api "repos/${GH_REPO}/actions/runs?head_sha=${2}&event=pull_request&per_page=100" \
+                --jq '.workflow_runs[] | select(.conclusion=="action_required") | .id') || return 1
+              [ -n "$ids" ] || { [ "$3" = "new" ] && [ "$i" -lt 6 ] && sleep 15 && continue; return 0; }
+              for id in $ids; do
+                log "approve run ${id} on ${1}"
+                gh api -X POST "repos/${GH_REPO}/actions/runs/${id}/approve" >/dev/null || return 1
+              done
+              return 0
             done
           }
 
@@ -123,7 +126,7 @@ jobs:
           }
 
           finish_one() {
-            local b="$1" sha="$2" sm pr num url how mc nf
+            local b="$1" sha="$2" sm pr num url how mc nf fresh=old
             same_merged "$b" "$sha"; sm=$?
             if [ "$sm" -eq 2 ]; then err "merged-PR lookup failed for ${b}"; return 1; fi
             if [ "$sm" -eq 0 ]; then note "${b}: skipped (merged PR has this commit)"; return 0; fi
@@ -141,8 +144,9 @@ jobs:
                 || { err "creating the PR failed for ${b}"; return 1; }
               num=${url##*/}
               [[ "$num" =~ ^[0-9]+$ ]] || { err "could not read the PR number for ${b} from ${url}"; return 1; }
+              fresh=new
             fi
-            dispatch_checks "$b" "$sha" || { err "dispatching checks failed for ${b}"; return 1; }
+            approve_checks "$b" "$sha" "$fresh" || { err "approving checks failed for ${b}"; return 1; }
             how=$(merge_pr "$num"); mc=$?
             MERGE_MSG=$(cat "$msgf")
             # Auto-merge stays armed even when a check fails, so always look for failed checks.
