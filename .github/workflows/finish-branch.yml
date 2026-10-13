@@ -52,9 +52,11 @@ jobs:
           commit_date() { gh api "repos/${GH_REPO}/commits/$1" --jq .commit.committer.date; }
           ahead_by() { gh api "repos/${GH_REPO}/compare/main...$1" --jq .ahead_by; }
           same_merged() {
-            local n
-            n=$(gh pr list -R "$GH_REPO" --state merged --head "$1" --base main --limit 5000 --json headRefOid,headRefName,isCrossRepository \
-              | jq --arg sha "$2" --arg b "$1" '[.[]|select(.headRefOid==$sha and .headRefName==$b and (.isCrossRepository|not))]|length') || return 2
+            local raw n
+            raw=$(gh pr list -R "$GH_REPO" --state merged --head "$1" --base main --limit 5000 --json headRefOid,headRefName,isCrossRepository) || return 2
+            # A full page may be truncated: unknown, never "not merged".
+            [ "$(jq 'length' <<<"$raw")" -lt 5000 ] || return 2
+            n=$(jq --arg sha "$2" --arg b "$1" '[.[]|select(.headRefOid==$sha and .headRefName==$b and (.isCrossRepository|not))]|length' <<<"$raw") || return 2
             [ "$n" != "0" ]
           }
           open_pr() {
@@ -83,13 +85,23 @@ jobs:
                 <<<"$OPEN_PRS") || return 1
             [ -n "$r" ] && { printf '%s\n' "$r"; return 0; }
             # Child of another unmerged branch (stack): its parent's commits would land on main too.
+            # Branch tips are read fresh for every gate, never from the start-of-run snapshot.
+            local tips
+            tips=$(gh api --paginate "repos/${GH_REPO}/branches?per_page=100" --jq '.[] | [.name, .commit.sha] | @tsv') || return 1
+            [ -n "$tips" ] || return 1
             while IFS=$'\t' read -r ob osha; do
               [ -n "$ob" ] || continue
               case "$ob" in main|"$b") continue ;; esac
               # Shared history: the merge base of the two tips. If that base is not on main, this branch
               # carries commits of the other branch that main does not have (ahead, identical or diverged).
               if [ "$osha" = "$sha" ]; then cmp="$sha"
-              else cmp=$(gh api "repos/${GH_REPO}/compare/$(enc "$osha")...$(enc "$sha")" --jq .merge_base_commit.sha) || return 1; fi
+              else
+                cmp=$(gh api "repos/${GH_REPO}/compare/$(enc "$osha")...$(enc "$sha")" --jq '[.status, .merge_base_commit.sha]|@tsv') || return 1
+                # "behind": this branch is an ancestor of the other one (a parent checked against its child).
+                # Its commits are its own, so the child does not hold it.
+                [ "$(cut -f1 <<<"$cmp")" = "behind" ] && continue
+                cmp=$(cut -f2 <<<"$cmp")
+              fi
               [[ "$cmp" =~ ^[0-9a-f]{40}$ ]] || return 1
               st=$(ahead_by "$cmp") || return 1
               [[ "$st" =~ ^[0-9]+$ ]] || return 1
@@ -99,7 +111,7 @@ jobs:
               [ "$smr" -eq 2 ] && return 1
               [ "$smr" -eq 0 ] && continue
               printf 'contains unmerged commits of branch %s\n' "$ob"; return 0
-            done <"$BRANCH_LIST"
+            done <<<"$tips"
             return 0
           }
           # Release, installer and publishing changes always need the owner (case-insensitive).
@@ -170,7 +182,7 @@ jobs:
           }
 
           merge_pr() {
-            local num="$1" hsha="$2" meta st efile
+            local num="$1" hsha="$2" meta st efile mq
             : >"$msgf"
             meta=$(gh pr view "$num" -R "$GH_REPO" --json state,autoMergeRequest) \
               || { printf 'could not read PR #%s\n' "$num" >"$msgf"; return 1; }
@@ -179,11 +191,24 @@ jobs:
             if [ "$st" != "OPEN" ]; then printf 'PR #%s is %s\n' "$num" "$st" >"$msgf"; return 1; fi
             # Auto-merge is never armed: it would merge later pushes or labels without a new check.
             # Merge only now, pinned to the head that just passed the gate; otherwise retry next run.
+            # A merge queue on main would turn "merge now" into a delayed merge: hold for the owner.
+            # shellcheck disable=SC2016  # GraphQL $variables, not shell
+            mq=$(gh api graphql -f query='query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){mergeQueue(branch:"main"){id} pullRequest(number:$n){mergeStateStatus headRefOid}}}' \
+              -F o="${GH_REPO%/*}" -F r="${GH_REPO#*/}" -F n="$num" \
+              --jq '.data.repository|[(.mergeQueue!=null), .pullRequest.mergeStateStatus, .pullRequest.headRefOid]|@tsv') \
+              || { printf 'could not read merge state of #%s\n' "$num" >"$msgf"; return 1; }
+            [ "$(cut -f1 <<<"$mq")" = "false" ] || { printf 'main uses a merge queue; owner merges\n' >"$msgf"; return 4; }
+            [ "$(cut -f3 <<<"$mq")" = "$hsha" ] || { printf 'head moved after the gate\n' >"$msgf"; return 3; }
+            case "$(cut -f2 <<<"$mq")" in
+              CLEAN|HAS_HOOKS) ;;
+              BLOCKED|BEHIND|UNKNOWN|DRAFT|UNSTABLE) printf 'not mergeable yet (%s)\n' "$(cut -f2 <<<"$mq")" >"$msgf"; return 3 ;;
+              *) printf 'merge state %s\n' "$(cut -f2 <<<"$mq")" >"$msgf"; return 1 ;;
+            esac
             efile=$(mktemp)
             if gh pr merge "$num" -R "$GH_REPO" --squash --match-head-commit "$hsha" >"$efile" 2>&1; then
               rm -f "$efile"; printf 'squash\n'; return 0
             fi
-            tr '\n' ' ' <"$efile" >"$msgf"; rm -f "$efile"; return 3
+            tr '\n' ' ' <"$efile" >"$msgf"; rm -f "$efile"; return 1
           }
 
           needs_fix() {
@@ -246,11 +271,16 @@ jobs:
             if [ -n "$g" ]; then note "${b}: skipped before merge (${g})"; disarm "$b" || return 1; return 0; fi
             how=$(merge_pr "$num" "$cur"); mc=$?
             MERGE_MSG=$(cat "$msgf")
+            if [ "$mc" -eq 1 ]; then
+              err "${b} (#${num}): merge failed: ${MERGE_MSG:-unknown}"; note "${b}: merge failed (#${num})"
+              return 1
+            fi
+            if [ "$mc" -eq 4 ]; then note "${b}: skipped (#${num}): ${MERGE_MSG}"; return 0; fi
             # Record failed checks on the head that was gated.
-            if [ "$(gh pr view "$num" -R "$GH_REPO" --json state --jq .state)" != "MERGED" ]; then
+            if [ "$mc" -eq 3 ]; then
               needs_fix "$num" "$cur"; nf=$?
               if [ "$nf" -eq 2 ]; then note "${b}: needs-fix (#${num})"; return 0; fi
-              if [ "$nf" -ne 0 ]; then err "${b} (#${num}): could not record needs-fix"; fi
+              if [ "$nf" -ne 0 ]; then err "${b} (#${num}): could not record needs-fix"; return 1; fi
             fi
             if [ "$mc" -eq 3 ]; then
               note "${b}: not mergeable yet, retry next run (#${num}): ${MERGE_MSG:-unknown}"; return 0
@@ -265,6 +295,16 @@ jobs:
           mode="${GITHUB_EVENT_NAME:?}"
           cand=$(mktemp) || exit 1
           msgf=$(mktemp) || exit 1
+          # This job never arms auto-merge or queues PRs. Any delayed merge left on an own open PR
+          # (from older versions or by hand) is not pinned to a checked head: turn ALL of them off first.
+          # shellcheck disable=SC2016  # GraphQL $variables, not shell
+          if armed=$(gh api graphql --paginate -f query='query($o:String!,$r:String!,$endCursor:String){repository(owner:$o,name:$r){pullRequests(states:OPEN,first:100,after:$endCursor){pageInfo{hasNextPage endCursor} nodes{number headRefName isCrossRepository isInMergeQueue autoMergeRequest{enabledAt}}}}}' \
+              -F o="${GH_REPO%/*}" -F r="${GH_REPO#*/}" \
+              --jq '.data.repository.pullRequests.nodes[]|select((.isCrossRepository|not) and (.isInMergeQueue or .autoMergeRequest!=null))|.headRefName'); then
+            for ab in $(sort -u <<<"$armed"); do note "${ab}: delayed merge turned off"; disarm "$ab" || true; done
+          else
+            err "listing armed/queued PRs failed: delayed merges not turned off"
+          fi
           BRANCH_LIST=$(mktemp) || exit 1
           trap 'rm -f "$cand" "$msgf" "$BRANCH_LIST"' EXIT
           if ! gh api --paginate "repos/${GH_REPO}/branches?per_page=100" --jq '.[] | [.name, .commit.sha] | @tsv' >"$BRANCH_LIST"; then
@@ -296,17 +336,6 @@ jobs:
                 printf '%s\t%s\n' "$name" "$sha" >>"$cand"
               done <"$list"
             fi
-          fi
-          # Auto-merge armed in an earlier hour is not pinned to a head: re-check every armed PR now,
-          # including branches too fresh to be candidates, and disarm it when held or unknown.
-          if load_open_prs; then
-            while IFS=$'\t' read -r an ab ah; do
-              [ -n "$an" ] || continue
-              if ! ag=$(gate "$ab" "$ah"); then err "armed #${an}: hold check failed (held)"; disarm "$ab"
-              elif [ -n "$ag" ]; then note "${ab}: auto-merge disarmed on #${an} (${ag})"; disarm "$ab"; fi
-            done < <(jq -r '.[]|select(.armed)|[.number,.head,.sha]|@tsv' <<<"$OPEN_PRS")
-          else
-            err "listing open PRs failed: armed auto-merges not re-checked"
           fi
           while IFS=$'\t' read -r name sha; do
             [ -n "$name" ] || continue
