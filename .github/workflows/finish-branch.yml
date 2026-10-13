@@ -62,6 +62,15 @@ jobs:
           # 0 = commit $2 already landed on main through ANY merged own PR (squash-merged history, any branch),
           # 1 = no, 2 = unknown. GitHub lists the PRs whose commits include $2; a merged one into main
           # carried $2 and all of its unmerged ancestors.
+          # SHAs of the commits reachable from $1 but not from main. Non-zero = unknown (GitHub lists at most 250).
+          unmerged_commits() {
+            local raw t
+            raw=$(gh api "repos/${GH_REPO}/compare/main...$(enc "$1")" --jq '[.total_commits, (.commits|length), ([.commits[].sha]|join(" "))]|@tsv') || return 1
+            t=$(cut -f1 <<<"$raw")
+            [[ "$t" =~ ^[0-9]+$ ]] || return 1
+            [ "$t" -eq "$(cut -f2 <<<"$raw")" ] || return 1
+            cut -f3 <<<"$raw" | tr ' ' '\n' | sed '/^$/d'
+          }
           history_merged() {
             local raw n
             raw=$(gh api --paginate "repos/${GH_REPO}/commits/$(enc "$2")/pulls?per_page=100") || return 2
@@ -88,7 +97,7 @@ jobs:
           }
           # Prints a reason when branch $1 (tip $2) must not be finished; empty = OK. Non-zero = unknown.
           held_reason() {
-            local b="$1" sha="$2" r ob osha cmp st
+            local b="$1" sha="$2" r ob osha
             load_open_prs || return 1
             r=$(jq -r --arg b "$b" '[.[]|select(.head==$b)]
                 | (map(select(.dnm))|if length>0 then "do-not-merge #\(.[0].number)" else empty end),
@@ -100,32 +109,24 @@ jobs:
             local tips
             tips=$(gh api --paginate "repos/${GH_REPO}/branches?per_page=100" --jq '.[] | [.name, .commit.sha] | @tsv') || return 1
             [ -n "$tips" ] || return 1
+            # Exact check: the commits of THIS branch that main lacks, intersected with those of every other
+            # branch. Any shared commit that no merged own PR has carried to main means unmerged foreign work.
+            local mine theirs shared c
+            mine=$(unmerged_commits "$sha") || return 1
+            [ -n "$mine" ] || return 0
             while IFS=$'\t' read -r ob osha; do
               [ -n "$ob" ] || continue
               case "$ob" in main|"$b") continue ;; esac
-              # Shared history: the merge base of the two tips. If that base is not on main, this branch
-              # carries commits of the other branch that main does not have (ahead, identical or diverged).
-              if [ "$osha" = "$sha" ]; then cmp="$sha"
-              else
-                cmp=$(gh api "repos/${GH_REPO}/compare/$(enc "$osha")...$(enc "$sha")" --jq '[.status, .merge_base_commit.sha]|@tsv') || return 1
-                # "behind": this branch is an ancestor of the other one. Only a proven parent is exempt:
-                # the other branch has an own open PR stacked on THIS branch. Anything else stays held.
-                if [ "$(cut -f1 <<<"$cmp")" = "behind" ] && \
-                   [ "$(jq -r --arg o "$ob" --arg b "$b" 'any(.[]; .head==$o and .base==$b)' <<<"$OPEN_PRS")" = "true" ]; then
-                  continue
-                fi
-                cmp=$(cut -f2 <<<"$cmp")
-              fi
-              [[ "$cmp" =~ ^[0-9a-f]{40}$ ]] || return 1
-              st=$(ahead_by "$cmp") || return 1
-              [[ "$st" =~ ^[0-9]+$ ]] || return 1
-              [ "$st" -gt 0 ] || continue
-              # Shared history that already landed through a merged PR of that branch (squash) is not "unmerged",
-              # even if the branch moved on afterwards.
-              history_merged "$ob" "$cmp"; local smr=$?
-              [ "$smr" -eq 2 ] && return 1
-              [ "$smr" -eq 0 ] && continue
-              printf 'contains unmerged commits of branch %s\n' "$ob"; return 0
+              # A proven parent (the other branch has an own open PR stacked on THIS branch) is not held by its child.
+              [ "$(jq -r --arg o "$ob" --arg b "$b" 'any(.[]; .head==$o and .base==$b)' <<<"$OPEN_PRS")" = "true" ] && continue
+              theirs=$(unmerged_commits "$osha") || return 1
+              shared=$(comm -12 <(sort -u <<<"$mine") <(sort -u <<<"$theirs" | sed '/^$/d'))
+              for c in $shared; do
+                history_merged "$ob" "$c"; local smr=$?
+                [ "$smr" -eq 2 ] && return 1
+                [ "$smr" -eq 0 ] && continue
+                printf 'contains unmerged commits of branch %s\n' "$ob"; return 0
+              done
             done <<<"$tips"
             return 0
           }
