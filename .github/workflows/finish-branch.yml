@@ -59,17 +59,16 @@ jobs:
             n=$(jq --arg sha "$2" --arg b "$1" '[.[]|select(.headRefOid==$sha and .headRefName==$b and (.isCrossRepository|not))]|length' <<<"$raw") || return 2
             [ "$n" != "0" ]
           }
-          # 0 = commit $2 is already part of a merged own PR of branch $1 (squash-merged history), 1 = no, 2 = unknown.
+          # 0 = commit $2 already landed on main through ANY merged own PR (squash-merged history, any branch),
+          # 1 = no, 2 = unknown. GitHub lists the PRs whose commits include $2; a merged one into main
+          # carried $2 and all of its unmerged ancestors.
           history_merged() {
-            local raw h st
-            raw=$(gh pr list -R "$GH_REPO" --state merged --head "$1" --base main --limit 5000 --json headRefOid,headRefName,isCrossRepository) || return 2
-            [ "$(jq 'length' <<<"$raw")" -lt 5000 ] || return 2
-            for h in $(jq -r --arg b "$1" '.[]|select(.headRefName==$b and (.isCrossRepository|not))|.headRefOid' <<<"$raw"); do
-              [ "$h" = "$2" ] && return 0
-              st=$(gh api "repos/${GH_REPO}/compare/$(enc "$2")...$(enc "$h")" --jq .status) || return 2
-              case "$st" in ahead|identical) return 0 ;; esac
-            done
-            return 1
+            local raw n
+            raw=$(gh api --paginate "repos/${GH_REPO}/commits/$(enc "$2")/pulls?per_page=100") || return 2
+            n=$(jq -rs --arg repo "$GH_REPO" 'add // [] | .[]
+                | select(.merged_at != null and .base.ref == "main" and (.head.repo.full_name // "") == $repo)
+                | .number' <<<"$raw") || return 2
+            [ -n "$n" ]
           }
           open_pr() {
             gh pr list -R "$GH_REPO" --state open --head "$1" --base main --limit 1000 --json number,isDraft,headRefName,labels,isCrossRepository \
