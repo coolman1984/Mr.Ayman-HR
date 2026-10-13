@@ -61,33 +61,75 @@ jobs:
             gh pr list -R "$GH_REPO" --state open --head "$1" --base main --json number,isDraft,headRefName,labels \
               | jq -c --arg b "$1" '[.[]|select(.headRefName==$b)]|if length==0 then empty else .[0] end'
           }
-          # Open PRs from this branch to ANY base (stacked PRs). A do-not-merge label or a non-main base
-          # on any of them means the branch is held: never open or merge a new PR to main for it.
-          held_reason() {
-            local all
-            all=$(gh pr list -R "$GH_REPO" --state open --head "$1" --limit 100 --json number,baseRefName,headRefName,labels \
-              | jq -c --arg b "$1" '[.[]|select(.headRefName==$b)]') || return 2
-            jq -r 'map(select(any(.labels[]?; .name=="do-not-merge")))|if length>0 then "do-not-merge #\(.[0].number)" else empty end' <<<"$all"
-            jq -r 'map(select(.baseRefName!="main"))|if length>0 then "stacked on \(.[0].baseRefName) #\(.[0].number)" else empty end' <<<"$all"
+          # ---- Hold guards (do-not-merge, stacks, release/installer). Every lookup fails CLOSED. ----
+          # All open PRs of THIS repo (fork PRs ignored), refreshed before each decision.
+          OPEN_PRS=""
+          load_open_prs() {
+            local raw
+            raw=$(gh api --paginate "repos/${GH_REPO}/pulls?state=open&per_page=100") || return 1
+            OPEN_PRS=$(jq -cs --arg repo "$GH_REPO" '[add // [] | .[]
+                | select((.head.repo.full_name // "") == $repo)
+                | {number, head: .head.ref, sha: .head.sha, base: .base.ref, armed: (.auto_merge != null),
+                   dnm: any(.labels[]?; (.name|ascii_downcase) == "do-not-merge")}]' <<<"$raw") || return 1
+            [ -n "$OPEN_PRS" ] || return 1
           }
-          # A held branch must not keep an auto-merge armed by an earlier run.
-          disarm() {
-            local p n
-            p=$(open_pr "$1") || return 0
-            [ -n "$p" ] || return 0
-            n=$(jq -r .number <<<"$p")
-            gh pr merge "$n" -R "$GH_REPO" --disable-auto >/dev/null 2>&1 && log "disabled auto-merge on #${n}"
+          # Prints a reason when branch $1 (tip $2) must not be finished; empty = OK. Non-zero = unknown.
+          held_reason() {
+            local b="$1" sha="$2" r ob osha cmp st
+            load_open_prs || return 1
+            r=$(jq -r --arg b "$b" '[.[]|select(.head==$b)]
+                | (map(select(.dnm))|if length>0 then "do-not-merge #\(.[0].number)" else empty end),
+                  (map(select(.base!="main"))|if length>0 then "stacked on \(.[0].base) #\(.[0].number)" else empty end)' \
+                <<<"$OPEN_PRS") || return 1
+            [ -n "$r" ] && { printf '%s\n' "$r"; return 0; }
+            # Child of another unmerged branch (stack): its parent's commits would land on main too.
+            while IFS=$'\t' read -r ob osha; do
+              [ -n "$ob" ] || continue
+              case "$ob" in main|"$b") continue ;; esac
+              [ "$osha" = "$sha" ] && continue
+              cmp=$(gh api "repos/${GH_REPO}/compare/$(enc "$osha")...$(enc "$sha")" --jq .status) || return 1
+              [ "$cmp" = "ahead" ] || continue
+              st=$(ahead_by "$osha") || return 1
+              [[ "$st" =~ ^[0-9]+$ ]] || return 1
+              if [ "$st" -gt 0 ]; then printf 'contains unmerged branch %s\n' "$ob"; return 0; fi
+            done <"$BRANCH_LIST"
             return 0
           }
-          # Release, installer and publishing changes always need the owner: never auto-merge them.
-          RELEASE_BRANCH_RE='^(release|releases|installer|publish|hotfix)(/|-|$)'
-          RELEASE_PATH_RE='(^|/)(installer|installers|release|releases|dist|publish)(/|$)|\.(iss|exe|msi|msix|nsi|wxs|appx|apk|aab)$|(^|/)build_windows\.py$|^\.github/workflows/.*(release|publish|deploy|windows|desktop|installer).*\.ya?ml$|^\.github/workflows/finish-branch\.yml$'
+          # Release, installer and publishing changes always need the owner (case-insensitive).
+          RELEASE_BRANCH_RE='^((release|releases|installer|installers)([/_-]|$)|v[0-9]+\.[0-9]+)'
+          RELEASE_PATH_RE='(^|/)[^/]*installer[^/]*(/|$)|\.(iss|exe|msi|msix|msixbundle|nsi|nsh|wxs|appx|appxbundle|apk|aab)$|(^|/)build[-_]?windows\.py$|^\.github/workflows/finish-branch\.ya?ml$|^\.github/workflows/([^/]*[-_])?(release|releases|publish|deploy|windows|installer)([-_.][^/]*)?\.ya?ml$'
           release_touch() {
-            local files
-            [[ "$1" =~ $RELEASE_BRANCH_RE ]] && { printf 'release branch\n'; return 0; }
-            files=$(gh api "repos/${GH_REPO}/compare/main...${2}" --jq 'if (.files|length)>=300 then "TOO-MANY-FILES(>=300)" else (.files[]? | .filename, (.previous_filename // empty)) end') || return 2
-            [ "$files" = "TOO-MANY-FILES(>=300)" ] && { printf 'too many files to check\n'; return 0; }
-            printf '%s\n' "$files" | grep -E -m1 "$RELEASE_PATH_RE" || true
+            local b="$1" sha="$2" files hit gc
+            if printf '%s\n' "$b" | grep -Eqi "$RELEASE_BRANCH_RE"; then printf 'release branch\n'; return 0; fi
+            files=$(gh api "repos/${GH_REPO}/compare/main...$(enc "$sha")" \
+              --jq 'if (.files|length)>=300 then "TOO-MANY-FILES" else (.files[]? | .filename, (.previous_filename // empty)) end') || return 1
+            # GitHub lists at most 300 files: a longer list cannot be checked, so it is held (fail closed).
+            [ "$files" = "TOO-MANY-FILES" ] && { printf '300+ files, cannot check\n'; return 0; }
+            hit=$(printf '%s\n' "$files" | grep -Ei -m1 "$RELEASE_PATH_RE"); gc=$?
+            [ "$gc" -le 1 ] || return 1
+            [ -n "$hit" ] && printf '%s\n' "$hit"
+            return 0
+          }
+          # Turn off auto-merge on EVERY own open PR from branch $1, then confirm it is off. Non-zero = still armed/unknown.
+          disarm() {
+            local b="$1" n ok=0
+            load_open_prs || { err "disarm: cannot list PRs for ${b}"; return 1; }
+            for n in $(jq -r --arg b "$b" '.[]|select(.head==$b and .armed)|.number' <<<"$OPEN_PRS"); do
+              gh pr merge "$n" -R "$GH_REPO" --disable-auto >/dev/null || log "disable-auto failed on #${n}"
+              if [ "$(gh api "repos/${GH_REPO}/pulls/${n}" --jq '.auto_merge != null')" != "false" ]; then
+                err "auto-merge still armed on #${n} (${b})"; ok=1
+              else log "auto-merge off on #${n}"; fi
+            done
+            return "$ok"
+          }
+          # One gate for both checks. Prints a reason to hold; non-zero = unknown (treated as held).
+          gate() {
+            local r
+            r=$(held_reason "$1" "$2") || return 1
+            [ -n "$r" ] && { head -1 <<<"$r"; return 0; }
+            r=$(release_touch "$1" "$2") || return 1
+            [ -n "$r" ] && printf 'release/installer change needs the owner: %s\n' "$(head -1 <<<"$r")"
+            return 0
           }
 
           # A PR opened by GITHUB_TOKEN starts its pull_request checks in "action_required"
@@ -108,7 +150,7 @@ jobs:
           }
 
           merge_pr() {
-            local num="$1" meta st efile
+            local num="$1" hsha="$2" meta st efile
             : >"$msgf"
             meta=$(gh pr view "$num" -R "$GH_REPO" --json state,autoMergeRequest) \
               || { printf 'could not read PR #%s\n' "$num" >"$msgf"; return 1; }
@@ -117,10 +159,10 @@ jobs:
             if [ "$st" != "OPEN" ]; then printf 'PR #%s is %s\n' "$num" "$st" >"$msgf"; return 1; fi
             if [ "$(jq -r '.autoMergeRequest != null' <<<"$meta")" = "true" ]; then printf 'queued\n'; return 0; fi
             efile=$(mktemp)
-            if gh pr merge "$num" -R "$GH_REPO" --auto --squash >"$efile" 2>&1; then rm -f "$efile"; printf 'auto\n'; return 0; fi
+            if gh pr merge "$num" -R "$GH_REPO" --auto --squash --match-head-commit "$hsha" >"$efile" 2>&1; then rm -f "$efile"; printf 'auto\n'; return 0; fi
             # Already mergeable/clean: auto-merge cannot arm, so squash directly.
             if grep -Eqi 'clean status|already mergeable' "$efile" \
-                && gh pr merge "$num" -R "$GH_REPO" --squash >"$efile" 2>&1; then
+                && gh pr merge "$num" -R "$GH_REPO" --squash --match-head-commit "$hsha" >"$efile" 2>&1; then
               rm -f "$efile"; printf 'squash\n'; return 0
             fi
             tr '\n' ' ' <"$efile" >"$msgf"; rm -f "$efile"; return 1
@@ -154,16 +196,12 @@ jobs:
           }
 
           finish_one() {
-            local b="$1" sha="$2" sm pr num url how mc nf hr hc rt rc fresh=old
+            local b="$1" sha="$2" sm pr num url how mc nf g cur fresh=old
             same_merged "$b" "$sha"; sm=$?
             if [ "$sm" -eq 2 ]; then err "merged-PR lookup failed for ${b}"; return 1; fi
             if [ "$sm" -eq 0 ]; then note "${b}: skipped (merged PR has this commit)"; return 0; fi
-            hr=$(held_reason "$b"); hc=$?
-            if [ "$hc" -ne 0 ]; then err "held-PR lookup failed for ${b}"; return 1; fi
-            if [ -n "$hr" ]; then disarm "$b"; note "${b}: skipped ($(head -1 <<<"$hr"))"; return 0; fi
-            rt=$(release_touch "$b" "$sha"); rc=$?
-            if [ "$rc" -ne 0 ]; then err "release-path check failed for ${b}"; return 1; fi
-            if [ -n "$rt" ]; then disarm "$b"; note "${b}: skipped (release/installer change needs the owner: ${rt})"; return 0; fi
+            if ! g=$(gate "$b" "$sha"); then err "hold check failed for ${b} (held)"; disarm "$b"; return 1; fi
+            if [ -n "$g" ]; then disarm "$b" || true; note "${b}: skipped (${g})"; return 0; fi
             pr=$(open_pr "$b") || { err "open-PR lookup failed for ${b}"; return 1; }
             if [ -n "$pr" ]; then
               num=$(jq -r .number <<<"$pr")
@@ -180,10 +218,13 @@ jobs:
               [[ "$num" =~ ^[0-9]+$ ]] || { err "could not read the PR number for ${b} from ${url}"; return 1; }
               fresh=new
             fi
-            hr=$(held_reason "$b") || { err "held-PR recheck failed for ${b}"; return 1; }
-            if [ -n "$hr" ]; then disarm "$b"; note "${b}: skipped before merge ($(head -1 <<<"$hr"))"; return 0; fi
-            approve_checks "$b" "$sha" "$fresh" || { err "approving checks failed for ${b}"; return 1; }
-            how=$(merge_pr "$num"); mc=$?
+            # Re-check on the head that will actually merge; the merge is pinned to that commit.
+            cur=$(gh api "repos/${GH_REPO}/pulls/${num}" --jq .head.sha) || { err "head lookup failed for #${num}"; disarm "$b"; return 1; }
+            [[ "$cur" =~ ^[0-9a-f]{40}$ ]] || { err "bad head for #${num}"; disarm "$b"; return 1; }
+            if ! g=$(gate "$b" "$cur"); then err "pre-merge hold check failed for ${b} (held)"; disarm "$b"; return 1; fi
+            if [ -n "$g" ]; then disarm "$b" || true; note "${b}: skipped before merge (${g})"; return 0; fi
+            approve_checks "$b" "$cur" "$fresh" || { err "approving checks failed for ${b}"; return 1; }
+            how=$(merge_pr "$num" "$cur"); mc=$?
             MERGE_MSG=$(cat "$msgf")
             # Auto-merge stays armed even when a check fails, so always look for failed checks.
             if [ "$(gh pr view "$num" -R "$GH_REPO" --json state --jq .state)" != "MERGED" ]; then
@@ -201,7 +242,13 @@ jobs:
           mode="${GITHUB_EVENT_NAME:?}"
           cand=$(mktemp) || exit 1
           msgf=$(mktemp) || exit 1
-          trap 'rm -f "$cand" "$msgf"' EXIT
+          BRANCH_LIST=$(mktemp) || exit 1
+          trap 'rm -f "$cand" "$msgf" "$BRANCH_LIST"' EXIT
+          if ! gh api --paginate "repos/${GH_REPO}/branches?per_page=100" --jq '.[] | [.name, .commit.sha] | @tsv' >"$BRANCH_LIST"; then
+            err "listing branches failed: nothing is finished this run"
+            printf '## Finish branch\n\n### Errors\n%s' "$ERR" >>"${GITHUB_STEP_SUMMARY:-/dev/null}"
+            exit 1
+          fi
           if [ "$mode" = "workflow_dispatch" ]; then
             b=$(jq -r '.inputs.branch // empty' "${GITHUB_EVENT_PATH:?}")
             if [ -z "$b" ]; then err "input branch is required"
@@ -212,10 +259,8 @@ jobs:
             fi
           else
             cutoff=$(date -u -d "-${STALE_MINUTES} minutes" +%Y-%m-%dT%H:%M:%SZ) || cutoff=""
-            list=$(mktemp) || exit 1
+            list="$BRANCH_LIST"
             if [ -z "$cutoff" ]; then err "could not compute the stale cutoff from STALE_MINUTES=${STALE_MINUTES}"
-            elif ! gh api --paginate "repos/${GH_REPO}/branches?per_page=100" --jq '.[] | [.name, .commit.sha] | @tsv' >"$list"; then
-              err "listing branches failed"
             else
               while IFS=$'\t' read -r name sha; do
                 [ -n "$name" ] || continue
@@ -228,7 +273,6 @@ jobs:
                 printf '%s\t%s\n' "$name" "$sha" >>"$cand"
               done <"$list"
             fi
-            rm -f "$list"
           fi
           while IFS=$'\t' read -r name sha; do
             [ -n "$name" ] || continue
