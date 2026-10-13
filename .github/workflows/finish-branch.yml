@@ -97,9 +97,12 @@ jobs:
               if [ "$osha" = "$sha" ]; then cmp="$sha"
               else
                 cmp=$(gh api "repos/${GH_REPO}/compare/$(enc "$osha")...$(enc "$sha")" --jq '[.status, .merge_base_commit.sha]|@tsv') || return 1
-                # "behind": this branch is an ancestor of the other one (a parent checked against its child).
-                # Its commits are its own, so the child does not hold it.
-                [ "$(cut -f1 <<<"$cmp")" = "behind" ] && continue
+                # "behind": this branch is an ancestor of the other one. Only a proven parent is exempt:
+                # the other branch has an own open PR stacked on THIS branch. Anything else stays held.
+                if [ "$(cut -f1 <<<"$cmp")" = "behind" ] && \
+                   [ "$(jq -r --arg o "$ob" --arg b "$b" 'any(.[]; .head==$o and .base==$b)' <<<"$OPEN_PRS")" = "true" ]; then
+                  continue
+                fi
                 cmp=$(cut -f2 <<<"$cmp")
               fi
               [[ "$cmp" =~ ^[0-9a-f]{40}$ ]] || return 1
@@ -116,7 +119,7 @@ jobs:
           }
           # Release, installer and publishing changes always need the owner (case-insensitive).
           RELEASE_BRANCH_RE='^((release|releases|installer|installers)(/|$)|release[-_]v?[0-9]+(\.[0-9]+)*$|v[0-9]+(\.[0-9]+)+$)'
-          RELEASE_PATH_RE='(^|/)([^/]*[-_.])?installers?([-_.][^/]*)?/|\.(iss|exe|msi|msix|msixbundle|nsi|nsh|wxs|appx|appxbundle|apk|aab)$|(^|/)build[-_]?windows\.py$|^\.github/workflows/finish-branch\.ya?ml$|^\.github/workflows/([^/]*[-_.])?(release|releases|publish|deploy|windows|installer)([-_.][^/]*)?\.ya?ml$'
+          RELEASE_PATH_RE='(^|/)([^/]*[-_.])?installers?([-_.][^/]*)?/|\.(iss|exe|msi|msix|msixbundle|nsi|nsh|wxs|appx|appxbundle|apk|aab)$|(^|/)build[-_]?windows\.py$|^\.github/workflows/finish-branch\.ya?ml$|^\.github/workflows/([^/]*[-_.])?(release|releases|publish|deploy|windows|installers?)([-_.][^/]*)?\.ya?ml$'
           release_touch() {
             local b="$1" sha="$2" files hit gc
             if printf '%s\n' "$b" | grep -Eqi "$RELEASE_BRANCH_RE"; then printf 'release branch\n'; return 0; fi
@@ -239,7 +242,10 @@ jobs:
           }
 
           finish_one() {
-            local b="$1" sha="$2" sm pr num url how mc nf g cur fresh=old
+            local b="$1" sha sm pr num url how mc nf g cur fresh=old
+            # Work on the branch's CURRENT head, not the start-of-run snapshot.
+            sha=$(branch_sha "$b") || { err "head lookup failed for ${b}"; return 1; }
+            [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { err "bad head for ${b}"; return 1; }
             same_merged "$b" "$sha"; sm=$?
             if [ "$sm" -eq 2 ]; then err "merged-PR lookup failed for ${b}"; disarm "$b"; return 1; fi
             if [ "$sm" -eq 0 ]; then note "${b}: skipped (merged PR has this commit)"; return 0; fi
@@ -301,9 +307,17 @@ jobs:
           if armed=$(gh api graphql --paginate -f query='query($o:String!,$r:String!,$endCursor:String){repository(owner:$o,name:$r){pullRequests(states:OPEN,first:100,after:$endCursor){pageInfo{hasNextPage endCursor} nodes{number headRefName isCrossRepository isInMergeQueue autoMergeRequest{enabledAt}}}}}' \
               -F o="${GH_REPO%/*}" -F r="${GH_REPO#*/}" \
               --jq '.data.repository.pullRequests.nodes[]|select((.isCrossRepository|not) and (.isInMergeQueue or .autoMergeRequest!=null))|.headRefName'); then
-            for ab in $(sort -u <<<"$armed"); do note "${ab}: delayed merge turned off"; disarm "$ab" || true; done
+            for ab in $(sort -u <<<"$armed"); do
+              disarm "$ab" || { err "could not turn off the delayed merge of ${ab}: nothing is finished this run"; break; }
+              note "${ab}: delayed merge turned off"
+            done
           else
-            err "listing armed/queued PRs failed: delayed merges not turned off"
+            err "listing armed/queued PRs failed: nothing is finished this run"
+          fi
+          # Cleanup must be verified before any PR is opened or merged.
+          if [ -n "$ERR" ]; then
+            printf '## Finish branch\n\n### Errors\n%s' "$ERR" >>"${GITHUB_STEP_SUMMARY:-/dev/null}"
+            exit 1
           fi
           BRANCH_LIST=$(mktemp) || exit 1
           trap 'rm -f "$cand" "$msgf" "$BRANCH_LIST"' EXIT
