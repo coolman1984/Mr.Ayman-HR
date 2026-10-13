@@ -182,8 +182,16 @@ jobs:
             r=$(held_reason "$1" "$2") || return 1
             [ -n "$r" ] && { head -1 <<<"$r"; return 0; }
             r=$(release_touch "$1" "$2") || return 1
-            [ -n "$r" ] && printf 'release/installer change needs the owner: %s\n' "$(head -1 <<<"$r")"
-            return 0
+            [ -n "$r" ] && { printf 'release/installer change needs the owner: %s\n' "$(head -1 <<<"$r")"; return 0; }
+            # The scans above can take a while: read labels, bases and the head of every own open PR
+            # from this branch again, last, so a label or stacked PR added meanwhile still holds it.
+            load_open_prs || return 1
+            jq -r --arg b "$1" --arg sha "$2" '[.[]|select(.head==$b)]
+                | (map(select(.dnm))|if length>0 then "do-not-merge #\(.[0].number)" else empty end),
+                  (map(select(.base!="main"))|if length>0 then "stacked on \(.[0].base) #\(.[0].number)" else empty end),
+                  (map(select(.sha!=$sha))|if length>0 then "head moved during the check #\(.[0].number)" else empty end)' \
+              <<<"$OPEN_PRS" | head -1
+            return "${PIPESTATUS[0]}"
           }
 
           # A PR opened by GITHUB_TOKEN starts its pull_request checks in "action_required"
