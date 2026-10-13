@@ -61,6 +61,34 @@ jobs:
             gh pr list -R "$GH_REPO" --state open --head "$1" --base main --json number,isDraft,headRefName,labels \
               | jq -c --arg b "$1" '[.[]|select(.headRefName==$b)]|if length==0 then empty else .[0] end'
           }
+          # Open PRs from this branch to ANY base (stacked PRs). A do-not-merge label or a non-main base
+          # on any of them means the branch is held: never open or merge a new PR to main for it.
+          held_reason() {
+            local all
+            all=$(gh pr list -R "$GH_REPO" --state open --head "$1" --limit 100 --json number,baseRefName,headRefName,labels \
+              | jq -c --arg b "$1" '[.[]|select(.headRefName==$b)]') || return 2
+            jq -r 'map(select(any(.labels[]?; .name=="do-not-merge")))|if length>0 then "do-not-merge #\(.[0].number)" else empty end' <<<"$all"
+            jq -r 'map(select(.baseRefName!="main"))|if length>0 then "stacked on \(.[0].baseRefName) #\(.[0].number)" else empty end' <<<"$all"
+          }
+          # A held branch must not keep an auto-merge armed by an earlier run.
+          disarm() {
+            local p n
+            p=$(open_pr "$1") || return 0
+            [ -n "$p" ] || return 0
+            n=$(jq -r .number <<<"$p")
+            gh pr merge "$n" -R "$GH_REPO" --disable-auto >/dev/null 2>&1 && log "disabled auto-merge on #${n}"
+            return 0
+          }
+          # Release, installer and publishing changes always need the owner: never auto-merge them.
+          RELEASE_BRANCH_RE='^(release|releases|installer|publish|hotfix)(/|-|$)'
+          RELEASE_PATH_RE='(^|/)(installer|installers|release|releases|dist|publish)(/|$)|\.(iss|exe|msi|msix|nsi|wxs|appx|apk|aab)$|(^|/)build_windows\.py$|^\.github/workflows/.*(release|publish|deploy|windows|desktop|installer).*\.ya?ml$|^\.github/workflows/finish-branch\.yml$'
+          release_touch() {
+            local files
+            [[ "$1" =~ $RELEASE_BRANCH_RE ]] && { printf 'release branch\n'; return 0; }
+            files=$(gh api "repos/${GH_REPO}/compare/main...${2}" --jq 'if (.files|length)>=300 then "TOO-MANY-FILES(>=300)" else (.files[]? | .filename, (.previous_filename // empty)) end') || return 2
+            [ "$files" = "TOO-MANY-FILES(>=300)" ] && { printf 'too many files to check\n'; return 0; }
+            printf '%s\n' "$files" | grep -E -m1 "$RELEASE_PATH_RE" || true
+          }
 
           # A PR opened by GITHUB_TOKEN starts its pull_request checks in "action_required"
           # (waiting for approval). Approve those runs so the required checks run on the PR.
@@ -126,10 +154,16 @@ jobs:
           }
 
           finish_one() {
-            local b="$1" sha="$2" sm pr num url how mc nf fresh=old
+            local b="$1" sha="$2" sm pr num url how mc nf hr hc rt rc fresh=old
             same_merged "$b" "$sha"; sm=$?
             if [ "$sm" -eq 2 ]; then err "merged-PR lookup failed for ${b}"; return 1; fi
             if [ "$sm" -eq 0 ]; then note "${b}: skipped (merged PR has this commit)"; return 0; fi
+            hr=$(held_reason "$b"); hc=$?
+            if [ "$hc" -ne 0 ]; then err "held-PR lookup failed for ${b}"; return 1; fi
+            if [ -n "$hr" ]; then disarm "$b"; note "${b}: skipped ($(head -1 <<<"$hr"))"; return 0; fi
+            rt=$(release_touch "$b" "$sha"); rc=$?
+            if [ "$rc" -ne 0 ]; then err "release-path check failed for ${b}"; return 1; fi
+            if [ -n "$rt" ]; then disarm "$b"; note "${b}: skipped (release/installer change needs the owner: ${rt})"; return 0; fi
             pr=$(open_pr "$b") || { err "open-PR lookup failed for ${b}"; return 1; }
             if [ -n "$pr" ]; then
               num=$(jq -r .number <<<"$pr")
@@ -146,6 +180,8 @@ jobs:
               [[ "$num" =~ ^[0-9]+$ ]] || { err "could not read the PR number for ${b} from ${url}"; return 1; }
               fresh=new
             fi
+            hr=$(held_reason "$b") || { err "held-PR recheck failed for ${b}"; return 1; }
+            if [ -n "$hr" ]; then disarm "$b"; note "${b}: skipped before merge ($(head -1 <<<"$hr"))"; return 0; fi
             approve_checks "$b" "$sha" "$fresh" || { err "approving checks failed for ${b}"; return 1; }
             how=$(merge_pr "$num"); mc=$?
             MERGE_MSG=$(cat "$msgf")
