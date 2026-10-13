@@ -62,14 +62,16 @@ jobs:
           # 0 = commit $2 already landed on main through ANY merged own PR (squash-merged history, any branch),
           # 1 = no, 2 = unknown. GitHub lists the PRs whose commits include $2; a merged one into main
           # carried $2 and all of its unmerged ancestors.
-          # SHAs of the commits reachable from $1 but not from main. Non-zero = unknown (GitHub lists at most 250).
+          # SHAs of the commits reachable from $1 but not from main (all pages). Non-zero = unknown.
           unmerged_commits() {
-            local raw t
-            raw=$(gh api "repos/${GH_REPO}/compare/main...$(enc "$1")" --jq '[.total_commits, (.commits|length), ([.commits[].sha]|join(" "))]|@tsv') || return 1
-            t=$(cut -f1 <<<"$raw")
+            local t list
+            t=$(gh api "repos/${GH_REPO}/compare/main...$(enc "$1")?per_page=1" --jq .total_commits) || return 1
             [[ "$t" =~ ^[0-9]+$ ]] || return 1
-            [ "$t" -eq "$(cut -f2 <<<"$raw")" ] || return 1
-            cut -f3 <<<"$raw" | tr ' ' '\n' | sed '/^$/d'
+            [ "$t" -eq 0 ] && return 0
+            # Paginated, so long branches are read in full; the count must match the total.
+            list=$(gh api --paginate "repos/${GH_REPO}/compare/main...$(enc "$1")?per_page=100" --jq '.commits[].sha' | sort -u) || return 1
+            [ "$(grep -c . <<<"$list")" -eq "$t" ] || return 1
+            printf '%s\n' "$list"
           }
           history_merged() {
             local raw n
@@ -111,14 +113,18 @@ jobs:
             [ -n "$tips" ] || return 1
             # Exact check: the commits of THIS branch that main lacks, intersected with those of every other
             # branch. Any shared commit that no merged own PR has carried to main means unmerged foreign work.
-            local mine theirs shared c
+            local mine theirs shared c anc
             mine=$(unmerged_commits "$sha") || return 1
             [ -n "$mine" ] || return 0
             while IFS=$'\t' read -r ob osha; do
               [ -n "$ob" ] || continue
               case "$ob" in main|"$b") continue ;; esac
-              # A proven parent (the other branch has an own open PR stacked on THIS branch) is not held by its child.
-              [ "$(jq -r --arg o "$ob" --arg b "$b" 'any(.[]; .head==$o and .base==$b)' <<<"$OPEN_PRS")" = "true" ] && continue
+              # A proven parent is not held by its child: the other branch has an own open PR stacked on THIS
+              # branch AND this branch's tip is its ancestor (no diverged history).
+              if [ "$(jq -r --arg o "$ob" --arg b "$b" 'any(.[]; .head==$o and .base==$b)' <<<"$OPEN_PRS")" = "true" ]; then
+                anc=$(gh api "repos/${GH_REPO}/compare/$(enc "$sha")...$(enc "$osha")" --jq .status) || return 1
+                case "$anc" in ahead|identical) continue ;; esac
+              fi
               theirs=$(unmerged_commits "$osha") || return 1
               shared=$(comm -12 <(sort -u <<<"$mine") <(sort -u <<<"$theirs" | sed '/^$/d'))
               for c in $shared; do
